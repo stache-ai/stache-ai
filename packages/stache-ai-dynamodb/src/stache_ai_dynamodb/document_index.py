@@ -240,7 +240,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         if namespace:
             # Query by namespace using GSI1 - most recent first
             query_params = {
-                "IndexName": "GSI1-NamespaceCreated",
+                "IndexName": "GSI1",
                 "KeyConditionExpression": "GSI1PK = :pk",
                 "ExpressionAttributeValues": {
                     ":pk": self._make_gsi1pk(namespace)

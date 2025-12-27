@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch, call
 from datetime import datetime, timezone
 from botocore.exceptions import ClientError
 
-from stache_dynamodb.document_index import DynamoDBDocumentIndex
+from stache_ai_dynamodb.document_index import DynamoDBDocumentIndex
 
 
 @pytest.fixture
@@ -323,7 +323,7 @@ class TestListDocuments:
         assert result["next_key"] is None
         table.query.assert_called_once()
         call_args = table.query.call_args
-        assert call_args[1]["IndexName"] == "GSI1-NamespaceCreated"
+        assert call_args[1]["IndexName"] == "GSI1"
         assert call_args[1]["KeyConditionExpression"] == "GSI1PK = :pk"
 
     def test_list_documents_all(self, document_index):
