@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stache-ai-aws"
+version = "0.1.0"
+description = "AWS providers bundle for Stache AI (includes S3 Vectors, DynamoDB, and Bedrock)"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Stache Contributors"}
+]
+keywords = ["stache", "rag", "ai", "aws", "bedrock", "dynamodb", "s3vectors"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "stache-ai-s3vectors>=0.1.0",
+    "stache-ai-dynamodb>=0.1.0",
+    "stache-ai-bedrock>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/stache-ai/stache"
+Repository = "https://github.com/stache-ai/stache"

@@ -1,0 +1,39 @@
+# stache-ai-{{PROVIDER_NAME}}
+
+{{PROVIDER_TITLE}} provider for [Stache AI](https://github.com/stache-ai/stache).
+
+## Installation
+
+```bash
+pip install stache-ai-{{PROVIDER_NAME}}
+```
+
+## Usage
+
+Install the package and configure the provider in your settings:
+
+```python
+from stache.config import Settings
+
+settings = Settings(
+    {{ENTRY_POINT_GROUP}}_provider="{{PROVIDER_NAME}}"
+)
+```
+
+The provider will be automatically discovered via entry points.
+
+## Requirements
+
+- Python >= 3.10
+- stache-ai >= 0.1.0
+- {{PROVIDER_DEPENDENCIES}}
+
+## Development
+
+```bash
+# Install in editable mode with dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest tests/
+```

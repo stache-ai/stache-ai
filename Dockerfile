@@ -1,0 +1,85 @@
+# Stage 1: Build frontend
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /frontend
+
+# Copy frontend package files first (better caching)
+COPY frontend/package*.json ./
+RUN npm install
+
+# Copy frontend source and build
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Python backend with static frontend
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install profile: airgap, aws, minimal, full (default)
+ARG INSTALL_PROFILE=full
+# Enable OCR support for scanned PDFs (adds ~200MB)
+ARG WITH_OCR=true
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y curl \
+    && if [ "$WITH_OCR" = "true" ]; then \
+         apt-get install -y ocrmypdf tesseract-ocr; \
+       fi \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy all packages (for local source install)
+COPY packages/ /app/packages/
+
+# Install packages based on profile
+RUN --mount=type=cache,target=/root/.cache/pip \
+    case "$INSTALL_PROFILE" in \
+      airgap) \
+        echo "Installing airgap profile (qdrant, ollama, mongodb)..." && \
+        pip install \
+          /app/packages/stache-ai \
+          /app/packages/stache-ai-qdrant \
+          /app/packages/stache-ai-ollama \
+          /app/packages/stache-ai-mongodb ;; \
+      aws) \
+        echo "Installing aws profile (bedrock, s3vectors, dynamodb)..." && \
+        pip install \
+          /app/packages/stache-ai \
+          /app/packages/stache-ai-bedrock \
+          /app/packages/stache-ai-s3vectors \
+          /app/packages/stache-ai-dynamodb ;; \
+      minimal) \
+        echo "Installing minimal profile (core only)..." && \
+        pip install \
+          /app/packages/stache-ai ;; \
+      full|*) \
+        echo "Installing full profile (all providers)..." && \
+        pip install \
+          /app/packages/stache-ai \
+          /app/packages/stache-ai-qdrant \
+          /app/packages/stache-ai-ollama \
+          /app/packages/stache-ai-openai \
+          /app/packages/stache-ai-anthropic \
+          /app/packages/stache-ai-bedrock \
+          /app/packages/stache-ai-cohere \
+          /app/packages/stache-ai-mixedbread \
+          /app/packages/stache-ai-mongodb \
+          /app/packages/stache-ai-dynamodb \
+          /app/packages/stache-ai-s3vectors \
+          /app/packages/stache-ai-redis \
+          /app/packages/stache-ai-pinecone ;; \
+    esac && \
+    rm -rf /app/packages
+
+# Copy built frontend from stage 1
+COPY --from=frontend-builder /frontend/dist /app/static
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run application
+CMD ["uvicorn", "stache_ai.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

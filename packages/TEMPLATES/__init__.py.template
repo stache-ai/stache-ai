@@ -1,0 +1,17 @@
+"""stache-ai-{{PROVIDER_NAME}} - {{PROVIDER_TITLE}} provider for Stache AI
+
+This package provides {{PROVIDER_NAME}} integration for Stache.
+Install and the provider will be automatically discovered via entry points.
+
+Usage:
+    # Just install the package
+    pip install stache-ai-{{PROVIDER_NAME}}
+
+    # Configure in your .env or settings
+    {{ENTRY_POINT_GROUP}}_provider={{PROVIDER_NAME}}
+"""
+
+from .provider import {{PROVIDER_CLASS}}
+
+__version__ = "0.1.0"
+__all__ = ["{{PROVIDER_CLASS}}"]

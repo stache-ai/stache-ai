@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stache-ai-openai"
+version = "0.1.0"
+description = "Openai provider for Stache AI"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Stache Contributors"}
+]
+keywords = ["stache", "rag", "ai", "openai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "stache-ai>=0.1.0,<1.0.0",
+    "openai>=1.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.entry-points."stache.llm"]
+openai = "stache_ai_openai.llm:OpenAILLMProvider"
+
+[project.entry-points."stache.embeddings"]
+openai = "stache_ai_openai.embedding:OpenAIEmbeddingProvider"
+
+[project.urls]
+Homepage = "https://github.com/stache-ai/stache"
+Repository = "https://github.com/stache-ai/stache"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["stache_ai_openai*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

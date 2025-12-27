@@ -1,0 +1,1 @@
+"""Stache test suite"""

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stache-ai-{{PROVIDER_NAME}}"
+version = "0.1.0"
+description = "{{PROVIDER_TITLE}} provider for Stache AI"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "stache-ai>=0.1.0,<1.0.0",
+    # Provider-specific dependencies here
+]
+
+[project.entry-points."stache.{{ENTRY_POINT_GROUP}}"]
+{{PROVIDER_NAME}} = "stache_{{PROVIDER_NAME}}.provider:{{PROVIDER_CLASS}}"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["stache_{{PROVIDER_NAME}}*"]

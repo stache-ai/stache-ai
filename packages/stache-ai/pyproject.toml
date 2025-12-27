@@ -1,0 +1,157 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stache-ai"
+version = "0.1.0"
+description = "Personal AI-powered knowledge base with RAG"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Stache Contributors"}
+]
+keywords = ["stache", "rag", "ai", "knowledge-base", "llm", "vector-database", "semantic-search"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "python-multipart>=0.0.6",
+    "pypdf2>=3.0.1",
+    "pdfplumber>=0.10.3",
+    "ebooklib>=0.18",
+    "python-docx>=1.1.0",
+    "python-pptx>=0.6.23",
+    "beautifulsoup4>=4.12.3",
+    "lxml>=5.1.0",
+    "markdown>=3.5.2",
+    "webvtt-py>=0.4.6",
+    "python-dotenv>=1.0.1",
+    "tiktoken>=0.5.2",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "click>=8.1.7",
+    "rich>=13.7.0",
+    "tqdm>=4.66.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "httpx>=0.25.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+# Provider bundles for convenience
+aws = [
+    "stache-ai-s3vectors>=0.1.0",
+    "stache-ai-dynamodb>=0.1.0",
+    "stache-ai-bedrock>=0.1.0",
+]
+ollama = [
+    "stache-ai-ollama>=0.1.0",
+]
+openai = [
+    "stache-ai-openai>=0.1.0",
+]
+
+[project.scripts]
+stache = "stache_ai.cli:cli"
+stache-import = "stache_ai.cli.import_cmd:import_directory"
+
+# =============================================================================
+# Provider Entry Points - Core Built-in Providers Only
+# =============================================================================
+# External packages add providers by defining similar entry points:
+#   [project.entry-points."stache.llm"]
+#   my_provider = "my_package:MyLLMProvider"
+# =============================================================================
+
+[project.entry-points."stache.llm"]
+fallback = "stache_ai.providers.llm.fallback:FallbackLLMProvider"
+
+[project.entry-points."stache.embeddings"]
+fallback = "stache_ai.providers.embeddings.fallback:FallbackEmbeddingProvider"
+
+[project.entry-points."stache.namespace"]
+sqlite = "stache_ai.providers.namespace.sqlite:SQLiteNamespaceProvider"
+
+[project.entry-points."stache.reranker"]
+simple = "stache_ai.providers.reranker.simple:SimpleReranker"
+
+[project.urls]
+Homepage = "https://github.com/stache-ai/stache"
+Documentation = "https://github.com/stache-ai/stache#readme"
+Repository = "https://github.com/stache-ai/stache"
+Issues = "https://github.com/stache-ai/stache/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["stache_ai*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "-v"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "s3vectors: marks tests requiring S3 Vectors service",
+]
+
+[tool.coverage.run]
+source = ["stache_ai"]
+branch = true
+omit = ["tests/*", "*/migrations/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
