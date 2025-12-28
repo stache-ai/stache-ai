@@ -114,7 +114,8 @@ def do_list_namespaces(request_id: str = None) -> dict:
 
     try:
         provider = NamespaceProviderFactory.create(settings)
-        namespaces = provider.list()
+        # include_children=True to get ALL namespaces, not just root level
+        namespaces = provider.list(include_children=True)
         return {
             "request_id": request_id,
             "namespaces": namespaces,
