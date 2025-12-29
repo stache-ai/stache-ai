@@ -1,11 +1,12 @@
 """Tests for chunking strategies"""
 
 import pytest
+
 from stache_ai.chunking.base import Chunk, ChunkingStrategy
-from stache_ai.chunking.factory import ChunkingStrategyFactory
-from stache_ai.chunking.recursive import RecursiveChunkingStrategy, find_best_boundary
-from stache_ai.chunking.markdown import MarkdownChunkingStrategy
 from stache_ai.chunking.character import CharacterChunkingStrategy
+from stache_ai.chunking.factory import ChunkingStrategyFactory
+from stache_ai.chunking.markdown import MarkdownChunkingStrategy
+from stache_ai.chunking.recursive import RecursiveChunkingStrategy, find_best_boundary
 
 
 class TestChunk:

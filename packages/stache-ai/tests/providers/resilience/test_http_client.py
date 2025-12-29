@@ -12,16 +12,20 @@ Test coverage includes:
 Total: ~40 tests
 """
 
-import pytest
-import time
 import threading
-from unittest.mock import Mock, MagicMock, patch, AsyncMock
+import time
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import Mock, patch
+
 import httpx
+import pytest
 
-from stache_ai.providers.resilience import HttpClient, HttpClientConfig, HttpClientFactory
-from stache_ai.providers.resilience import CircuitBreaker, CircuitState
-
+from stache_ai.providers.resilience import (
+    CircuitState,
+    HttpClient,
+    HttpClientConfig,
+    HttpClientFactory,
+)
 
 # ============================================================================
 # SECTION 1: HttpClientConfig Validation Tests (~8 tests)

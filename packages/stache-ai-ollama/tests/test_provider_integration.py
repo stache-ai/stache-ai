@@ -9,9 +9,7 @@ These tests verify that:
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from concurrent.futures import ThreadPoolExecutor
-import httpx
+from unittest.mock import patch, MagicMock
 
 from stache_ai.config import Settings
 from stache_ai_ollama.embedding import OllamaEmbeddingProvider

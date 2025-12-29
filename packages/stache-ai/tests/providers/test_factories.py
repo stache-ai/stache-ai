@@ -1,17 +1,16 @@
 """Tests for provider factories"""
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
-from stache_ai.providers import (
-    LLMProviderFactory,
-    EmbeddingProviderFactory,
-    VectorDBProviderFactory,
-    NamespaceProviderFactory,
-    RerankerProviderFactory,
-    DocumentIndexProviderFactory,
-    plugin_loader
-)
+
 from stache_ai.config import Settings
+from stache_ai.providers import (
+    DocumentIndexProviderFactory,
+    LLMProviderFactory,
+    RerankerProviderFactory,
+    plugin_loader,
+)
 
 
 class TestLLMProviderFactory:

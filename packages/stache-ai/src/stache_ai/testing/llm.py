@@ -1,8 +1,9 @@
 """LLM provider contract tests."""
 
-import pytest
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import Any
+
+import pytest
 
 
 class LLMContractTest(ABC):
@@ -19,7 +20,7 @@ class LLMContractTest(ABC):
         return "What is 2 + 2? Answer with just the number."
 
     @pytest.fixture
-    def sample_context(self) -> List[Dict[str, Any]]:
+    def sample_context(self) -> list[dict[str, Any]]:
         return [
             {"text": "The capital of France is Paris.", "metadata": {"source": "geography.txt"}},
             {"text": "Paris has a population of about 2 million.", "metadata": {"source": "stats.txt"}},

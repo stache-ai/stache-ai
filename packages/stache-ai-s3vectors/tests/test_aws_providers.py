@@ -2,7 +2,7 @@
 
 import json
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 from botocore.exceptions import ClientError
 
 from stache_ai.config import Settings

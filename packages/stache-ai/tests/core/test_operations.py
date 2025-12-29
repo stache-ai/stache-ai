@@ -1,13 +1,15 @@
 """Tests for core operations shared by HTTP routes and AgentCore handler"""
 
+from unittest.mock import MagicMock, PropertyMock, patch
+
 import pytest
-from unittest.mock import Mock, MagicMock, patch, PropertyMock
+
 from stache_ai.core.operations import (
-    do_search,
+    do_get_document,
     do_ingest_text,
-    do_list_namespaces,
     do_list_documents,
-    do_get_document
+    do_list_namespaces,
+    do_search,
 )
 
 

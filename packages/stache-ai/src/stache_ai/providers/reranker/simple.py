@@ -2,8 +2,8 @@
 
 import logging
 import re
-from typing import List, Dict, Any
 from collections import Counter
+from typing import Any
 
 from .base import RerankerProvider
 
@@ -33,7 +33,7 @@ class SimpleReranker(RerankerProvider):
         self.dedupe_threshold = dedupe_threshold
         logger.info("Initialized simple local reranker")
 
-    def _tokenize(self, text: str) -> List[str]:
+    def _tokenize(self, text: str) -> list[str]:
         """Simple tokenization"""
         # Lowercase and split on non-alphanumeric
         words = re.findall(r'\b\w+\b', text.lower())
@@ -85,9 +85,9 @@ class SimpleReranker(RerankerProvider):
     def rerank(
         self,
         query: str,
-        results: List[Dict[str, Any]],
+        results: list[dict[str, Any]],
         top_k: int | None = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Rerank results using keyword matching and deduplication"""
         if not results:
             return results

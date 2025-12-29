@@ -1,7 +1,8 @@
 """Main CLI entry point"""
 
-import click
 from pathlib import Path
+
+import click
 from dotenv import load_dotenv
 
 # Load .env file from current working directory before importing anything else
@@ -20,14 +21,14 @@ def cli():
 
 def setup_cli():
     """Register all CLI commands"""
-    from .import_cmd import import_directory
+    from .backfill_document_index import backfill_document_index
     from .dump_cmd import dump_database
+    from .import_cmd import import_directory
     from .migrate_cmd import migrate_summaries
     from .namespace_cmd import export_namespaces, import_namespaces, list_namespaces
-    from .backfill_document_index import backfill_document_index
+    from .providers_cmd import providers
     from .redis_export import redis_export
     from .vectors_cmd import vectors
-    from .providers_cmd import providers
 
     cli.add_command(import_directory, name='import')
     cli.add_command(dump_database, name='dump')

@@ -1,8 +1,8 @@
 """Markdown-aware chunking strategy"""
 
-from typing import List
 import re
-from .base import ChunkingStrategy, Chunk
+
+from .base import Chunk, ChunkingStrategy
 
 
 class MarkdownChunkingStrategy(ChunkingStrategy):
@@ -22,7 +22,7 @@ class MarkdownChunkingStrategy(ChunkingStrategy):
         chunk_size: int = 2000,
         chunk_overlap: int = 200,
         **kwargs
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """Split markdown text while preserving structure"""
 
         # Extract sections based on headers
@@ -84,7 +84,7 @@ class MarkdownChunkingStrategy(ChunkingStrategy):
 
         return chunks
 
-    def _split_by_headers(self, text: str) -> List[dict]:
+    def _split_by_headers(self, text: str) -> list[dict]:
         """Split markdown by headers"""
         # Regex to match markdown headers (# Header)
         header_pattern = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)

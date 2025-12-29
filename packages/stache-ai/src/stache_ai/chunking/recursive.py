@@ -1,7 +1,7 @@
 """Recursive chunking strategy"""
 
-from typing import List
-from .base import ChunkingStrategy, Chunk
+
+from .base import Chunk, ChunkingStrategy
 
 
 def find_best_boundary(text: str, position: int, search_range: int = 200) -> int:
@@ -70,7 +70,7 @@ class RecursiveChunkingStrategy(ChunkingStrategy):
         chunk_size: int = 2000,
         chunk_overlap: int = 200,
         **kwargs
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """Split text recursively"""
         separators = kwargs.get('separators', ['\n\n', '\n', '. ', ' ', ''])
 
@@ -94,8 +94,8 @@ class RecursiveChunkingStrategy(ChunkingStrategy):
         text: str,
         chunk_size: int,
         chunk_overlap: int,
-        separators: List[str]
-    ) -> List[str]:
+        separators: list[str]
+    ) -> list[str]:
         """Recursively split text"""
         final_chunks = []
 

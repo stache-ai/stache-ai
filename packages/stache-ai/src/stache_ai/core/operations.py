@@ -1,10 +1,11 @@
 """Shared operations for common RAG tasks"""
 
-from stache_ai.rag.pipeline import get_pipeline
-from stache_ai.providers import NamespaceProviderFactory
-from stache_ai.config import settings
-import uuid
 import logging
+import uuid
+
+from stache_ai.config import settings
+from stache_ai.providers import NamespaceProviderFactory
+from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
 

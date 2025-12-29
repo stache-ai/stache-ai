@@ -1,14 +1,15 @@
 """SQLite namespace provider - Lightweight namespace registry using SQLite"""
 
-import sqlite3
+import builtins
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
 from pathlib import Path
+from typing import Any
 
-from stache_ai.providers.base import NamespaceProvider
 from stache_ai.config import Settings
+from stache_ai.providers.base import NamespaceProvider
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
 
             conn.commit()
 
-    def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         """Convert a database row to a dictionary"""
         return {
             "id": row["id"],
@@ -77,10 +78,10 @@ class SQLiteNamespaceProvider(NamespaceProvider):
         id: str,
         name: str,
         description: str = "",
-        parent_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        filter_keys: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        parent_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        filter_keys: list[str] | None = None
+    ) -> dict[str, Any]:
         """Create a new namespace"""
         now = datetime.now(timezone.utc).isoformat()
         metadata_json = json.dumps(metadata or {})
@@ -106,7 +107,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
 
         return self.get(id)
 
-    def get(self, id: str) -> Optional[Dict[str, Any]]:
+    def get(self, id: str) -> dict[str, Any] | None:
         """Get a namespace by ID"""
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -118,9 +119,9 @@ class SQLiteNamespaceProvider(NamespaceProvider):
 
     def list(
         self,
-        parent_id: Optional[str] = None,
+        parent_id: str | None = None,
         include_children: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List namespaces, optionally filtered by parent"""
         with self._get_connection() as conn:
             if parent_id is None and not include_children:
@@ -145,12 +146,12 @@ class SQLiteNamespaceProvider(NamespaceProvider):
     def update(
         self,
         id: str,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        parent_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        filter_keys: Optional[List[str]] = None
-    ) -> Optional[Dict[str, Any]]:
+        name: str | None = None,
+        description: str | None = None,
+        parent_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        filter_keys: builtins.list[str] | None = None
+    ) -> dict[str, Any] | None:
         """Update a namespace"""
         existing = self.get(id)
         if not existing:
@@ -238,7 +239,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
 
         return True
 
-    def get_tree(self, root_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_tree(self, root_id: str | None = None) -> builtins.list[dict[str, Any]]:
         """Get namespace hierarchy as a tree"""
         all_namespaces = self.list(include_children=True)
 
@@ -273,7 +274,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
             )
             return cursor.fetchone() is not None
 
-    def get_ancestors(self, id: str) -> List[Dict[str, Any]]:
+    def get_ancestors(self, id: str) -> builtins.list[dict[str, Any]]:
         """Get all ancestor namespaces (parent, grandparent, etc.)"""
         ancestors = []
         current = self.get(id)

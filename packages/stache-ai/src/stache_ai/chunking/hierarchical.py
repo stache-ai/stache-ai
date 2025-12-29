@@ -6,18 +6,17 @@ structure-aware chunks with heading context preserved in metadata.
 Falls back to recursive chunking when Docling is not installed.
 """
 
-from typing import List, Optional
-from pathlib import Path
 import logging
+from pathlib import Path
 
-from .base import ChunkingStrategy, Chunk
+from .base import Chunk, ChunkingStrategy
 
 logger = logging.getLogger(__name__)
 
 # Check if docling is available
 try:
-    from docling.document_converter import DocumentConverter
     from docling.chunking import HybridChunker
+    from docling.document_converter import DocumentConverter
     DOCLING_AVAILABLE = True
 except ImportError:
     DOCLING_AVAILABLE = False
@@ -73,7 +72,7 @@ class HierarchicalChunkingStrategy(ChunkingStrategy):
         chunk_size: int = 2000,
         chunk_overlap: int = 200,
         **kwargs
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Split text into hierarchical chunks.
 
@@ -97,7 +96,7 @@ class HierarchicalChunkingStrategy(ChunkingStrategy):
             # Fallback to recursive chunking for plain text or when docling unavailable
             return self._chunk_text_fallback(text, chunk_size, chunk_overlap)
 
-    def _chunk_with_docling(self, file_path: str) -> List[Chunk]:
+    def _chunk_with_docling(self, file_path: str) -> list[Chunk]:
         """
         Chunk document using Docling's structure-aware parsing.
 
@@ -166,7 +165,7 @@ class HierarchicalChunkingStrategy(ChunkingStrategy):
         text: str,
         chunk_size: int,
         chunk_overlap: int
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Fallback chunking for plain text without structure.
 
@@ -190,7 +189,7 @@ class HierarchicalChunkingStrategy(ChunkingStrategy):
 def chunk_file_hierarchically(
     file_path: str,
     max_tokens: int = 512
-) -> List[Chunk]:
+) -> list[Chunk]:
     """
     Convenience function to chunk a file using hierarchical strategy.
 

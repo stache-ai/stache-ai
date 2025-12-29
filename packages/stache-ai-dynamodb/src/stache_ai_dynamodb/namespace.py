@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 import boto3
-from boto3.dynamodb.conditions import Key, Attr
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from stache_ai.providers.base import NamespaceProvider

@@ -1,8 +1,9 @@
 """Configuration management for Stache - Extensible provider architecture"""
 
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings
-from typing import Literal
 
 
 class Settings(BaseSettings):

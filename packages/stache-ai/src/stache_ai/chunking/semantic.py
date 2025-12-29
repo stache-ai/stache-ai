@@ -1,8 +1,8 @@
 """Semantic chunking strategy"""
 
-from typing import List
 import re
-from .base import ChunkingStrategy, Chunk
+
+from .base import Chunk, ChunkingStrategy
 
 
 class SemanticChunkingStrategy(ChunkingStrategy):
@@ -22,7 +22,7 @@ class SemanticChunkingStrategy(ChunkingStrategy):
         chunk_size: int = 2000,
         chunk_overlap: int = 200,
         **kwargs
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """Split text at semantic boundaries"""
 
         # Split into semantic units (paragraphs, code blocks, etc.)
@@ -82,7 +82,7 @@ class SemanticChunkingStrategy(ChunkingStrategy):
 
         return chunks
 
-    def _extract_semantic_units(self, text: str) -> List[dict]:
+    def _extract_semantic_units(self, text: str) -> list[dict]:
         """Extract semantic units from text"""
         units = []
 

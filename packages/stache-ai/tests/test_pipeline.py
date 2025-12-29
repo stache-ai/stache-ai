@@ -1,7 +1,9 @@
 """Tests for RAG pipeline"""
 
+from unittest.mock import MagicMock, PropertyMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+
 from stache_ai.rag.pipeline import RAGPipeline, get_pipeline
 
 
@@ -240,7 +242,6 @@ class TestGetPipeline:
 
     def test_get_pipeline_returns_same_instance(self):
         """Test that get_pipeline returns the same instance (singleton)"""
-        import stache_ai.rag.pipeline as pipeline_module
 
         with patch.object(RAGPipeline, 'embedding_provider', new_callable=PropertyMock), \
              patch.object(RAGPipeline, 'llm_provider', new_callable=PropertyMock), \

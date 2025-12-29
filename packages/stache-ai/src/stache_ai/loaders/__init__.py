@@ -1,7 +1,7 @@
 """Document loaders for various file formats"""
 
-from pathlib import Path
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def load_document(file_path: str, filename: str | None = None) -> str:
 
 def load_text(file_path: str) -> str:
     """Load plain text or markdown file"""
-    with open(file_path, 'r', encoding='utf-8') as f:
+    with open(file_path, encoding='utf-8') as f:
         return f.read()
 
 
@@ -67,6 +67,7 @@ def _ocr_pdf(file_path: str) -> list[str]:
     """OCR a scanned PDF using ocrmypdf"""
     import subprocess
     import tempfile
+
     import pdfplumber
 
     text_parts = []
@@ -110,8 +111,8 @@ def _ocr_pdf(file_path: str) -> list[str]:
 def load_epub(file_path: str) -> str:
     """Load EPUB file"""
     import ebooklib
-    from ebooklib import epub
     from bs4 import BeautifulSoup
+    from ebooklib import epub
 
     book = epub.read_epub(file_path)
     text_parts = []

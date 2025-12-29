@@ -11,11 +11,10 @@ failure patterns and transitions between three states:
 Thread safety is handled by the caller or implemented in a wrapper.
 """
 
-from enum import Enum
-from datetime import datetime, timedelta
-from typing import Optional
 import logging
 import threading
+from datetime import datetime
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +77,7 @@ class CircuitBreaker:
         self._state = CircuitState.CLOSED
         self._failure_count = 0
         self._success_count = 0
-        self._last_failure_time: Optional[datetime] = None
+        self._last_failure_time: datetime | None = None
         self._half_open_calls = 0
 
         # Thread safety

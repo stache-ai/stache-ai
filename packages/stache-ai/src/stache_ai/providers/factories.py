@@ -4,18 +4,19 @@ All factories use the plugin_loader to discover providers via entry points.
 This provides a unified mechanism for both built-in and external providers.
 """
 
-from typing import Dict, Type, Optional
+import logging
+
 from stache_ai.config import Settings
+
+from . import plugin_loader
 from .base import (
+    DocumentIndexProvider,
     EmbeddingProvider,
     LLMProvider,
-    VectorDBProvider,
     NamespaceProvider,
-    DocumentIndexProvider
+    VectorDBProvider,
 )
 from .reranker.base import RerankerProvider
-from . import plugin_loader
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ class EmbeddingProviderFactory:
         return plugin_loader.get_available_providers('embeddings')
 
     @classmethod
-    def register(cls, name: str, provider_class: Type[EmbeddingProvider]) -> None:
+    def register(cls, name: str, provider_class: type[EmbeddingProvider]) -> None:
         """Manually register a provider (for testing)"""
         plugin_loader.register_provider('embeddings', name, provider_class)
 
@@ -116,7 +117,7 @@ class LLMProviderFactory:
         return plugin_loader.get_available_providers('llm')
 
     @classmethod
-    def register(cls, name: str, provider_class: Type[LLMProvider]) -> None:
+    def register(cls, name: str, provider_class: type[LLMProvider]) -> None:
         """Manually register a provider (for testing)"""
         plugin_loader.register_provider('llm', name, provider_class)
 
@@ -172,7 +173,7 @@ class VectorDBProviderFactory:
         return plugin_loader.get_available_providers('vectordb')
 
     @classmethod
-    def register(cls, name: str, provider_class: Type[VectorDBProvider]) -> None:
+    def register(cls, name: str, provider_class: type[VectorDBProvider]) -> None:
         """Manually register a provider (for testing)"""
         plugin_loader.register_provider('vectordb', name, provider_class)
 
@@ -194,7 +195,7 @@ class S3VectorsProviderFactory:
     but may affect local development or future deployment changes.
     """
 
-    _instances: Dict[str, VectorDBProvider] = {}
+    _instances: dict[str, VectorDBProvider] = {}
 
     @classmethod
     def get_provider(cls, settings: Settings, index_type: str) -> VectorDBProvider:
@@ -318,7 +319,7 @@ class NamespaceProviderFactory:
         return plugin_loader.get_available_providers('namespace')
 
     @classmethod
-    def register(cls, name: str, provider_class: Type[NamespaceProvider]) -> None:
+    def register(cls, name: str, provider_class: type[NamespaceProvider]) -> None:
         """Manually register a provider (for testing)"""
         plugin_loader.register_provider('namespace', name, provider_class)
 
@@ -339,7 +340,7 @@ class RerankerProviderFactory:
     """
 
     @classmethod
-    def create(cls, settings: Settings) -> Optional[RerankerProvider]:
+    def create(cls, settings: Settings) -> RerankerProvider | None:
         """Create reranker provider based on settings
 
         Args:
@@ -396,7 +397,7 @@ class RerankerProviderFactory:
         return plugin_loader.get_available_providers('reranker')
 
     @classmethod
-    def register(cls, name: str, provider_class: Type[RerankerProvider]) -> None:
+    def register(cls, name: str, provider_class: type[RerankerProvider]) -> None:
         """Manually register a provider (for testing)"""
         plugin_loader.register_provider('reranker', name, provider_class)
 
@@ -443,6 +444,6 @@ class DocumentIndexProviderFactory:
         return plugin_loader.get_available_providers('document_index')
 
     @classmethod
-    def register(cls, name: str, provider_class: Type[DocumentIndexProvider]) -> None:
+    def register(cls, name: str, provider_class: type[DocumentIndexProvider]) -> None:
         """Manually register a provider (for testing)"""
         plugin_loader.register_provider('document_index', name, provider_class)

@@ -1,13 +1,12 @@
 """Integration tests for provider system - require installed package"""
 
 import pytest
+
 from stache_ai.config import Settings
 from stache_ai.providers import (
-    LLMProviderFactory,
     EmbeddingProviderFactory,
-    VectorDBProviderFactory,
+    LLMProviderFactory,
     NamespaceProviderFactory,
-    plugin_loader
 )
 
 

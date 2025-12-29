@@ -1,18 +1,18 @@
 """Pending queue endpoints for reviewing OCR'd documents before upload"""
 
 import json
+import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Form
+
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
 from stache_ai.config import settings
-from stache_ai.rag.pipeline import get_pipeline
 from stache_ai.loaders import load_document
-import tempfile
-import os
-import logging
+from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
 

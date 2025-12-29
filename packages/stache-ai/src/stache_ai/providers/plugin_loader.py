@@ -25,14 +25,14 @@ Usage:
 
 import importlib.metadata
 import logging
-from typing import Dict, Type, Optional, List, Union
+from typing import Union
 
 from .base import (
+    DocumentIndexProvider,
     EmbeddingProvider,
     LLMProvider,
-    VectorDBProvider,
     NamespaceProvider,
-    DocumentIndexProvider
+    VectorDBProvider,
 )
 from .reranker.base import RerankerProvider
 
@@ -40,12 +40,12 @@ logger = logging.getLogger(__name__)
 
 # Type alias for any provider class
 ProviderType = Union[
-    Type[EmbeddingProvider],
-    Type[LLMProvider],
-    Type[VectorDBProvider],
-    Type[NamespaceProvider],
-    Type[DocumentIndexProvider],
-    Type[RerankerProvider]
+    type[EmbeddingProvider],
+    type[LLMProvider],
+    type[VectorDBProvider],
+    type[NamespaceProvider],
+    type[DocumentIndexProvider],
+    type[RerankerProvider]
 ]
 
 # Entry point groups for each provider type
@@ -59,13 +59,13 @@ PROVIDER_GROUPS = {
 }
 
 # Cache for loaded providers: {provider_type: {name: class}}
-_provider_cache: Dict[str, Dict[str, ProviderType]] = {}
+_provider_cache: dict[str, dict[str, ProviderType]] = {}
 
 # Track if full discovery has been performed
 _loaded: bool = False
 
 
-def discover_providers(group: str) -> Dict[str, ProviderType]:
+def discover_providers(group: str) -> dict[str, ProviderType]:
     """Discover providers for a specific entry point group
 
     Args:
@@ -107,7 +107,7 @@ def discover_providers(group: str) -> Dict[str, ProviderType]:
     return providers
 
 
-def get_providers(provider_type: str) -> Dict[str, ProviderType]:
+def get_providers(provider_type: str) -> dict[str, ProviderType]:
     """Get all discovered providers for a type
 
     Args:
@@ -139,7 +139,7 @@ def get_providers(provider_type: str) -> Dict[str, ProviderType]:
     return _provider_cache[provider_type]
 
 
-def get_provider_class(provider_type: str, name: str) -> Optional[ProviderType]:
+def get_provider_class(provider_type: str, name: str) -> ProviderType | None:
     """Get a specific provider class
 
     Args:
@@ -157,7 +157,7 @@ def get_provider_class(provider_type: str, name: str) -> Optional[ProviderType]:
     return providers.get(name)
 
 
-def get_available_providers(provider_type: str) -> List[str]:
+def get_available_providers(provider_type: str) -> list[str]:
     """Get list of available provider names for a type
 
     Args:

@@ -1,12 +1,14 @@
 """Namespace management endpoints"""
 
-from fastapi import APIRouter, HTTPException, Query, Path, Body
+import logging
+from typing import Any
+
+from fastapi import APIRouter, Body, HTTPException, Path, Query
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, Dict, Any, List
+
 from stache_ai.config import settings
 from stache_ai.providers import NamespaceProviderFactory
 from stache_ai.rag.pipeline import get_pipeline
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +33,9 @@ class NamespaceCreate(BaseModel):
     id: str = Field(..., description="Unique namespace ID (slug format, e.g., 'mba/finance')")
     name: str = Field(..., description="Display name (e.g., 'Finance')")
     description: str = Field("", description="Description of what belongs in this namespace")
-    parent_id: Optional[str] = Field(None, description="Parent namespace ID for hierarchy")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata (tags, icon, color)")
-    filter_keys: Optional[List[str]] = Field(
+    parent_id: str | None = Field(None, description="Parent namespace ID for hierarchy")
+    metadata: dict[str, Any] | None = Field(None, description="Additional metadata (tags, icon, color)")
+    filter_keys: list[str] | None = Field(
         None,
         description="Valid metadata keys for filtering searches (e.g., ['source', 'date', 'author'])",
         max_length=50
@@ -63,11 +65,11 @@ class NamespaceCreate(BaseModel):
 
 class NamespaceUpdate(BaseModel):
     """Request model for updating a namespace"""
-    name: Optional[str] = Field(None, description="New display name")
-    description: Optional[str] = Field(None, description="New description")
-    parent_id: Optional[str] = Field(None, description="New parent ID (empty string to make root)")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Metadata to merge")
-    filter_keys: Optional[List[str]] = Field(
+    name: str | None = Field(None, description="New display name")
+    description: str | None = Field(None, description="New description")
+    parent_id: str | None = Field(None, description="New parent ID (empty string to make root)")
+    metadata: dict[str, Any] | None = Field(None, description="Metadata to merge")
+    filter_keys: list[str] | None = Field(
         None,
         description="New list of valid filter keys (replaces existing entirely)",
         max_length=50
@@ -140,7 +142,7 @@ def get_namespace_chunk_count(namespace_id: str) -> int:
         return 0
 
 
-def enrich_namespace_with_stats(namespace: Dict[str, Any]) -> Dict[str, Any]:
+def enrich_namespace_with_stats(namespace: dict[str, Any]) -> dict[str, Any]:
     """Add document and chunk counts to namespace"""
     namespace_id = namespace["id"]
     return {
@@ -181,7 +183,7 @@ async def create_namespace(data: NamespaceCreate):
 
 @router.get("/namespaces")
 async def list_namespaces(
-    parent_id: Optional[str] = Query(None, description="Filter by parent namespace"),
+    parent_id: str | None = Query(None, description="Filter by parent namespace"),
     include_children: bool = Query(False, description="Include all descendants (flat list)"),
     include_stats: bool = Query(True, description="Include document/chunk counts (slower)")
 ):
@@ -211,7 +213,7 @@ async def list_namespaces(
 
 @router.get("/namespaces/tree")
 async def get_namespace_tree(
-    root_id: Optional[str] = Query(None, description="Get subtree starting from this namespace"),
+    root_id: str | None = Query(None, description="Get subtree starting from this namespace"),
     include_stats: bool = Query(False, description="Include document/chunk counts (slower)")
 ):
     """
@@ -225,7 +227,7 @@ async def get_namespace_tree(
 
         if include_stats:
             # Recursively add stats to tree
-            def add_stats_recursive(nodes: List[Dict]) -> List[Dict]:
+            def add_stats_recursive(nodes: list[dict]) -> list[dict]:
                 for node in nodes:
                     node["doc_count"] = get_namespace_doc_count(node["id"])
                     node["chunk_count"] = get_namespace_chunk_count(node["id"])

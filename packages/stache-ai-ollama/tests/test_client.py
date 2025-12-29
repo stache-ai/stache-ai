@@ -13,7 +13,6 @@ Tests cover:
 
 import pytest
 import httpx
-import time
 from unittest.mock import Mock, patch, MagicMock
 from concurrent.futures import ThreadPoolExecutor
 from stache_ai.config import Settings

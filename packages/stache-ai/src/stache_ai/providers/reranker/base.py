@@ -1,7 +1,7 @@
 """Base class for reranker providers"""
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import Any
 
 
 class RerankerProvider(ABC):
@@ -11,9 +11,9 @@ class RerankerProvider(ABC):
     def rerank(
         self,
         query: str,
-        results: List[Dict[str, Any]],
+        results: list[dict[str, Any]],
         top_k: int | None = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Rerank search results based on query relevance.
 

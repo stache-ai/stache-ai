@@ -4,14 +4,17 @@ Provides thread-safe HTTP clients with circuit breaker protection, retry logic,
 and support for both synchronous and asynchronous operations (for streaming).
 """
 
-from typing import Optional, Callable, Any, Dict
-import httpx
 import logging
-import time
-import threading
 import random
+import threading
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
 from stache_ai.providers.resilience.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
@@ -23,7 +26,7 @@ class HttpClientConfig:
 
     # Connection settings
     base_url: str
-    headers: Dict[str, str]
+    headers: dict[str, str]
 
     # Timeout settings (seconds)
     default_timeout: float = 60.0
@@ -276,7 +279,7 @@ class HttpClient:
         self,
         endpoint: str,
         json: dict,
-        timeout: Optional[float] = None
+        timeout: float | None = None
     ) -> httpx.Response:
         """Make synchronous POST request with automatic retry and circuit breaker protection.
 
@@ -301,7 +304,7 @@ class HttpClient:
     def get(
         self,
         endpoint: str,
-        timeout: Optional[float] = None
+        timeout: float | None = None
     ) -> httpx.Response:
         """Make synchronous GET request with automatic retry and circuit breaker protection.
 
@@ -328,7 +331,7 @@ class HttpClient:
         self,
         endpoint: str,
         json: dict,
-        timeout: Optional[float] = None
+        timeout: float | None = None
     ) -> httpx.Response:
         """Make asynchronous POST request with automatic retry and circuit breaker protection.
 
@@ -353,7 +356,7 @@ class HttpClient:
     async def aget(
         self,
         endpoint: str,
-        timeout: Optional[float] = None
+        timeout: float | None = None
     ) -> httpx.Response:
         """Make asynchronous GET request with automatic retry and circuit breaker protection.
 
@@ -378,7 +381,7 @@ class HttpClient:
         self,
         endpoint: str,
         json: dict,
-        timeout: Optional[float] = None
+        timeout: float | None = None
     ):
         """Make streaming POST request (for Ollama streaming responses).
 
@@ -402,7 +405,7 @@ class HttpClient:
 
     # Helper methods
 
-    def _build_timeout(self, timeout: Optional[float]) -> Optional[httpx.Timeout]:
+    def _build_timeout(self, timeout: float | None) -> httpx.Timeout | None:
         """Build httpx.Timeout from optional override."""
         if timeout is None:
             return None
@@ -455,7 +458,7 @@ class HttpClientFactory:
     Thread-safe: Uses double-checked locking for client creation.
     """
 
-    _clients: Dict[str, HttpClient] = {}
+    _clients: dict[str, HttpClient] = {}
     _lock: threading.Lock = threading.Lock()
 
     @classmethod

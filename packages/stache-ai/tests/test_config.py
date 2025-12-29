@@ -1,8 +1,7 @@
 """Tests for configuration module"""
 
+
 import pytest
-import os
-from unittest.mock import patch
 
 
 class TestSettings:
@@ -211,7 +210,7 @@ class TestGlobalSettings:
 
     def test_global_settings_is_settings_instance(self):
         """Test that global settings is a Settings instance"""
-        from stache_ai.config import settings, Settings
+        from stache_ai.config import Settings, settings
 
         assert isinstance(settings, Settings)
 

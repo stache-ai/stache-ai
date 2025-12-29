@@ -1,8 +1,8 @@
 """Chunking strategy factory"""
 
-from typing import Dict, List, Type
-from .base import ChunkingStrategy
 import logging
+
+from .base import ChunkingStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -10,10 +10,10 @@ logger = logging.getLogger(__name__)
 class ChunkingStrategyFactory:
     """Factory for creating chunking strategies"""
 
-    _strategies: Dict[str, Type[ChunkingStrategy]] = {}
+    _strategies: dict[str, type[ChunkingStrategy]] = {}
 
     @classmethod
-    def register(cls, name: str, strategy_class: Type[ChunkingStrategy]):
+    def register(cls, name: str, strategy_class: type[ChunkingStrategy]):
         """
         Register a chunking strategy
 
@@ -48,6 +48,6 @@ class ChunkingStrategyFactory:
         return strategy_class()
 
     @classmethod
-    def get_available_strategies(cls) -> List[str]:
+    def get_available_strategies(cls) -> list[str]:
         """Get list of available strategies"""
         return list(cls._strategies.keys())

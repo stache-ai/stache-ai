@@ -1,11 +1,11 @@
 """CLI command for importing directories of documents"""
 
-import click
-import sys
-from pathlib import Path
-from typing import Optional, List
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+import click
 
 # Supported file extensions
 SUPPORTED_EXTENSIONS = {'.txt', '.md', '.markdown', '.pdf', '.epub', '.docx', '.pptx', '.vtt', '.srt'}
@@ -21,7 +21,7 @@ def setup_logging(verbose: bool):
     )
 
 
-def get_files(path: Path, pattern: str, recursive: bool) -> List[Path]:
+def get_files(path: Path, pattern: str, recursive: bool) -> list[Path]:
     """Get list of files matching pattern"""
     if recursive:
         files = list(path.glob(f"**/{pattern}"))
@@ -57,7 +57,7 @@ def import_directory(
     verbose: bool,
     skip_errors: bool,
     metadata: tuple,
-    prepend_metadata: Optional[str],
+    prepend_metadata: str | None,
     parallel: int
 ):
     """
@@ -134,8 +134,8 @@ def import_directory(
 
     # Import the pipeline and loaders (lazy import to speed up --help)
     click.echo("\nInitializing pipeline...")
-    from stache_ai.rag.pipeline import get_pipeline
     from stache_ai.loaders import load_document
+    from stache_ai.rag.pipeline import get_pipeline
 
     pipeline = get_pipeline()
 
@@ -230,7 +230,7 @@ def import_directory(
 
     # Summary
     click.echo(f"\n{'='*50}")
-    click.echo(f"Import complete!")
+    click.echo("Import complete!")
     click.echo(f"  Successful: {success_count} files")
     click.echo(f"  Failed: {error_count} files")
     click.echo(f"  Total chunks: {total_chunks}")

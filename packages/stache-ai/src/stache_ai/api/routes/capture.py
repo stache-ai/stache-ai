@@ -1,9 +1,11 @@
 """Capture endpoint for quick note-taking"""
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
 from stache_ai.rag.pipeline import get_pipeline
-import logging
 
 logger = logging.getLogger(__name__)
 

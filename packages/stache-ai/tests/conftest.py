@@ -1,11 +1,10 @@
 """Pytest fixtures and configuration for Stache tests"""
 
-import pytest
 import os
 import tempfile
-from unittest.mock import MagicMock, patch
-from typing import List, Dict, Any
+from unittest.mock import MagicMock
 
+import pytest
 
 # Set up test environment variables before importing modules
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")

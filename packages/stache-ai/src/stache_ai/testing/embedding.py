@@ -1,8 +1,8 @@
 """Embedding provider contract tests."""
 
-import pytest
 from abc import ABC, abstractmethod
-from typing import List
+
+import pytest
 
 
 class EmbeddingContractTest(ABC):
@@ -19,7 +19,7 @@ class EmbeddingContractTest(ABC):
         return "The quick brown fox jumps over the lazy dog."
 
     @pytest.fixture
-    def sample_texts(self) -> List[str]:
+    def sample_texts(self) -> list[str]:
         return [
             "First document about machine learning.",
             "Second document about natural language processing.",

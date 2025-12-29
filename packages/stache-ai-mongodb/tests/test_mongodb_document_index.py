@@ -7,8 +7,7 @@ error handling, pagination, and edge cases.
 
 import pytest
 import sys
-from unittest.mock import MagicMock, patch, call
-from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 
 # Define mock exception classes at module level

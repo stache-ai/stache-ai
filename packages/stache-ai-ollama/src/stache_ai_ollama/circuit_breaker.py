@@ -12,7 +12,7 @@ Thread safety is handled by the caller or implemented in a wrapper.
 """
 
 from enum import Enum
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 import logging
 import threading

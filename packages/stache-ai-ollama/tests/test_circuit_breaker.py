@@ -10,7 +10,7 @@ Tests cover:
 
 import pytest
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 # Import from the stache_ai_ollama package

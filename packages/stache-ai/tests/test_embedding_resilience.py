@@ -1,12 +1,11 @@
 """Tests for embedding resilience utilities."""
 
-import pytest
 from stache_ai.rag.embedding_resilience import (
-    TextSplitter,
-    EmbeddingResult,
-    DefaultErrorClassifier,
-    OllamaErrorClassifier,
     BedrockErrorClassifier,
+    DefaultErrorClassifier,
+    EmbeddingResult,
+    OllamaErrorClassifier,
+    TextSplitter,
 )
 
 
