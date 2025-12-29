@@ -52,7 +52,7 @@ def document_index(mock_settings, mock_mongo_client):
     mock_pymongo.errors = mock_errors
 
     with patch.dict(sys.modules, {'pymongo': mock_pymongo, 'pymongo.errors': mock_errors}):
-        from stache_mongodb.document_index import MongoDBDocumentIndex
+        from stache_ai_mongodb.document_index import MongoDBDocumentIndex
         instance = MongoDBDocumentIndex(mock_settings)
     return instance, mock_mongo_client, instance.collection
 
@@ -72,7 +72,7 @@ class TestMongoDBDocumentIndexInitialization:
         mock_pymongo.errors = mock_errors
 
         with patch.dict(sys.modules, {'pymongo': mock_pymongo, 'pymongo.errors': mock_errors}):
-            from stache_mongodb.document_index import MongoDBDocumentIndex
+            from stache_ai_mongodb.document_index import MongoDBDocumentIndex
             provider = MongoDBDocumentIndex(mock_settings)
 
             assert provider.client == mock_mongo_client
@@ -92,7 +92,7 @@ class TestMongoDBDocumentIndexInitialization:
         mock_pymongo.errors = mock_errors
 
         with patch.dict(sys.modules, {'pymongo': mock_pymongo, 'pymongo.errors': mock_errors}):
-            from stache_mongodb.document_index import MongoDBDocumentIndex
+            from stache_ai_mongodb.document_index import MongoDBDocumentIndex
             with pytest.raises(ValueError, match="Cannot connect to MongoDB"):
                 MongoDBDocumentIndex(mock_settings)
 
@@ -108,7 +108,7 @@ class TestMongoDBDocumentIndexInitialization:
         mock_pymongo.errors = mock_errors
 
         with patch.dict(sys.modules, {'pymongo': mock_pymongo, 'pymongo.errors': mock_errors}):
-            from stache_mongodb.document_index import MongoDBDocumentIndex
+            from stache_ai_mongodb.document_index import MongoDBDocumentIndex
             provider = MongoDBDocumentIndex(mock_settings)
 
             # Verify create_index was called at least twice
@@ -607,7 +607,7 @@ class TestEnsureIndexes:
         mock_pymongo.errors = mock_errors
 
         with patch.dict(sys.modules, {'pymongo': mock_pymongo, 'pymongo.errors': mock_errors}):
-            from stache_mongodb.document_index import MongoDBDocumentIndex
+            from stache_ai_mongodb.document_index import MongoDBDocumentIndex
             provider = MongoDBDocumentIndex(mock_settings)
 
             # Verify indexes were created

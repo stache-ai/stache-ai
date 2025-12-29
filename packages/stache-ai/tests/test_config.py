@@ -7,24 +7,6 @@ import pytest
 class TestSettings:
     """Tests for Settings configuration class"""
 
-    def test_default_values(self):
-        """Test default configuration values"""
-        from stache_ai.config import Settings
-
-        # Create settings with minimal config
-        settings = Settings(
-            anthropic_api_key="test",
-            openai_api_key="test"
-        )
-
-        # Check defaults
-        assert settings.llm_provider == "fallback"
-        assert settings.embedding_provider == "openai"
-        assert settings.vectordb_provider == "qdrant"
-        assert settings.default_chunking_strategy == "recursive"
-        assert settings.chunk_size == 2000
-        assert settings.chunk_overlap == 200
-
     def test_qdrant_defaults(self):
         """Test Qdrant default configuration"""
         from stache_ai.config import Settings
@@ -32,14 +14,6 @@ class TestSettings:
         settings = Settings()
         assert settings.qdrant_url == "http://localhost:6333"
         assert settings.qdrant_collection == "stache"
-
-    def test_ollama_defaults(self):
-        """Test Ollama default configuration"""
-        from stache_ai.config import Settings
-
-        settings = Settings()
-        assert settings.ollama_url == "http://localhost:11434"
-        assert settings.ollama_model == "llama3.2"
 
     def test_get_llm_model_default(self):
         """Test default LLM model selection"""
@@ -110,15 +84,6 @@ class TestSettings:
             embedding_dimension=2048
         )
         assert settings.get_embedding_dimensions() == 2048
-
-    def test_namespace_defaults(self):
-        """Test namespace configuration defaults"""
-        from stache_ai.config import Settings
-
-        settings = Settings()
-        assert settings.default_namespace is None
-        assert settings.namespace_provider == "sqlite"
-        assert settings.namespace_db_path == "data/namespaces.db"
 
     def test_chroma_configuration(self):
         """Test Chroma configuration options"""

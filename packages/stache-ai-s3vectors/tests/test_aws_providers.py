@@ -40,7 +40,7 @@ class TestS3VectorsProvider:
 
     def test_init_validates_infrastructure(self, mock_settings, mock_boto_client):
         """Should validate bucket and index exist on init"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         mock_boto_client.get_vector_bucket.return_value = {}
         mock_boto_client.get_index.return_value = {}
@@ -57,7 +57,7 @@ class TestS3VectorsProvider:
 
     def test_init_raises_on_missing_bucket(self, mock_settings, mock_boto_client):
         """Should raise ValueError if bucket doesn't exist"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         mock_boto_client.get_vector_bucket.side_effect = make_client_error(
             "ResourceNotFoundException"
@@ -71,7 +71,7 @@ class TestS3VectorsProvider:
 
     def test_init_raises_on_missing_index(self, mock_settings, mock_boto_client):
         """Should raise ValueError if index doesn't exist"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         mock_boto_client.get_vector_bucket.return_value = {}
         mock_boto_client.get_index.side_effect = make_client_error(
@@ -86,7 +86,7 @@ class TestS3VectorsProvider:
 
     def test_init_raises_on_missing_bucket_config(self, mock_boto_client):
         """Should raise ValueError if bucket not configured"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         settings = Settings(
             vectordb_provider="s3vectors",
@@ -101,7 +101,7 @@ class TestS3VectorsProvider:
 
     def test_insert_vectors(self, mock_settings, mock_boto_client):
         """Should insert vectors with metadata"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         mock_boto_client.get_vector_bucket.return_value = {}
         mock_boto_client.get_index.return_value = {}
@@ -119,7 +119,7 @@ class TestS3VectorsProvider:
 
     def test_search_vectors(self, mock_settings, mock_boto_client):
         """Should search vectors and return results"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         mock_boto_client.get_vector_bucket.return_value = {}
         mock_boto_client.get_index.return_value = {}
@@ -147,7 +147,7 @@ class TestS3VectorsProvider:
 
     def test_delete_vectors(self, mock_settings, mock_boto_client):
         """Should delete vectors by IDs"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         mock_boto_client.get_vector_bucket.return_value = {}
         mock_boto_client.get_index.return_value = {}
@@ -160,7 +160,7 @@ class TestS3VectorsProvider:
 
     def test_get_collection_info(self, mock_settings, mock_boto_client):
         """Should return index info"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         mock_boto_client.get_vector_bucket.return_value = {}
         mock_boto_client.get_index.return_value = {
@@ -212,7 +212,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_init_validates_table(self, mock_settings, mock_dynamodb):
         """Should validate table exists on init"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         provider = DynamoDBNamespaceProvider(mock_settings)
 
@@ -222,7 +222,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_init_raises_on_missing_table(self, mock_settings, mock_dynamodb):
         """Should raise ValueError if table doesn't exist"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         mock_dynamodb["client"].describe_table.side_effect = make_client_error(
             "ResourceNotFoundException"
@@ -236,7 +236,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_init_raises_on_inactive_table(self, mock_settings, mock_dynamodb):
         """Should raise ValueError if table is not ACTIVE"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         mock_dynamodb["client"].describe_table.return_value = {
             "Table": {"TableStatus": "CREATING"}
@@ -249,7 +249,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_create_namespace(self, mock_settings, mock_dynamodb):
         """Should create a namespace"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         mock_dynamodb["table"].put_item.return_value = {}
 
@@ -280,7 +280,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_get_namespace(self, mock_settings, mock_dynamodb):
         """Should get a namespace by ID"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         mock_dynamodb["table"].get_item.return_value = {
             "Item": {
@@ -302,7 +302,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_delete_namespace(self, mock_settings, mock_dynamodb):
         """Should delete a namespace"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         # exists check
         mock_dynamodb["table"].get_item.return_value = {
@@ -319,7 +319,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_update_namespace_name(self, mock_settings, mock_dynamodb):
         """Should update namespace name with reserved keyword handling"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         # Mock existing namespace
         existing_item = {
@@ -352,7 +352,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_update_namespace_description(self, mock_settings, mock_dynamodb):
         """Should update namespace description"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         existing_item = {
             "id": "test-ns",
@@ -381,7 +381,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_update_namespace_metadata(self, mock_settings, mock_dynamodb):
         """Should merge metadata when updating"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         existing_item = {
             "id": "test-ns",
@@ -410,7 +410,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_update_namespace_parent_validation(self, mock_settings, mock_dynamodb):
         """Should validate parent exists when updating parent_id"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         existing_item = {
             "id": "test-ns",
@@ -436,7 +436,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_update_namespace_self_parent_validation(self, mock_settings, mock_dynamodb):
         """Should prevent namespace from being its own parent"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         existing_item = {
             "id": "test-ns",
@@ -459,7 +459,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_list_namespaces_all(self, mock_settings, mock_dynamodb):
         """Should list all root namespaces when no parent specified"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         # list() with no args queries for parent_id="__ROOT__", not scan
         mock_dynamodb["table"].query.return_value = {
@@ -494,7 +494,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_list_namespaces_by_parent(self, mock_settings, mock_dynamodb):
         """Should list namespaces filtered by parent_id"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         mock_dynamodb["table"].query.return_value = {
             "Items": [
@@ -519,7 +519,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_get_ancestors(self, mock_settings, mock_dynamodb):
         """Should retrieve ancestor chain for a namespace"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         # Mock hierarchy: root -> parent -> child
         mock_dynamodb["table"].get_item.side_effect = [
@@ -557,7 +557,7 @@ class TestDynamoDBNamespaceProvider:
 
     def test_get_path(self, mock_settings, mock_dynamodb):
         """Should build full path string for namespace"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         # Mock hierarchy: root -> parent -> child
         mock_dynamodb["table"].get_item.side_effect = [
@@ -627,7 +627,7 @@ class TestBedrockLLMProvider:
 
     def test_generate_via_converse_api(self, mock_settings, mock_boto_client):
         """Should generate text using the Converse API"""
-        from stache_bedrock.llm import BedrockLLMProvider
+        from stache_ai_bedrock.llm import BedrockLLMProvider
 
         # Mock Converse API response format
         mock_boto_client.converse.return_value = {
@@ -646,7 +646,7 @@ class TestBedrockLLMProvider:
 
     def test_generate_handles_access_denied(self, mock_settings, mock_boto_client):
         """Should raise RuntimeError on AccessDeniedException"""
-        from stache_bedrock.llm import BedrockLLMProvider
+        from stache_ai_bedrock.llm import BedrockLLMProvider
 
         mock_boto_client.converse.side_effect = make_client_error(
             "AccessDeniedException", "Model not enabled"
@@ -661,7 +661,7 @@ class TestBedrockLLMProvider:
 
     def test_generate_handles_throttling(self, mock_settings, mock_boto_client):
         """Should raise RuntimeError on ThrottlingException"""
-        from stache_bedrock.llm import BedrockLLMProvider
+        from stache_ai_bedrock.llm import BedrockLLMProvider
 
         mock_boto_client.converse.side_effect = make_client_error(
             "ThrottlingException"
@@ -676,7 +676,7 @@ class TestBedrockLLMProvider:
 
     def test_generate_handles_validation_error(self, mock_settings, mock_boto_client):
         """Should raise ValueError on ValidationException"""
-        from stache_bedrock.llm import BedrockLLMProvider
+        from stache_ai_bedrock.llm import BedrockLLMProvider
 
         mock_boto_client.converse.side_effect = make_client_error(
             "ValidationException", "Invalid input"
@@ -691,7 +691,7 @@ class TestBedrockLLMProvider:
 
     def test_generate_with_context(self, mock_settings, mock_boto_client):
         """Should generate answer with context"""
-        from stache_bedrock.llm import BedrockLLMProvider
+        from stache_ai_bedrock.llm import BedrockLLMProvider
 
         mock_boto_client.converse.return_value = {
             "output": {
@@ -710,14 +710,14 @@ class TestBedrockLLMProvider:
         assert result == "Contextual answer"
 
     def test_get_available_models(self, mock_settings, mock_boto_client):
-        """Should return curated list of Claude models"""
-        from stache_bedrock.llm import BedrockLLMProvider, BEDROCK_CLAUDE_MODELS
+        """Should return curated list of all Bedrock models"""
+        from stache_ai_bedrock.llm import BedrockLLMProvider, BEDROCK_ALL_MODELS
 
         provider = BedrockLLMProvider(mock_settings)
         models = provider.get_available_models()
 
-        # Should return the curated list
-        assert models == BEDROCK_CLAUDE_MODELS
+        # Should return the full curated list (Claude + other providers)
+        assert models == BEDROCK_ALL_MODELS
         assert len(models) > 0
 
         # Check structure of models
@@ -726,12 +726,11 @@ class TestBedrockLLMProvider:
             assert hasattr(model, 'name')
             assert hasattr(model, 'provider')
             assert hasattr(model, 'tier')
-            assert model.provider == "anthropic"
             assert model.tier in ["fast", "balanced", "premium"]
 
     def test_get_default_model(self, mock_settings, mock_boto_client):
         """Should return the configured model ID"""
-        from stache_bedrock.llm import BedrockLLMProvider
+        from stache_ai_bedrock.llm import BedrockLLMProvider
 
         provider = BedrockLLMProvider(mock_settings)
         default = provider.get_default_model()
@@ -740,7 +739,7 @@ class TestBedrockLLMProvider:
 
     def test_generate_with_model(self, mock_settings, mock_boto_client):
         """Should generate using specified model via Converse API"""
-        from stache_bedrock.llm import BedrockLLMProvider
+        from stache_ai_bedrock.llm import BedrockLLMProvider
 
         # Mock Converse API response
         mock_boto_client.converse.return_value = {
@@ -764,7 +763,7 @@ class TestBedrockLLMProvider:
 
     def test_generate_with_context_and_model(self, mock_settings, mock_boto_client):
         """Should generate with context using specified model"""
-        from stache_bedrock.llm import BedrockLLMProvider
+        from stache_ai_bedrock.llm import BedrockLLMProvider
 
         mock_boto_client.converse.return_value = {
             "output": {
@@ -817,7 +816,7 @@ class TestBedrockEmbeddingProvider:
 
     def test_embed_titan(self, mock_settings_titan, mock_boto_client):
         """Should embed text using Titan"""
-        from stache_bedrock.embedding import BedrockEmbeddingProvider
+        from stache_ai_bedrock.embedding import BedrockEmbeddingProvider
 
         response_body = MagicMock()
         response_body.read.return_value = json.dumps({
@@ -832,7 +831,7 @@ class TestBedrockEmbeddingProvider:
 
     def test_embed_cohere_document(self, mock_settings_cohere, mock_boto_client):
         """Should embed document text using Cohere with search_document type"""
-        from stache_bedrock.embedding import BedrockEmbeddingProvider
+        from stache_ai_bedrock.embedding import BedrockEmbeddingProvider
 
         response_body = MagicMock()
         response_body.read.return_value = json.dumps({
@@ -852,7 +851,7 @@ class TestBedrockEmbeddingProvider:
 
     def test_embed_query_cohere(self, mock_settings_cohere, mock_boto_client):
         """Should embed query text using Cohere with search_query type"""
-        from stache_bedrock.embedding import BedrockEmbeddingProvider
+        from stache_ai_bedrock.embedding import BedrockEmbeddingProvider
 
         response_body = MagicMock()
         response_body.read.return_value = json.dumps({
@@ -872,7 +871,7 @@ class TestBedrockEmbeddingProvider:
 
     def test_embed_batch_titan(self, mock_settings_titan, mock_boto_client):
         """Should embed batch of texts using Titan (parallel for 3+ texts)"""
-        from stache_bedrock.embedding import BedrockEmbeddingProvider
+        from stache_ai_bedrock.embedding import BedrockEmbeddingProvider
         import threading
 
         call_count = [0]
@@ -898,7 +897,7 @@ class TestBedrockEmbeddingProvider:
 
     def test_embed_batch_titan_parallel_preserves_order(self, mock_settings_titan, mock_boto_client):
         """Should preserve order of embeddings even with parallel execution"""
-        from stache_bedrock.embedding import BedrockEmbeddingProvider
+        from stache_ai_bedrock.embedding import BedrockEmbeddingProvider
         import threading
         import time
 
@@ -933,7 +932,7 @@ class TestBedrockEmbeddingProvider:
 
     def test_embed_batch_titan_small_batch_sequential(self, mock_settings_titan, mock_boto_client):
         """Should use sequential processing for batches of 2 or fewer"""
-        from stache_bedrock.embedding import BedrockEmbeddingProvider
+        from stache_ai_bedrock.embedding import BedrockEmbeddingProvider
 
         call_count = [0]
 
@@ -957,7 +956,7 @@ class TestBedrockEmbeddingProvider:
 
     def test_embed_batch_cohere(self, mock_settings_cohere, mock_boto_client):
         """Should embed batch of texts using Cohere (native batch)"""
-        from stache_bedrock.embedding import BedrockEmbeddingProvider
+        from stache_ai_bedrock.embedding import BedrockEmbeddingProvider
 
         response_body = MagicMock()
         response_body.read.return_value = json.dumps({
@@ -974,14 +973,14 @@ class TestBedrockEmbeddingProvider:
 
     def test_get_dimensions_titan_v2(self, mock_settings_titan, mock_boto_client):
         """Should return correct dimensions for Titan v2"""
-        from stache_bedrock.embedding import BedrockEmbeddingProvider
+        from stache_ai_bedrock.embedding import BedrockEmbeddingProvider
 
         provider = BedrockEmbeddingProvider(mock_settings_titan)
         assert provider.get_dimensions() == 1024
 
     def test_get_dimensions_cohere(self, mock_settings_cohere, mock_boto_client):
         """Should return correct dimensions for Cohere"""
-        from stache_bedrock.embedding import BedrockEmbeddingProvider
+        from stache_ai_bedrock.embedding import BedrockEmbeddingProvider
 
         provider = BedrockEmbeddingProvider(mock_settings_cohere)
         assert provider.get_dimensions() == 1024
@@ -1028,7 +1027,7 @@ class TestCohereProviderEmbedQuery:
 
     def test_embed_uses_search_document(self, mock_cohere_client):
         """embed() should use input_type=search_document"""
-        from stache_cohere.embedding import CohereEmbeddingProvider
+        from stache_ai_cohere.embedding import CohereEmbeddingProvider
 
         mock_cohere_client.embed.return_value = MagicMock(
             embeddings=[[0.1, 0.2, 0.3]]
@@ -1047,7 +1046,7 @@ class TestCohereProviderEmbedQuery:
 
     def test_embed_query_uses_search_query(self, mock_cohere_client):
         """embed_query() should use input_type=search_query"""
-        from stache_cohere.embedding import CohereEmbeddingProvider
+        from stache_ai_cohere.embedding import CohereEmbeddingProvider
 
         mock_cohere_client.embed.return_value = MagicMock(
             embeddings=[[0.1, 0.2, 0.3]]
@@ -1088,7 +1087,7 @@ class TestS3VectorsMetadataValidation:
 
     def test_metadata_key_limit_exceeded(self, mock_settings, mock_boto_client):
         """Should raise ValueError when metadata exceeds 50 key limit"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1107,7 +1106,7 @@ class TestS3VectorsMetadataValidation:
 
     def test_metadata_40kb_limit_exceeded(self, mock_settings, mock_boto_client):
         """Should raise ValueError when metadata exceeds 40KB total limit"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1125,7 +1124,7 @@ class TestS3VectorsMetadataValidation:
 
     def test_metadata_2kb_warning(self, mock_settings, mock_boto_client):
         """Should raise ValueError when metadata exceeds 2KB filterable limit"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
         import pytest
 
         provider = S3VectorsProvider(mock_settings)
@@ -1145,7 +1144,7 @@ class TestS3VectorsMetadataValidation:
 
     def test_metadata_within_limits(self, mock_settings, mock_boto_client):
         """Should succeed when metadata is within all limits"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1184,7 +1183,7 @@ class TestS3VectorsRetryLogic:
 
     def test_retry_on_throttling_exception(self, mock_settings, mock_boto_client):
         """Should retry on ThrottlingException and eventually succeed"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1211,7 +1210,7 @@ class TestS3VectorsRetryLogic:
 
     def test_retry_on_too_many_requests(self, mock_settings, mock_boto_client):
         """Should retry on TooManyRequestsException"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1237,7 +1236,7 @@ class TestS3VectorsRetryLogic:
 
     def test_no_retry_on_other_errors(self, mock_settings, mock_boto_client):
         """Should not retry on non-throttling errors"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1257,7 +1256,7 @@ class TestS3VectorsRetryLogic:
 
     def test_max_retries_exceeded(self, mock_settings, mock_boto_client):
         """Should raise error after max retries exceeded"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1301,7 +1300,7 @@ class TestS3VectorsTopKValidation:
 
     def test_top_k_clamped_to_100(self, mock_settings, mock_boto_client, caplog):
         """Should clamp top_k to 100 and log warning"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
         import logging
 
         provider = S3VectorsProvider(mock_settings)
@@ -1318,7 +1317,7 @@ class TestS3VectorsTopKValidation:
 
     def test_top_k_under_limit(self, mock_settings, mock_boto_client):
         """Should not clamp when top_k is under 100"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
         provider.search([0.1, 0.2], top_k=50)
@@ -1328,7 +1327,7 @@ class TestS3VectorsTopKValidation:
 
     def test_top_k_exactly_100(self, mock_settings, mock_boto_client, caplog):
         """Should accept top_k=100 without warning"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
         import logging
 
         provider = S3VectorsProvider(mock_settings)
@@ -1367,7 +1366,7 @@ class TestS3VectorsNamespaceFiltering:
 
     def test_exact_namespace_uses_native_filter(self, mock_settings, mock_boto_client):
         """Should use native filter for exact: prefix"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
         provider.search([0.1, 0.2], top_k=5, namespace="exact:books")
@@ -1381,7 +1380,7 @@ class TestS3VectorsNamespaceFiltering:
 
     def test_wildcard_namespace_requires_post_filtering(self, mock_settings, mock_boto_client):
         """Should overfetch and post-filter for wildcard patterns"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
         provider.search([0.1, 0.2], top_k=5, namespace="books/*")
@@ -1394,7 +1393,7 @@ class TestS3VectorsNamespaceFiltering:
 
     def test_default_namespace_uses_exact_match(self, mock_settings, mock_boto_client):
         """Should use exact match filter for default namespace behavior"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
         provider.search([0.1, 0.2], top_k=5, namespace="books")
@@ -1407,7 +1406,7 @@ class TestS3VectorsNamespaceFiltering:
 
     def test_no_namespace_no_filter(self, mock_settings, mock_boto_client):
         """Should not add filter when no namespace specified"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
         provider.search([0.1, 0.2], top_k=5)
@@ -1440,7 +1439,7 @@ class TestS3VectorsBatchOperations:
 
     def test_delete_small_batch(self, mock_settings, mock_boto_client):
         """Should delete small batch in single call"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
         result = provider.delete(["id1", "id2", "id3"])
@@ -1450,7 +1449,7 @@ class TestS3VectorsBatchOperations:
 
     def test_delete_large_batch(self, mock_settings, mock_boto_client):
         """Should split large batch into multiple calls"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1463,7 +1462,7 @@ class TestS3VectorsBatchOperations:
 
     def test_delete_empty_list(self, mock_settings, mock_boto_client):
         """Should handle empty list gracefully"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
         result = provider.delete([])
@@ -1495,7 +1494,7 @@ class TestS3VectorsCountByFilter:
 
     def test_count_by_filter_with_results(self, mock_settings, mock_boto_client):
         """Should count vectors matching filter (client-side filtering)"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1522,7 +1521,7 @@ class TestS3VectorsCountByFilter:
 
     def test_count_by_filter_empty(self, mock_settings, mock_boto_client):
         """Should return 0 when no vectors match"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1539,7 +1538,7 @@ class TestS3VectorsCountByFilter:
 
     def test_count_by_filter_multiple_conditions(self, mock_settings, mock_boto_client):
         """Should count with multiple filter conditions (client-side)"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1565,7 +1564,7 @@ class TestS3VectorsCountByFilter:
 
     def test_count_by_filter_error_handling(self, mock_settings, mock_boto_client):
         """Should return 0 on error"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1601,7 +1600,7 @@ class TestS3VectorsListByFilter:
 
     def test_list_by_filter_with_results(self, mock_settings, mock_boto_client):
         """Should list vectors matching filter with metadata (client-side filtering)"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1636,7 +1635,7 @@ class TestS3VectorsListByFilter:
 
     def test_list_by_filter_with_field_filter(self, mock_settings, mock_boto_client):
         """Should filter metadata fields when specified"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1672,7 +1671,7 @@ class TestS3VectorsListByFilter:
 
     def test_list_by_filter_respects_limit(self, mock_settings, mock_boto_client):
         """Should stop at limit"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1695,7 +1694,7 @@ class TestS3VectorsListByFilter:
 
     def test_list_by_filter_empty(self, mock_settings, mock_boto_client):
         """Should return empty list when no vectors match filter"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1712,7 +1711,7 @@ class TestS3VectorsListByFilter:
 
     def test_list_by_filter_error_handling(self, mock_settings, mock_boto_client):
         """Should return empty list on error"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1748,7 +1747,7 @@ class TestS3VectorsDeleteByMetadata:
 
     def test_delete_by_metadata_with_results(self, mock_settings, mock_boto_client):
         """Should delete vectors matching metadata criteria via client-side filtering"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1785,7 +1784,7 @@ class TestS3VectorsDeleteByMetadata:
 
     def test_delete_by_metadata_large_batch(self, mock_settings, mock_boto_client):
         """Should handle large batches with multiple delete calls"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1806,7 +1805,7 @@ class TestS3VectorsDeleteByMetadata:
 
     def test_delete_by_metadata_no_results(self, mock_settings, mock_boto_client):
         """Should handle case when no vectors match criteria (client-side filtering)"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1826,7 +1825,7 @@ class TestS3VectorsDeleteByMetadata:
 
     def test_delete_by_metadata_with_namespace(self, mock_settings, mock_boto_client):
         """Should filter by both field and namespace (client-side filtering)"""
-        from stache_s3vectors.provider import S3VectorsProvider
+        from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
 
@@ -1873,7 +1872,7 @@ class TestDynamoDBNamespaceFilterKeys:
 
     def test_create_stores_filter_keys(self, mock_settings, mock_dynamodb_table):
         """Create should store filter_keys in DynamoDB"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         # First call to get_item returns nothing (namespace doesn't exist)
         # After create, second call returns the created namespace
@@ -1910,7 +1909,7 @@ class TestDynamoDBNamespaceFilterKeys:
 
     def test_update_replaces_filter_keys(self, mock_settings, mock_dynamodb_table):
         """Update should replace filter_keys entirely"""
-        from stache_dynamodb.namespace import DynamoDBNamespaceProvider
+        from stache_ai_dynamodb.namespace import DynamoDBNamespaceProvider
 
         # Mock existing namespace
         mock_dynamodb_table.get_item.return_value = {

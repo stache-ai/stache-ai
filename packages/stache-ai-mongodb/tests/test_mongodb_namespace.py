@@ -54,7 +54,7 @@ def mongo_provider(mock_settings, mock_mongo_client):
     mock_pymongo.errors = mock_errors
 
     with patch.dict(sys.modules, {'pymongo': mock_pymongo, 'pymongo.errors': mock_errors}):
-        from stache_mongodb.namespace import MongoDBNamespaceProvider
+        from stache_ai_mongodb.namespace import MongoDBNamespaceProvider
         instance = MongoDBNamespaceProvider(mock_settings)
     return instance, mock_mongo_client.admin, instance.collection
 
@@ -72,7 +72,7 @@ class TestMongoDBNamespaceProviderInitialization:
         mock_pymongo.errors = mock_errors
 
         with patch.dict(sys.modules, {'pymongo': mock_pymongo, 'pymongo.errors': mock_errors}):
-            from stache_mongodb.namespace import MongoDBNamespaceProvider
+            from stache_ai_mongodb.namespace import MongoDBNamespaceProvider
             provider = MongoDBNamespaceProvider(mock_settings)
 
             assert provider.client == mock_mongo_client
@@ -90,7 +90,7 @@ class TestMongoDBNamespaceProviderInitialization:
         mock_pymongo.errors = mock_errors
 
         with patch.dict(sys.modules, {'pymongo': mock_pymongo, 'pymongo.errors': mock_errors}):
-            from stache_mongodb.namespace import MongoDBNamespaceProvider
+            from stache_ai_mongodb.namespace import MongoDBNamespaceProvider
             with pytest.raises(ValueError, match="Cannot connect to MongoDB"):
                 MongoDBNamespaceProvider(mock_settings)
 
@@ -104,7 +104,7 @@ class TestMongoDBNamespaceProviderInitialization:
         mock_pymongo.errors = mock_errors
 
         with patch.dict(sys.modules, {'pymongo': mock_pymongo, 'pymongo.errors': mock_errors}):
-            from stache_mongodb.namespace import MongoDBNamespaceProvider
+            from stache_ai_mongodb.namespace import MongoDBNamespaceProvider
             provider = MongoDBNamespaceProvider(mock_settings)
 
             # Verify create_index was called for parent_id and name
