@@ -13,9 +13,9 @@ if _env_file.exists():
 
 
 @click.group()
-@click.version_option(version='0.1.0', prog_name='stache')
+@click.version_option(version='0.1.0', prog_name='stache-admin')
 def cli():
-    """Stache CLI - Manage your personal knowledge base"""
+    """Stache Admin CLI - Database and provider management commands"""
     pass
 
 

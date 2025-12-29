@@ -68,7 +68,7 @@ openai = [
 ]
 
 [project.scripts]
-stache = "stache_ai.cli:cli"
+stache-admin = "stache_ai.cli:cli"
 stache-import = "stache_ai.cli.import_cmd:import_directory"
 
 # =============================================================================
