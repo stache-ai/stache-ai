@@ -93,6 +93,31 @@ open http://localhost:8000
 
 That's it.
 
+### Docker Hub
+
+Skip the build and pull directly from Docker Hub:
+
+```bash
+# Full image (with OCR support for scanned PDFs)
+docker pull stacheai/stache-ai:latest
+
+# Slim image (without OCR, ~230MB smaller)
+docker pull stacheai/stache-ai:slim
+```
+
+Then run with docker-compose by updating `docker-compose.yml`:
+
+```yaml
+app:
+  image: stacheai/stache-ai:latest  # or :slim
+  # ... rest of config
+```
+
+| Tag | OCR | Size | Use Case |
+|-----|-----|------|----------|
+| `latest`, `0.1.0` | Yes | ~715MB | Full featured, scanned PDF support |
+| `slim`, `0.1.0-slim` | No | ~485MB | Smaller image, text-based docs only |
+
 ### Docker Build Options
 
 Customize your build with these options:
@@ -110,7 +135,7 @@ docker compose build --build-arg INSTALL_PROFILE=aws
 # Minimal build (core only, bring your own providers)
 docker compose build --build-arg INSTALL_PROFILE=minimal
 
-# Disable OCR support (saves ~340MB)
+# Disable OCR support (saves ~230MB)
 docker compose build --build-arg WITH_OCR=false
 
 # Combine options

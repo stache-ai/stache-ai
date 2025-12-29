@@ -20,8 +20,6 @@ WORKDIR /app
 ARG INSTALL_PROFILE=full
 # Enable OCR support for scanned PDFs (adds ~230MB)
 ARG WITH_OCR=true
-# Package version to install
-ARG STACHE_VERSION=0.1.0
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
@@ -30,44 +28,48 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
        fi \
     && rm -rf /var/lib/apt/lists/*
 
-# Install packages from PyPI based on profile
+# Copy all packages (for local source install)
+COPY packages/ /app/packages/
+
+# Install packages based on profile
 RUN --mount=type=cache,target=/root/.cache/pip \
     case "$INSTALL_PROFILE" in \
       airgap) \
         echo "Installing airgap profile (qdrant, ollama, mongodb)..." && \
         pip install \
-          stache-ai==$STACHE_VERSION \
-          stache-ai-qdrant==$STACHE_VERSION \
-          stache-ai-ollama==$STACHE_VERSION \
-          stache-ai-mongodb==$STACHE_VERSION ;; \
+          /app/packages/stache-ai \
+          /app/packages/stache-ai-qdrant \
+          /app/packages/stache-ai-ollama \
+          /app/packages/stache-ai-mongodb ;; \
       aws) \
         echo "Installing aws profile (bedrock, s3vectors, dynamodb)..." && \
         pip install \
-          stache-ai==$STACHE_VERSION \
-          stache-ai-bedrock==$STACHE_VERSION \
-          stache-ai-s3vectors==$STACHE_VERSION \
-          stache-ai-dynamodb==$STACHE_VERSION ;; \
+          /app/packages/stache-ai \
+          /app/packages/stache-ai-bedrock \
+          /app/packages/stache-ai-s3vectors \
+          /app/packages/stache-ai-dynamodb ;; \
       minimal) \
         echo "Installing minimal profile (core only)..." && \
         pip install \
-          stache-ai==$STACHE_VERSION ;; \
+          /app/packages/stache-ai ;; \
       full|*) \
         echo "Installing full profile (all providers)..." && \
         pip install \
-          stache-ai==$STACHE_VERSION \
-          stache-ai-qdrant==$STACHE_VERSION \
-          stache-ai-ollama==$STACHE_VERSION \
-          stache-ai-openai==$STACHE_VERSION \
-          stache-ai-anthropic==$STACHE_VERSION \
-          stache-ai-bedrock==$STACHE_VERSION \
-          stache-ai-cohere==$STACHE_VERSION \
-          stache-ai-mixedbread==$STACHE_VERSION \
-          stache-ai-mongodb==$STACHE_VERSION \
-          stache-ai-dynamodb==$STACHE_VERSION \
-          stache-ai-s3vectors==$STACHE_VERSION \
-          stache-ai-redis==$STACHE_VERSION \
-          stache-ai-pinecone==$STACHE_VERSION ;; \
-    esac
+          /app/packages/stache-ai \
+          /app/packages/stache-ai-qdrant \
+          /app/packages/stache-ai-ollama \
+          /app/packages/stache-ai-openai \
+          /app/packages/stache-ai-anthropic \
+          /app/packages/stache-ai-bedrock \
+          /app/packages/stache-ai-cohere \
+          /app/packages/stache-ai-mixedbread \
+          /app/packages/stache-ai-mongodb \
+          /app/packages/stache-ai-dynamodb \
+          /app/packages/stache-ai-s3vectors \
+          /app/packages/stache-ai-redis \
+          /app/packages/stache-ai-pinecone ;; \
+    esac && \
+    rm -rf /app/packages
 
 # Copy built frontend from stage 1
 COPY --from=frontend-builder /frontend/dist /app/static
