@@ -14,12 +14,12 @@ Usage in plugin package:
             return QdrantVectorDBProvider(test_settings)
 """
 
-from .vectordb import VectorDBContractTest
-from .llm import LLMContractTest
-from .embedding import EmbeddingContractTest
-from .namespace import NamespaceContractTest
 from .document_index import DocumentIndexContractTest
+from .embedding import EmbeddingContractTest
+from .llm import LLMContractTest
+from .namespace import NamespaceContractTest
 from .reranker import RerankerContractTest
+from .vectordb import VectorDBContractTest
 
 __all__ = [
     'VectorDBContractTest',

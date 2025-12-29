@@ -1,12 +1,13 @@
 """Upload endpoint for importing documents"""
 
-from typing import List
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from pydantic import BaseModel
-from stache_ai.rag.pipeline import get_pipeline
 import logging
 import os
 import tempfile
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
+
+from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ async def upload_document(
 
 @router.post("/upload/batch")
 async def batch_upload_documents(
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),
     chunking_strategy: str = Form("auto"),
     namespace: str | None = Form(None),
     metadata: str | None = Form(None),
@@ -136,7 +137,7 @@ async def batch_upload_documents(
         prepend_keys = [k.strip() for k in prepend_metadata.split(",") if k.strip()]
 
     pipeline = get_pipeline()
-    results: List[BatchUploadResult] = []
+    results: list[BatchUploadResult] = []
     total_chunks = 0
 
     for file in files:

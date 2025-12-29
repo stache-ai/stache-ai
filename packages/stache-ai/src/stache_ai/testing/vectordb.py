@@ -1,9 +1,10 @@
 """VectorDB provider contract tests."""
 
-import pytest
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any
 import uuid
+from abc import ABC, abstractmethod
+from typing import Any
+
+import pytest
 
 
 class VectorDBContractTest(ABC):
@@ -32,7 +33,7 @@ class VectorDBContractTest(ABC):
         return f"test-{uuid.uuid4().hex[:8]}"
 
     @pytest.fixture
-    def sample_vectors(self) -> List[List[float]]:
+    def sample_vectors(self) -> list[list[float]]:
         """Sample 1024-dimension vectors for testing."""
         return [
             [0.1] * 1024,
@@ -41,7 +42,7 @@ class VectorDBContractTest(ABC):
         ]
 
     @pytest.fixture
-    def sample_texts(self) -> List[str]:
+    def sample_texts(self) -> list[str]:
         """Sample texts corresponding to vectors."""
         return [
             "The quick brown fox jumps over the lazy dog.",
@@ -50,7 +51,7 @@ class VectorDBContractTest(ABC):
         ]
 
     @pytest.fixture
-    def sample_metadatas(self) -> List[Dict[str, Any]]:
+    def sample_metadatas(self) -> list[dict[str, Any]]:
         """Sample metadata for vectors."""
         return [
             {"source": "document1.pdf", "page": 1},

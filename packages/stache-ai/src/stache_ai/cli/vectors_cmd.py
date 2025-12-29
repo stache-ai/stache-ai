@@ -13,7 +13,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import click
 from rich.console import Console
@@ -93,11 +93,11 @@ def vectors_stats(verbose: bool):
 @click.option('--output', '-o', type=click.Path(path_type=Path), help='Output to JSON file')
 @click.option('--verbose', '-v', is_flag=True, help='Verbose output')
 def vectors_list(
-    namespace: Optional[str],
-    doc_id: Optional[str],
-    vector_type: Optional[str],
+    namespace: str | None,
+    doc_id: str | None,
+    vector_type: str | None,
     limit: int,
-    output: Optional[Path],
+    output: Path | None,
     verbose: bool
 ):
     """List vectors with optional filtering."""
@@ -170,8 +170,8 @@ def vectors_list(
 @click.option('--output', '-o', type=click.Path(path_type=Path), help='Output to JSON file')
 @click.option('--verbose', '-v', is_flag=True, help='Verbose output')
 def vectors_documents(
-    namespace: Optional[str],
-    output: Optional[Path],
+    namespace: str | None,
+    output: Path | None,
     verbose: bool
 ):
     """Group vectors by document ID to discover documents.
@@ -209,7 +209,7 @@ def vectors_documents(
         sys.exit(1)
 
     # Group by doc_id
-    documents: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+    documents: dict[str, dict[str, Any]] = defaultdict(lambda: {
         'chunk_count': 0,
         'has_summary': False,
         'namespace': None,
@@ -284,7 +284,7 @@ def vectors_documents(
     console.print()
     with_summary = sum(1 for d in doc_list if d['has_summary'])
     without_summary = len(doc_list) - with_summary
-    console.print(f"[bold]Summary:[/bold]")
+    console.print("[bold]Summary:[/bold]")
     console.print(f"  Documents with summaries: {with_summary}")
     console.print(f"  Documents without summaries: {without_summary}")
 
@@ -295,7 +295,7 @@ def vectors_documents(
 @click.option('--skip-existing', is_flag=True, default=True, help='Skip documents that already exist in index (default: True)')
 @click.option('--verbose', '-v', is_flag=True, help='Verbose output')
 def vectors_create_index(
-    namespace: Optional[str],
+    namespace: str | None,
     dry_run: bool,
     skip_existing: bool,
     verbose: bool
@@ -352,7 +352,7 @@ def vectors_create_index(
         sys.exit(1)
 
     # Group by doc_id
-    documents: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+    documents: dict[str, dict[str, Any]] = defaultdict(lambda: {
         'chunk_ids': [],
         'namespace': None,
         'filename': None,
@@ -452,7 +452,7 @@ def vectors_create_index(
                     logger.error(f"Failed to create {doc['filename']}: {e}")
 
     console.print()
-    console.print(f"[bold]Results:[/bold]")
+    console.print("[bold]Results:[/bold]")
     console.print(f"  [green]Created:[/green] {success}")
     console.print(f"  [red]Failed:[/red] {failed}")
 

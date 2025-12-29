@@ -4,9 +4,10 @@ This test verifies that the core RAG workflow works end-to-end when using S3 Vec
 as the vector database provider. It tests all major features including document ingestion,
 semantic search, question answering, document discovery, and deletion.
 """
-import pytest
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 

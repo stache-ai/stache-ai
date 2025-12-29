@@ -1,14 +1,15 @@
 """Base provider interfaces - Abstract base classes for all providers"""
 
+import builtins
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Set
+from typing import Any
 
 
 class EmbeddingProvider(ABC):
     """Abstract base class for embedding providers"""
 
     @abstractmethod
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str) -> list[float]:
         """
         Generate embedding for a single text
 
@@ -21,7 +22,7 @@ class EmbeddingProvider(ABC):
         pass
 
     @abstractmethod
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """
         Generate embeddings for multiple texts
 
@@ -43,7 +44,7 @@ class EmbeddingProvider(ABC):
         """
         pass
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> list[float]:
         """
         Generate embedding for a search query.
 
@@ -81,7 +82,7 @@ class ModelInfo:
         self.tier = tier  # "fast", "balanced", "premium"
         self.description = description
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "name": self.name,
@@ -112,7 +113,7 @@ class LLMProvider(ABC):
     def generate_with_context(
         self,
         query: str,
-        context: List[Dict[str, Any]],
+        context: list[dict[str, Any]],
         **kwargs
     ) -> str:
         """
@@ -128,7 +129,7 @@ class LLMProvider(ABC):
         """
         pass
 
-    def get_available_models(self) -> List[ModelInfo]:
+    def get_available_models(self) -> list[ModelInfo]:
         """
         Get list of models available for this provider.
 
@@ -173,7 +174,7 @@ class LLMProvider(ABC):
     def generate_with_context_and_model(
         self,
         query: str,
-        context: List[Dict[str, Any]],
+        context: list[dict[str, Any]],
         model_id: str,
         **kwargs
     ) -> str:
@@ -209,10 +210,10 @@ class NamespaceProvider(ABC):
         id: str,
         name: str,
         description: str = "",
-        parent_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        filter_keys: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        parent_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        filter_keys: list[str] | None = None
+    ) -> dict[str, Any]:
         """
         Create a new namespace
 
@@ -232,7 +233,7 @@ class NamespaceProvider(ABC):
         pass
 
     @abstractmethod
-    def get(self, id: str) -> Optional[Dict[str, Any]]:
+    def get(self, id: str) -> dict[str, Any] | None:
         """
         Get a namespace by ID
 
@@ -247,9 +248,9 @@ class NamespaceProvider(ABC):
     @abstractmethod
     def list(
         self,
-        parent_id: Optional[str] = None,
+        parent_id: str | None = None,
         include_children: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List namespaces
 
@@ -266,12 +267,12 @@ class NamespaceProvider(ABC):
     def update(
         self,
         id: str,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        parent_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        filter_keys: Optional[List[str]] = None
-    ) -> Optional[Dict[str, Any]]:
+        name: str | None = None,
+        description: str | None = None,
+        parent_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        filter_keys: builtins.list[str] | None = None
+    ) -> dict[str, Any] | None:
         """
         Update a namespace
 
@@ -304,7 +305,7 @@ class NamespaceProvider(ABC):
         pass
 
     @abstractmethod
-    def get_tree(self, root_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_tree(self, root_id: str | None = None) -> builtins.list[dict[str, Any]]:
         """
         Get namespace hierarchy as a tree
 
@@ -340,12 +341,12 @@ class VectorDBProvider(ABC):
     @abstractmethod
     def insert(
         self,
-        vectors: List[List[float]],
-        texts: List[str],
-        metadatas: Optional[List[Dict[str, Any]]] = None,
-        ids: Optional[List[str]] = None,
-        namespace: Optional[str] = None
-    ) -> List[str]:
+        vectors: list[list[float]],
+        texts: list[str],
+        metadatas: list[dict[str, Any]] | None = None,
+        ids: list[str] | None = None,
+        namespace: str | None = None
+    ) -> list[str]:
         """
         Insert vectors into the database
 
@@ -364,11 +365,11 @@ class VectorDBProvider(ABC):
     @abstractmethod
     def search(
         self,
-        query_vector: List[float],
+        query_vector: list[float],
         top_k: int = 5,
-        filter: Optional[Dict[str, Any]] = None,
-        namespace: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        filter: dict[str, Any] | None = None,
+        namespace: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Search for similar vectors
 
@@ -384,7 +385,7 @@ class VectorDBProvider(ABC):
         pass
 
     @abstractmethod
-    def delete(self, ids: List[str], namespace: Optional[str] = None) -> bool:
+    def delete(self, ids: list[str], namespace: str | None = None) -> bool:
         """
         Delete vectors by IDs
 
@@ -398,7 +399,7 @@ class VectorDBProvider(ABC):
         pass
 
     @abstractmethod
-    def get_collection_info(self) -> Dict[str, Any]:
+    def get_collection_info(self) -> dict[str, Any]:
         """
         Get information about the collection
 
@@ -407,7 +408,7 @@ class VectorDBProvider(ABC):
         """
         pass
 
-    def delete_by_metadata(self, field: str, value: str, namespace: Optional[str] = None) -> Dict[str, Any]:
+    def delete_by_metadata(self, field: str, value: str, namespace: str | None = None) -> dict[str, Any]:
         """
         Delete vectors by metadata field value
 
@@ -423,10 +424,10 @@ class VectorDBProvider(ABC):
 
     def search_summaries(
         self,
-        query_vector: List[float],
+        query_vector: list[float],
         top_k: int = 10,
-        namespace: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        namespace: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Search document summaries (for document discovery)
 
@@ -443,7 +444,7 @@ class VectorDBProvider(ABC):
         """
         raise NotImplementedError("search_summaries not implemented for this provider")
 
-    def count_by_filter(self, filter: Dict[str, Any]) -> int:
+    def count_by_filter(self, filter: dict[str, Any]) -> int:
         """
         Count vectors matching a filter
 
@@ -457,10 +458,10 @@ class VectorDBProvider(ABC):
 
     def list_by_filter(
         self,
-        filter: Dict[str, Any],
-        fields: Optional[List[str]] = None,
+        filter: dict[str, Any],
+        fields: list[str] | None = None,
         limit: int = 1000
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List vectors matching a filter with their metadata
 
@@ -476,10 +477,10 @@ class VectorDBProvider(ABC):
 
     def get_by_ids(
         self,
-        ids: List[str],
-        fields: Optional[List[str]] = None,
-        namespace: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        ids: list[str],
+        fields: list[str] | None = None,
+        namespace: str | None = None
+    ) -> list[dict[str, Any]]:
         """Retrieve vectors by IDs with their metadata
 
         Args:
@@ -498,7 +499,7 @@ class VectorDBProvider(ABC):
         return self.__class__.__name__
 
     @property
-    def capabilities(self) -> Set[str]:
+    def capabilities(self) -> set[str]:
         """Return set of supported operations
 
         Override this property in provider implementations to declare
@@ -537,14 +538,14 @@ class DocumentIndexProvider(ABC):
         doc_id: str,
         filename: str,
         namespace: str,
-        chunk_ids: List[str],
-        summary: Optional[str] = None,
-        summary_embedding_id: Optional[str] = None,
-        headings: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        file_type: Optional[str] = None,
-        file_size: Optional[int] = None
-    ) -> Dict[str, Any]:
+        chunk_ids: list[str],
+        summary: str | None = None,
+        summary_embedding_id: str | None = None,
+        headings: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        file_type: str | None = None,
+        file_size: int | None = None
+    ) -> dict[str, Any]:
         """
         Create a new document index entry
 
@@ -569,8 +570,8 @@ class DocumentIndexProvider(ABC):
     def get_document(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
+        namespace: str | None = None
+    ) -> dict[str, Any] | None:
         """
         Retrieve a document by ID
 
@@ -586,10 +587,10 @@ class DocumentIndexProvider(ABC):
     @abstractmethod
     def list_documents(
         self,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         limit: int = 100,
-        last_evaluated_key: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        last_evaluated_key: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         List documents with pagination support
 
@@ -614,7 +615,7 @@ class DocumentIndexProvider(ABC):
     def delete_document(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
+        namespace: str | None = None
     ) -> bool:
         """
         Delete a document index entry
@@ -634,7 +635,7 @@ class DocumentIndexProvider(ABC):
         doc_id: str,
         summary: str,
         summary_embedding_id: str,
-        namespace: Optional[str] = None
+        namespace: str | None = None
     ) -> bool:
         """
         Update the summary and summary embedding ID for a document
@@ -657,8 +658,8 @@ class DocumentIndexProvider(ABC):
     def get_chunk_ids(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
-    ) -> List[str]:
+        namespace: str | None = None
+    ) -> list[str]:
         """
         Retrieve all chunk IDs for a document
 

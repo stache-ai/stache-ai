@@ -1,6 +1,7 @@
 """Providers diagnostic command"""
 
 import click
+
 from stache_ai.providers import plugin_loader
 
 

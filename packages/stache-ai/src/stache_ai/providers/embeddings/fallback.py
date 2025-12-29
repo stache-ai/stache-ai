@@ -1,11 +1,10 @@
 """Fallback embedding provider - tries primary, falls back to secondary"""
 
-from typing import List
 import logging
 
+from stache_ai.config import Settings
 from stache_ai.providers.base import EmbeddingProvider
 from stache_ai.providers.factories import EmbeddingProviderFactory
-from stache_ai.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +106,7 @@ class FallbackEmbeddingProvider(EmbeddingProvider):
                 self.settings.embedding_provider = original
         return self._secondary
 
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str) -> list[float]:
         """Generate embedding, with fallback"""
         try:
             return self.primary.embed(text)
@@ -115,7 +114,7 @@ class FallbackEmbeddingProvider(EmbeddingProvider):
             logger.warning(f"Primary embedding provider failed: {e}, trying secondary")
             return self.secondary.embed(text)
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for batch, with fallback"""
         try:
             return self.primary.embed_batch(texts)

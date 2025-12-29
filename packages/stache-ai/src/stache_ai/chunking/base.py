@@ -1,8 +1,8 @@
 """Base chunking strategy interface"""
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -10,7 +10,7 @@ class Chunk:
     """Represents a text chunk with metadata"""
     text: str
     index: int
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
 
 class ChunkingStrategy(ABC):
@@ -23,7 +23,7 @@ class ChunkingStrategy(ABC):
         chunk_size: int = 2000,
         chunk_overlap: int = 200,
         **kwargs
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Split text into chunks
 

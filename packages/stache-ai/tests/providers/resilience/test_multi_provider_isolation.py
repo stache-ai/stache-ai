@@ -8,16 +8,12 @@ Verifies that different providers are properly isolated:
 - Concurrent access is thread-safe
 """
 
-import pytest
 import threading
 import time
-from unittest.mock import Mock, patch
 
-from stache_ai.providers.resilience import (
-    HttpClientFactory,
-    HttpClientConfig,
-    CircuitState
-)
+import pytest
+
+from stache_ai.providers.resilience import CircuitState, HttpClientConfig, HttpClientFactory
 
 
 @pytest.fixture(autouse=True)

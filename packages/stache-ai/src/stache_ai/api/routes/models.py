@@ -1,8 +1,10 @@
 """Model selection endpoints - Dynamic model listing based on LLM provider"""
 
-from fastapi import APIRouter
-from stache_ai.rag.pipeline import get_pipeline
 import logging
+
+from fastapi import APIRouter
+
+from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
 

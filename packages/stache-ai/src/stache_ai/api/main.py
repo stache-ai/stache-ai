@@ -1,14 +1,26 @@
 """FastAPI application entry point"""
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from stache_ai.config import settings
-from stache_ai.api.routes import health, capture, query, upload, documents, pending, namespaces, models, insights
 import logging
 import os
 from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from stache_ai.api.routes import (
+    capture,
+    documents,
+    health,
+    insights,
+    models,
+    namespaces,
+    pending,
+    query,
+    upload,
+)
+from stache_ai.config import settings
 
 # Configure logging
 logging.basicConfig(
@@ -26,7 +38,6 @@ app = FastAPI(
 )
 
 # CORS middleware - configure via environment for production
-import os
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
 app.add_middleware(
     CORSMiddleware,

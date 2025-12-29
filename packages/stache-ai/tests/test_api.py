@@ -1,7 +1,8 @@
 """Tests for API routes"""
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 

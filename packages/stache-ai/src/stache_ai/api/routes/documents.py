@@ -1,8 +1,10 @@
 """Document management endpoints"""
 
-from fastapi import APIRouter, HTTPException, Query, Path
-from stache_ai.rag.pipeline import get_pipeline
 import logging
+
+from fastapi import APIRouter, HTTPException, Path, Query
+
+from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +169,7 @@ async def _list_orphaned_chunks(vectordb, namespace: str | None):
                    "New S3 Vectors deployments don't have orphaned chunks."
         )
 
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
 
     scroll_filter = None
     if namespace:
@@ -397,7 +399,6 @@ async def delete_orphaned_chunks(
                        "New S3 Vectors deployments don't have orphaned chunks."
             )
 
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
 
         # Find orphaned chunks by scrolling and filtering in Python
         # (Qdrant's IsNull condition isn't reliable for missing fields)
@@ -687,7 +688,7 @@ async def migrate_document_summaries(
                        "No migration needed."
             )
 
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
 
         # First, collect all existing summary doc_ids
         existing_summaries = set()

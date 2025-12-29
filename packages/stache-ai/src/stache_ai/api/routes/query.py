@@ -1,10 +1,12 @@
 """Query endpoint for searching knowledge base"""
 
+import logging
 from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
 from stache_ai.rag.pipeline import get_pipeline
-import logging
 
 logger = logging.getLogger(__name__)
 

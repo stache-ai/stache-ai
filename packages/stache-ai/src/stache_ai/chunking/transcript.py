@@ -1,8 +1,8 @@
 """Transcript chunking strategy for VTT/SRT files"""
 
-from typing import List
 import re
-from .base import ChunkingStrategy, Chunk
+
+from .base import Chunk, ChunkingStrategy
 
 
 class TranscriptChunkingStrategy(ChunkingStrategy):
@@ -22,7 +22,7 @@ class TranscriptChunkingStrategy(ChunkingStrategy):
         chunk_size: int = 2000,
         chunk_overlap: int = 200,
         **kwargs
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """Split transcript at natural cue boundaries"""
 
         # Detect format (VTT or SRT)
@@ -97,7 +97,7 @@ class TranscriptChunkingStrategy(ChunkingStrategy):
 
         return chunks
 
-    def _parse_vtt(self, text: str) -> List[dict]:
+    def _parse_vtt(self, text: str) -> list[dict]:
         """Parse VTT format"""
         cues = []
 
@@ -143,7 +143,7 @@ class TranscriptChunkingStrategy(ChunkingStrategy):
 
         return cues
 
-    def _parse_srt_or_plain(self, text: str) -> List[dict]:
+    def _parse_srt_or_plain(self, text: str) -> list[dict]:
         """Parse SRT format or plain text with timestamps"""
         cues = []
 
@@ -203,7 +203,7 @@ class TranscriptChunkingStrategy(ChunkingStrategy):
         secs = int(seconds % 60)
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
-    def _format_chunk(self, cues: List[dict], is_vtt: bool) -> str:
+    def _format_chunk(self, cues: list[dict], is_vtt: bool) -> str:
         """Format cues into readable chunk text"""
         lines = []
 
@@ -224,7 +224,7 @@ class TranscriptChunkingStrategy(ChunkingStrategy):
 
         return '\n'.join(lines)
 
-    def _fallback_chunk(self, text: str, chunk_size: int, chunk_overlap: int) -> List[Chunk]:
+    def _fallback_chunk(self, text: str, chunk_size: int, chunk_overlap: int) -> list[Chunk]:
         """Fallback to simple line-based chunking"""
         lines = text.split('\n')
 

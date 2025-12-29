@@ -1,12 +1,12 @@
 """Insights endpoints for creating and searching user notes"""
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from typing import Optional, List
-from stache_ai.models.insight import InsightCreate, InsightResponse
+
+from stache_ai.models.insight import InsightCreate
 from stache_ai.rag.pipeline import get_pipeline
-from datetime import datetime
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +25,12 @@ class InsightSearchResult(BaseModel):
     id: str = Field(..., description="Insight ID")
     content: str = Field(..., description="Insight content")
     similarity_score: float = Field(..., description="Similarity score (0-1)")
-    tags: Optional[List[str]] = Field(None, description="Associated tags")
+    tags: list[str] | None = Field(None, description="Associated tags")
 
 
 class InsightSearchResponse(BaseModel):
     """Response model for search results"""
-    results: List[InsightSearchResult] = Field(..., description="Search results")
+    results: list[InsightSearchResult] = Field(..., description="Search results")
     total: int = Field(..., description="Total results found")
 
 

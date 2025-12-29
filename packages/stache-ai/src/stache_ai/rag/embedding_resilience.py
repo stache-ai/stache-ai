@@ -95,9 +95,9 @@ embedding_auto_split_max_depth: int = 4  # Range: 1-10
 See tests/rag/test_embedding_resilience.py for comprehensive examples.
 """
 
-from dataclasses import dataclass
-from typing import List, Optional, Tuple, Callable, Protocol
 import logging
+from dataclasses import dataclass
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -115,11 +115,11 @@ class EmbeddingResult:
         parent_index: Original chunk index before splitting (if split)
     """
     text: str
-    embedding: List[float]
+    embedding: list[float]
     was_split: bool = False
     split_index: int = 0
     split_total: int = 1
-    parent_index: Optional[int] = None
+    parent_index: int | None = None
 
 
 class ErrorClassifier(Protocol):
@@ -284,7 +284,7 @@ class AutoSplitEmbeddingWrapper:
         self,
         provider,  # EmbeddingProvider (avoid circular import)
         max_split_depth: int = 4,
-        error_classifier: Optional[ErrorClassifier] = None,
+        error_classifier: ErrorClassifier | None = None,
         enabled: bool = True
     ):
         """
@@ -307,7 +307,7 @@ class AutoSplitEmbeddingWrapper:
         text: str,
         original_index: int,
         depth: int = 0
-    ) -> List[EmbeddingResult]:
+    ) -> list[EmbeddingResult]:
         """
         Embed single text with automatic splitting on error.
 
@@ -397,8 +397,8 @@ class AutoSplitEmbeddingWrapper:
 
     def embed_batch_with_splits(
         self,
-        texts: List[str]
-    ) -> Tuple[List[EmbeddingResult], int]:
+        texts: list[str]
+    ) -> tuple[list[EmbeddingResult], int]:
         """
         Embed batch of texts with automatic splitting.
 

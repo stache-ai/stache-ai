@@ -27,9 +27,9 @@ Phase 2 Changes:
 - Legacy operations (orphaned chunks, migrations) properly isolated to Qdrant
 """
 
-import pytest
-import os
 from unittest.mock import MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 

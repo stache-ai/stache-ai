@@ -5,33 +5,33 @@ Extensible RAG pipeline using the factory pattern.
 Allows swapping providers via configuration without code changes.
 """
 
-from typing import List, Dict, Any, Optional
-from pathlib import Path
-import uuid
+import logging
 import threading
-from stache_ai.config import Settings, settings
-from stache_ai.providers import (
-    EmbeddingProviderFactory,
-    LLMProviderFactory,
-    VectorDBProviderFactory,
-    RerankerProviderFactory,
-    DocumentIndexProviderFactory,
-    S3VectorsProviderFactory
-)
-from stache_ai.chunking import ChunkingStrategyFactory
-from stache_ai.rag.embedding_resilience import (
-    AutoSplitEmbeddingWrapper,
-    EmbeddingResult,
-    OllamaErrorClassifier,
-    BedrockErrorClassifier,
-)
+import uuid
+from pathlib import Path
+from typing import Any
+
+import stache_ai.chunking.strategies  # noqa
+
 # Auto-register providers
 import stache_ai.providers.embeddings  # noqa
 import stache_ai.providers.llm  # noqa
 import stache_ai.providers.vectordb  # noqa
-import stache_ai.chunking.strategies  # noqa
-
-import logging
+from stache_ai.chunking import ChunkingStrategyFactory
+from stache_ai.config import Settings, settings
+from stache_ai.providers import (
+    DocumentIndexProviderFactory,
+    EmbeddingProviderFactory,
+    LLMProviderFactory,
+    RerankerProviderFactory,
+    S3VectorsProviderFactory,
+    VectorDBProviderFactory,
+)
+from stache_ai.rag.embedding_resilience import (
+    AutoSplitEmbeddingWrapper,
+    BedrockErrorClassifier,
+    OllamaErrorClassifier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class RAGPipeline:
     - Swappable via environment variables
     """
 
-    def __init__(self, config: Optional[Settings] = None):
+    def __init__(self, config: Settings | None = None):
         self.config = config or settings
         self._embedding_provider = None
         self._llm_provider = None
@@ -165,11 +165,11 @@ class RAGPipeline:
     def ingest_text(
         self,
         text: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
         chunking_strategy: str = "recursive",
-        namespace: Optional[str] = None,
-        prepend_metadata: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        namespace: str | None = None,
+        prepend_metadata: list[str] | None = None
+    ) -> dict[str, Any]:
         """
         Ingest text into the knowledge base
 
@@ -381,11 +381,11 @@ class RAGPipeline:
     def ingest_file(
         self,
         file_path: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
         chunking_strategy: str = "auto",
-        namespace: Optional[str] = None,
-        prepend_metadata: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        namespace: str | None = None,
+        prepend_metadata: list[str] | None = None
+    ) -> dict[str, Any]:
         """
         Ingest a file into the knowledge base with structure-aware processing.
 
@@ -613,11 +613,11 @@ class RAGPipeline:
         doc_id: str,
         filename: str,
         namespace: str,
-        chunks: List[str],
-        chunk_metadatas: List[Dict[str, Any]],
+        chunks: list[str],
+        chunk_metadatas: list[dict[str, Any]],
         created_at: str,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> tuple[Optional[str], List[str], Optional[str]]:
+        metadata: dict[str, Any] | None = None
+    ) -> tuple[str | None, list[str], str | None]:
         """
         Create a document summary record in the vector DB for fast catalog
         and semantic discovery.
@@ -715,7 +715,7 @@ class RAGPipeline:
             logger.error(f"Failed to create document summary for {filename}: {e}")
             return None, [], None
 
-    def get_available_chunking_strategies(self) -> List[str]:
+    def get_available_chunking_strategies(self) -> list[str]:
         """Get list of available chunking strategies"""
         return ChunkingStrategyFactory.get_available_strategies()
 
@@ -724,11 +724,11 @@ class RAGPipeline:
         question: str,
         top_k: int = 5,
         synthesize: bool = True,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         rerank: bool = False,
-        model: Optional[str] = None,
-        filter: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        model: str | None = None,
+        filter: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Query the knowledge base
 
@@ -823,8 +823,8 @@ class RAGPipeline:
         self,
         query: str,
         top_k: int = 5,
-        namespace: Optional[str] = None
-    ) -> Dict[str, Any]:
+        namespace: str | None = None
+    ) -> dict[str, Any]:
         """
         Search without LLM synthesis (faster)
 
@@ -842,8 +842,8 @@ class RAGPipeline:
         self,
         content: str,
         namespace: str,
-        tags: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        tags: list[str] | None = None
+    ) -> dict[str, Any]:
         """
         Create a new insight (user note with semantic search capability)
 
@@ -900,7 +900,7 @@ class RAGPipeline:
         query: str,
         namespace: str,
         top_k: int = 10
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Search insights using semantic search
 
@@ -933,7 +933,7 @@ class RAGPipeline:
         self,
         insight_id: str,
         namespace: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Delete an insight by ID
 
@@ -960,7 +960,7 @@ class RAGPipeline:
             "namespace": namespace
         }
 
-    def get_providers_info(self) -> Dict[str, str]:
+    def get_providers_info(self) -> dict[str, str]:
         """Get information about current providers"""
         info = {
             "embedding_provider": self.embedding_provider.get_name(),
@@ -979,7 +979,7 @@ class RAGPipeline:
 
 
 # Global pipeline instance with thread-safe initialization
-_pipeline: Optional[RAGPipeline] = None
+_pipeline: RAGPipeline | None = None
 _pipeline_lock = threading.Lock()
 
 

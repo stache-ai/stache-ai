@@ -1,11 +1,11 @@
 """CLI command for dumping/exporting the vector database"""
 
-import click
 import json
 import sys
-from pathlib import Path
-from typing import Optional
 from datetime import datetime
+from pathlib import Path
+
+import click
 
 
 @click.command()
@@ -17,8 +17,8 @@ from datetime import datetime
 @click.option('--include-vectors', is_flag=True, help='Include embedding vectors (large!)')
 @click.option('--pretty', is_flag=True, help='Pretty-print JSON output')
 def dump_database(
-    output: Optional[Path],
-    namespace: Optional[str],
+    output: Path | None,
+    namespace: str | None,
     fmt: str,
     include_vectors: bool,
     pretty: bool
@@ -48,9 +48,9 @@ def dump_database(
         # Include vectors (warning: large file)
         stache dump --include-vectors -o full-backup.json
     """
+    import stache_ai.providers.vectordb  # noqa - registers providers
     from stache_ai.config import settings
     from stache_ai.providers.factories import VectorDBProviderFactory
-    import stache_ai.providers.vectordb  # noqa - registers providers
 
     click.echo("Connecting to vector database...", err=True)
     vectordb = VectorDBProviderFactory.create(settings)
@@ -76,7 +76,7 @@ def dump_database(
     # Build filter if namespace specified
     scroll_filter = None
     if namespace and not namespace.endswith("/*"):
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
         scroll_filter = Filter(
             must=[FieldCondition(key="namespace", match=MatchValue(value=namespace))]
         )

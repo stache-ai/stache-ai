@@ -1,7 +1,9 @@
 """Tests for the entry point based plugin loader"""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
 from stache_ai.providers import plugin_loader
 
 

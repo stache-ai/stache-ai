@@ -17,11 +17,11 @@ The backfill script:
 - Supports batch processing for large datasets
 """
 
-import click
 import logging
 import sys
-from typing import Optional, Dict, Any, List
-from datetime import datetime
+from typing import Any
+
+import click
 
 # Setup logging before importing pipeline modules
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def setup_logging(verbose: bool):
     help='Continue processing on errors instead of stopping'
 )
 def backfill_document_index(
-    namespace: Optional[str],
+    namespace: str | None,
     dry_run: bool,
     batch_size: int,
     verbose: bool,
@@ -153,7 +153,7 @@ def backfill_document_index(
 
     if dry_run:
         # Show preview of what would be backfilled
-        click.echo(f"[DRY RUN] Would backfill the following documents:")
+        click.echo("[DRY RUN] Would backfill the following documents:")
         for i, doc in enumerate(documents[:10], 1):
             click.echo(
                 f"  {i}. {doc['filename']} in {doc['namespace']} "
@@ -164,7 +164,7 @@ def backfill_document_index(
         click.echo()
 
         # Summary
-        click.echo(f"[DRY RUN] Summary:")
+        click.echo("[DRY RUN] Summary:")
         click.echo(f"  Total documents to backfill: {len(documents)}")
         click.echo(f"  Total chunks: {sum(d['chunk_count'] for d in documents)}")
         sys.exit(0)
@@ -245,9 +245,9 @@ def backfill_document_index(
 
 def _collect_documents(
     vector_db,
-    namespace: Optional[str],
+    namespace: str | None,
     verbose: bool
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Collect all documents with summaries from vector database.
 
     Args:
@@ -345,11 +345,11 @@ def _collect_documents(
 
 
 def _backfill_document(
-    doc: Dict[str, Any],
+    doc: dict[str, Any],
     doc_index,
     skip_errors: bool,
     verbose: bool
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Backfill a single document into the document index.
 
     Args:
@@ -405,7 +405,7 @@ def _backfill_document(
             raise
 
 
-def _extract_string(value: Any) -> Optional[str]:
+def _extract_string(value: Any) -> str | None:
     """Extract string value from metadata with type checking."""
     if value is None:
         return None
@@ -434,7 +434,7 @@ def _extract_int(value: Any) -> int:
     return 0
 
 
-def _extract_list(value: Any) -> Optional[List[str]]:
+def _extract_list(value: Any) -> list[str] | None:
     """Extract list value from metadata with type checking."""
     if value is None:
         return None

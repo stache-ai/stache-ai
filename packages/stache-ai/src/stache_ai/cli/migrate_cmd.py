@@ -6,9 +6,8 @@ from datetime import datetime, timezone
 
 import click
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 
-from stache_ai.config import settings
 from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
@@ -41,7 +40,7 @@ def migrate_summaries(namespace: str | None, dry_run: bool, batch_size: int):
         console.print("No migration needed.")
         return
 
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
 
     # First, collect all existing summary doc_ids
     console.print("Checking for existing summaries...")

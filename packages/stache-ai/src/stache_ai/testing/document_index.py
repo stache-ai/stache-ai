@@ -1,8 +1,9 @@
 """Document index provider contract tests."""
 
-import pytest
-from abc import ABC, abstractmethod
 import uuid
+from abc import ABC, abstractmethod
+
+import pytest
 
 
 class DocumentIndexContractTest(ABC):

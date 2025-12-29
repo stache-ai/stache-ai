@@ -1,10 +1,11 @@
 """Fallback LLM provider - tries primary provider first, then falls back to secondary"""
 
-from typing import List, Dict, Any
 import logging
+from typing import Any
+
+from stache_ai.config import Settings
 from stache_ai.providers.base import LLMProvider
 from stache_ai.providers.factories import LLMProviderFactory
-from stache_ai.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ class FallbackLLMProvider(LLMProvider):
     def generate_with_context(
         self,
         query: str,
-        context: List[Dict[str, Any]],
+        context: list[dict[str, Any]],
         **kwargs
     ) -> str:
         """Generate answer with context, with fallback"""

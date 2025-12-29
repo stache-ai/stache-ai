@@ -8,10 +8,11 @@ Tests cover:
 - Edge cases with extreme parameter values
 """
 
-import pytest
 import time
-from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+
+import pytest
 
 from stache_ai.providers.resilience import CircuitBreaker, CircuitState
 

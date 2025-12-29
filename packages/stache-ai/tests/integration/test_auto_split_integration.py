@@ -1,9 +1,11 @@
 """Integration tests for auto-split with pipeline."""
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import Mock, MagicMock, patch
-from stache_ai.rag.pipeline import RAGPipeline
+
 from stache_ai.config import Settings
+from stache_ai.rag.pipeline import RAGPipeline
 
 
 @pytest.fixture

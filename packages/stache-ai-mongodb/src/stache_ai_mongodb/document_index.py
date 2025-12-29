@@ -212,7 +212,7 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
                 "next_key": next_key
             }
         except Exception as e:
-            error_msg = f"Failed to list documents"
+            error_msg = "Failed to list documents"
             if namespace:
                 error_msg += f" in namespace {namespace}"
             error_msg += f": {e}"

@@ -12,23 +12,23 @@ External plugins can add providers by defining entry points:
     my_provider = "my_package.provider:MyLLMProvider"
 """
 
+from . import plugin_loader
 from .base import (
+    DocumentIndexProvider,
     EmbeddingProvider,
     LLMProvider,
-    VectorDBProvider,
     NamespaceProvider,
-    DocumentIndexProvider
+    VectorDBProvider,
 )
 from .factories import (
+    DocumentIndexProviderFactory,
     EmbeddingProviderFactory,
     LLMProviderFactory,
-    VectorDBProviderFactory,
-    S3VectorsProviderFactory,
     NamespaceProviderFactory,
     RerankerProviderFactory,
-    DocumentIndexProviderFactory
+    S3VectorsProviderFactory,
+    VectorDBProviderFactory,
 )
-from . import plugin_loader
 
 # Pre-load providers at import time for eager discovery
 # This ensures entry points are resolved early

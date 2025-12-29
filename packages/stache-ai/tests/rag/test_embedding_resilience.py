@@ -3,8 +3,9 @@
 Tests for AutoSplitEmbeddingWrapper and related components.
 """
 
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import Mock, MagicMock
 
 
 class TestAutoSplitEmbeddingWrapper:

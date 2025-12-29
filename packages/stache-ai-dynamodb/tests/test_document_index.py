@@ -6,8 +6,7 @@ error handling, and pagination functionality.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, call
-from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 from botocore.exceptions import ClientError
 
 from stache_ai_dynamodb.document_index import DynamoDBDocumentIndex

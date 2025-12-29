@@ -8,9 +8,9 @@ Tests cover:
 - Edge cases (zero retries, high retry counts)
 """
 
-import pytest
 import time
-from unittest.mock import Mock, patch, MagicMock
+
+import pytest
 
 from stache_ai.providers.resilience import with_retry
 

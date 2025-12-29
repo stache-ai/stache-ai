@@ -1,8 +1,9 @@
 """Reranker provider contract tests."""
 
-import pytest
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import Any
+
+import pytest
 
 
 class RerankerContractTest(ABC):
@@ -15,7 +16,7 @@ class RerankerContractTest(ABC):
         pass
 
     @pytest.fixture
-    def sample_results(self) -> List[Dict[str, Any]]:
+    def sample_results(self) -> list[dict[str, Any]]:
         return [
             {"text": "Paris is the capital of France.", "score": 0.8},
             {"text": "The Eiffel Tower is in Paris.", "score": 0.7},

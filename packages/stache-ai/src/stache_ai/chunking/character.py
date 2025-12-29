@@ -1,7 +1,7 @@
 """Simple character-based chunking strategy"""
 
-from typing import List
-from .base import ChunkingStrategy, Chunk
+
+from .base import Chunk, ChunkingStrategy
 
 
 class CharacterChunkingStrategy(ChunkingStrategy):
@@ -18,7 +18,7 @@ class CharacterChunkingStrategy(ChunkingStrategy):
         chunk_size: int = 2000,
         chunk_overlap: int = 200,
         **kwargs
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """Split text by character count"""
         chunks = []
         start = 0

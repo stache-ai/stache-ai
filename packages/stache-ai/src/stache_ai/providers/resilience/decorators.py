@@ -2,9 +2,10 @@
 
 import functools
 import logging
-import time
 import random
-from typing import Callable, TypeVar, ParamSpec, Type
+import time
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ def with_retry(
     max_retries: int = 3,
     base_delay: float = 0.5,
     max_delay: float = 10.0,
-    exceptions: tuple[Type[Exception], ...] = (Exception,),
+    exceptions: tuple[type[Exception], ...] = (Exception,),
     operation_name: str = "operation"
 ):
     """Decorator to add retry logic with exponential backoff to any function.

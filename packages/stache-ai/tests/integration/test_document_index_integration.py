@@ -6,8 +6,9 @@ documents are written to both the vector database and the document index,
 as well as the various endpoint behaviors that depend on the document index.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, call
 from fastapi.testclient import TestClient
 
 
@@ -318,7 +319,7 @@ def test_ingest_failure_doesnt_break_if_index_fails(test_client_with_index, mock
                 namespace="test",
                 chunk_ids=["chunk-1", "chunk-2"]
             )
-        except Exception as e:
+        except Exception:
             # In the real pipeline, this is caught and logged, not re-raised
             # So we continue and return success
             pass

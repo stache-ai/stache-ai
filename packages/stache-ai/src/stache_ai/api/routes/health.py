@@ -1,9 +1,11 @@
 """Health check endpoints"""
 
+import logging
+
 from fastapi import APIRouter
+
 from stache_ai.config import settings
 from stache_ai.rag.pipeline import get_pipeline
-import logging
 
 logger = logging.getLogger(__name__)
 
