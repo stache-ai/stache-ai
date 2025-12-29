@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stache-ai"
 version = "0.1.0"
+readme = "README.md"
 description = "Personal AI-powered knowledge base with RAG"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -92,9 +93,9 @@ sqlite = "stache_ai.providers.namespace.sqlite:SQLiteNamespaceProvider"
 simple = "stache_ai.providers.reranker.simple:SimpleReranker"
 
 [project.urls]
-Homepage = "https://github.com/stache-ai/stache"
+Homepage = "https://github.com/stache-ai/stache-ai"
 Documentation = "https://github.com/stache-ai/stache#readme"
-Repository = "https://github.com/stache-ai/stache"
+Repository = "https://github.com/stache-ai/stache-ai"
 Issues = "https://github.com/stache-ai/stache/issues"
 
 [tool.setuptools.packages.find]

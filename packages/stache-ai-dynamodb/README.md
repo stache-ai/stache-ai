@@ -1,6 +1,6 @@
 # stache-ai-dynamodb
 
-DynamoDB providers for [Stache AI](https://github.com/stache-ai/stache) - serverless namespace registry and document index for AWS Lambda deployments.
+DynamoDB providers for [Stache AI](https://github.com/stache-ai/stache-ai) - serverless namespace registry and document index for AWS Lambda deployments.
 
 ## Installation
 

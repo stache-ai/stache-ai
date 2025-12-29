@@ -162,16 +162,31 @@ Server exposes endpoints for:
 
 ## CLI Tools
 
+### Admin CLI (stache-admin)
+
 ```bash
 # Import documents from a directory
-stache-import /path/to/documents
+stache-import /path/to/documents --namespace my-docs
 
-# Manage namespaces
-stache namespace list
-stache namespace delete <name>
+# List namespaces
+stache-admin namespace-list
 
 # View vector statistics
-stache vectors stats
+stache-admin vectors stats
+```
+
+### User CLI (stache-tools)
+
+For search, ingest, and MCP server, install [stache-tools](https://github.com/stache-ai/stache-tools):
+
+```bash
+pip install stache-tools
+
+# Search
+stache search "your query"
+
+# Ingest text
+stache ingest -t "your text" -n namespace
 ```
 
 ## Testing
@@ -183,8 +198,8 @@ pytest
 
 ## Documentation
 
-- [GitHub Repository](https://github.com/stache-ai/stache)
-- [Architecture Guide](https://github.com/stache-ai/stache/tree/main/docs)
+- [GitHub Repository](https://github.com/stache-ai/stache-ai)
+- [Architecture Guide](https://github.com/stache-ai/stache-ai/tree/main/docs)
 
 ## License
 

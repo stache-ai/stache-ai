@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stache-ai-openai"
 version = "0.1.0"
+readme = "README.md"
 description = "Openai provider for Stache AI"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -40,8 +41,8 @@ openai = "stache_ai_openai.llm:OpenAILLMProvider"
 openai = "stache_ai_openai.embedding:OpenAIEmbeddingProvider"
 
 [project.urls]
-Homepage = "https://github.com/stache-ai/stache"
-Repository = "https://github.com/stache-ai/stache"
+Homepage = "https://github.com/stache-ai/stache-ai"
+Repository = "https://github.com/stache-ai/stache-ai"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,6 +1,6 @@
 # stache-ai-mongodb
 
-Mongodb provider for [Stache AI](https://github.com/stache-ai/stache).
+Mongodb provider for [Stache AI](https://github.com/stache-ai/stache-ai).
 
 ## Installation
 
@@ -13,7 +13,7 @@ pip install stache-ai-mongodb
 Install the package and configure the provider in your settings:
 
 ```python
-from stache.config import Settings
+from stache_ai.config import Settings
 
 settings = Settings(
     namespace_provider: "mongodb"

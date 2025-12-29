@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stache-ai-ollama"
 version = "0.1.0"
+readme = "README.md"
 description = "Ollama provider for Stache AI"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -43,8 +44,8 @@ ollama = "stache_ai_ollama.embedding:OllamaEmbeddingProvider"
 ollama = "stache_ai_ollama.reranker:OllamaReranker"
 
 [project.urls]
-Homepage = "https://github.com/stache-ai/stache"
-Repository = "https://github.com/stache-ai/stache"
+Homepage = "https://github.com/stache-ai/stache-ai"
+Repository = "https://github.com/stache-ai/stache-ai"
 
 [tool.setuptools.packages.find]
 where = ["src"]

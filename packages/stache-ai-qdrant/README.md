@@ -1,6 +1,6 @@
 # stache-ai-qdrant
 
-Qdrant provider for [Stache AI](https://github.com/stache-ai/stache).
+Qdrant provider for [Stache AI](https://github.com/stache-ai/stache-ai).
 
 ## Installation
 
@@ -13,7 +13,7 @@ pip install stache-ai-qdrant
 Install the package and configure the provider in your settings:
 
 ```python
-from stache.config import Settings
+from stache_ai.config import Settings
 
 settings = Settings(
     vectordb_provider: "qdrant"

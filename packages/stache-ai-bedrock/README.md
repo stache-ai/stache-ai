@@ -1,6 +1,6 @@
 # stache-ai-bedrock
 
-Amazon Bedrock provider for [Stache AI](https://github.com/stache-ai/stache) - LLM and embedding support via AWS Bedrock.
+Amazon Bedrock provider for [Stache AI](https://github.com/stache-ai/stache-ai) - LLM and embedding support via AWS Bedrock.
 
 ## Installation
 

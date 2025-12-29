@@ -1,6 +1,6 @@
 # stache-ai-s3vectors
 
-S3 Vectors provider for [Stache AI](https://github.com/stache-ai/stache) - serverless vector database using Amazon S3 Vectors.
+S3 Vectors provider for [Stache AI](https://github.com/stache-ai/stache-ai) - serverless vector database using Amazon S3 Vectors.
 
 ## Installation
 

@@ -1,6 +1,6 @@
 # stache-ai-aws
 
-AWS providers bundle for [Stache AI](https://github.com/stache-ai/stache).
+AWS providers bundle for [Stache AI](https://github.com/stache-ai/stache-ai).
 
 This metapackage installs all AWS-based providers for Stache:
 - **stache-ai-bedrock** - LLM and Embedding via AWS Bedrock
@@ -21,7 +21,7 @@ pip install stache-ai-bedrock stache-ai-dynamodb stache-ai-s3vectors
 ## Usage
 
 ```python
-from stache.config import Settings
+from stache_ai.config import Settings
 
 settings = Settings(
     llm_provider="bedrock",

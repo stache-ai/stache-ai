@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stache-ai-s3vectors"
 version = "0.1.0"
+readme = "README.md"
 description = "S3Vectors provider for Stache AI"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -37,8 +38,8 @@ dev = [
 s3vectors = "stache_ai_s3vectors.provider:S3VectorsProvider"
 
 [project.urls]
-Homepage = "https://github.com/stache-ai/stache"
-Repository = "https://github.com/stache-ai/stache"
+Homepage = "https://github.com/stache-ai/stache-ai"
+Repository = "https://github.com/stache-ai/stache-ai"
 
 [tool.setuptools.packages.find]
 where = ["src"]

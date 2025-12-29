@@ -1,6 +1,6 @@
 # stache-ai-cohere
 
-Cohere provider for [Stache AI](https://github.com/stache-ai/stache).
+Cohere provider for [Stache AI](https://github.com/stache-ai/stache-ai).
 
 ## Installation
 
@@ -13,7 +13,7 @@ pip install stache-ai-cohere
 Install the package and configure the provider in your settings:
 
 ```python
-from stache.config import Settings
+from stache_ai.config import Settings
 
 settings = Settings(
     embeddings_provider: "cohere"
