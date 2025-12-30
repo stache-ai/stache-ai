@@ -131,7 +131,7 @@ async def approve_pending(item_id: str, request: ApproveRequest):
 
         # Ingest into pipeline
         pipeline = get_pipeline()
-        result = pipeline.ingest_text(
+        result = await pipeline.ingest_text(
             text=text,
             metadata=metadata,
             chunking_strategy=request.chunking_strategy,

@@ -71,7 +71,7 @@ async def upload_document(
 
             # Use file-based ingestion (supports hierarchical chunking)
             pipeline = get_pipeline()
-            result = pipeline.ingest_file(
+            result = await pipeline.ingest_file(
                 file_path=temp_path,
                 metadata={**(metadata or {}), "filename": file.filename},
                 chunking_strategy=chunking_strategy,
@@ -152,7 +152,7 @@ async def batch_upload_documents(
 
             # Use file-based ingestion with auto strategy selection
             file_metadata = {**meta_dict, "filename": file.filename}
-            result = pipeline.ingest_file(
+            result = await pipeline.ingest_file(
                 file_path=temp_path,
                 metadata=file_metadata,
                 chunking_strategy=chunking_strategy,

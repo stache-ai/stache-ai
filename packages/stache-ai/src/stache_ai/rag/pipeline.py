@@ -9,7 +9,10 @@ import logging
 import threading
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stache_ai.middleware.context import RequestContext
 
 import stache_ai.chunking.strategies  # noqa
 
@@ -86,6 +89,18 @@ class RAGPipeline:
         self._documents_provider = None
         self._summaries_provider = None
         self._insights_provider = None
+        # Middleware
+        self._enrichers = None
+        self._chunk_observers = None
+        self._query_processors = None
+        self._result_processors = None
+        self._delete_observers = None
+        # Thread-safe locks for middleware lazy initialization
+        self._enrichers_lock = threading.Lock()
+        self._chunk_observers_lock = threading.Lock()
+        self._query_processors_lock = threading.Lock()
+        self._result_processors_lock = threading.Lock()
+        self._delete_observers_lock = threading.Lock()
 
     @property
     def embedding_provider(self):
@@ -162,13 +177,81 @@ class RAGPipeline:
             logger.info(f"Initialized document index provider: {self._document_index_provider.get_name()}")
         return self._document_index_provider
 
-    def ingest_text(
+    @property
+    def enrichers(self):
+        """Lazy-load enrichment middleware"""
+        if self._enrichers is None:
+            with self._enrichers_lock:
+                if self._enrichers is None:  # Double-check pattern
+                    from stache_ai.providers.plugin_loader import get_providers
+                    enricher_classes = get_providers('enrichment')
+                    self._enrichers = [cls() for cls in enricher_classes.values()]
+                    # Sort by phase (extract -> transform -> enrich), then by priority
+                    phase_order = {'extract': 0, 'transform': 1, 'enrich': 2}
+                    self._enrichers.sort(key=lambda e: (phase_order.get(e.phase, 2), e.priority))
+                    logger.info(f"Loaded {len(self._enrichers)} enrichers")
+        return self._enrichers
+
+    @property
+    def chunk_observers(self):
+        """Lazy-load chunk observer middleware"""
+        if self._chunk_observers is None:
+            with self._chunk_observers_lock:
+                if self._chunk_observers is None:  # Double-check pattern
+                    from stache_ai.providers.plugin_loader import get_providers
+                    observer_classes = get_providers('chunk_observer')
+                    self._chunk_observers = [cls() for cls in observer_classes.values()]
+                    self._chunk_observers.sort(key=lambda o: o.priority)
+                    logger.info(f"Loaded {len(self._chunk_observers)} chunk observers")
+        return self._chunk_observers
+
+    @property
+    def query_processors(self):
+        """Lazy-load query processor middleware"""
+        if self._query_processors is None:
+            with self._query_processors_lock:
+                if self._query_processors is None:  # Double-check pattern
+                    from stache_ai.providers.plugin_loader import get_providers
+                    processor_classes = get_providers('query_processor')
+                    self._query_processors = [cls() for cls in processor_classes.values()]
+                    self._query_processors.sort(key=lambda p: p.priority)
+                    logger.info(f"Loaded {len(self._query_processors)} query processors")
+        return self._query_processors
+
+    @property
+    def result_processors(self):
+        """Lazy-load result processor middleware"""
+        if self._result_processors is None:
+            with self._result_processors_lock:
+                if self._result_processors is None:  # Double-check pattern
+                    from stache_ai.providers.plugin_loader import get_providers
+                    processor_classes = get_providers('result_processor')
+                    self._result_processors = [cls() for cls in processor_classes.values()]
+                    self._result_processors.sort(key=lambda p: p.priority)
+                    logger.info(f"Loaded {len(self._result_processors)} result processors")
+        return self._result_processors
+
+    @property
+    def delete_observers(self):
+        """Lazy-load delete observer middleware"""
+        if self._delete_observers is None:
+            with self._delete_observers_lock:
+                if self._delete_observers is None:  # Double-check pattern
+                    from stache_ai.providers.plugin_loader import get_providers
+                    observer_classes = get_providers('delete_observer')
+                    self._delete_observers = [cls() for cls in observer_classes.values()]
+                    self._delete_observers.sort(key=lambda o: o.priority)
+                    logger.info(f"Loaded {len(self._delete_observers)} delete observers")
+        return self._delete_observers
+
+    async def ingest_text(
         self,
         text: str,
         metadata: dict[str, Any] | None = None,
         chunking_strategy: str = "recursive",
         namespace: str | None = None,
-        prepend_metadata: list[str] | None = None
+        prepend_metadata: list[str] | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Ingest text into the knowledge base
@@ -181,11 +264,41 @@ class RAGPipeline:
             prepend_metadata: List of metadata keys to prepend to each chunk text.
                               This embeds the metadata into the vector for better semantic search.
                               Example: ["speaker", "topic"] would prepend "Speaker: X\nTopic: Y\n\n"
+            context: Optional request context for middleware (created if not provided)
 
         Returns:
             Result dictionary with chunks_created count
         """
         logger.info(f"Ingesting text (length: {len(text)}, strategy: {chunking_strategy}, namespace: {namespace})")
+
+        # Create request context if not provided
+        if context is None:
+            from datetime import datetime, timezone
+            from uuid import uuid4
+            from stache_ai.middleware.context import RequestContext
+            context = RequestContext(
+                request_id=str(uuid4()),
+                timestamp=datetime.now(timezone.utc),
+                namespace=namespace or self.config.default_namespace,
+                source="api"
+            )
+
+        # Apply enrichment middleware before chunking
+        current_text = text
+        current_metadata = metadata or {}
+        for enricher in self.enrichers:
+            from stache_ai.middleware.chain import MiddlewareRejection
+            result = await enricher.process(current_text, current_metadata, context)
+            if result.action == "reject":
+                raise MiddlewareRejection(enricher.__class__.__name__, result.reason)
+            if result.action == "transform":
+                current_text = result.content or current_text
+                if result.metadata is not None:
+                    current_metadata = {**current_metadata, **result.metadata}
+
+        # Use enriched content and metadata
+        text = current_text
+        metadata = current_metadata
 
         # Build metadata prefix first so we can account for its size during chunking
         metadata_prefix = ""
@@ -314,6 +427,29 @@ class RAGPipeline:
             namespace=ns
         )
 
+        # Call chunk observers after storage (advisory only)
+        for observer in self.chunk_observers:
+            from stache_ai.middleware.base import StorageResult
+            storage_result = StorageResult(
+                vector_ids=ids,
+                namespace=ns,
+                index="documents",
+                doc_id=doc_id,
+                chunk_count=len(chunks_for_embedding),
+                embedding_model=self.embedding_provider.get_name()
+            )
+            # Prepare chunks as (text, metadata) tuples
+            chunk_tuples = list(zip(chunks_for_embedding, metadatas))
+            try:
+                result = await observer.on_chunks_stored(chunk_tuples, storage_result, context)
+                if result.action == "reject":
+                    logger.warning(
+                        f"Chunk observer {observer.__class__.__name__} rejected storage: {result.reason}. "
+                        "This is advisory only - chunks were already stored."
+                    )
+            except Exception as e:
+                logger.error(f"Chunk observer {observer.__class__.__name__} failed: {e}")
+
         # Create document summary for catalog/discovery
         # Generate a readable filename if not provided
         if metadata and metadata.get("filename"):
@@ -378,13 +514,14 @@ class RAGPipeline:
 
         return result
 
-    def ingest_file(
+    async def ingest_file(
         self,
         file_path: str,
         metadata: dict[str, Any] | None = None,
         chunking_strategy: str = "auto",
         namespace: str | None = None,
-        prepend_metadata: list[str] | None = None
+        prepend_metadata: list[str] | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Ingest a file into the knowledge base with structure-aware processing.
@@ -399,6 +536,7 @@ class RAGPipeline:
                               based on file type, or specify explicitly.
             namespace: Optional namespace for isolation
             prepend_metadata: List of metadata keys to prepend to chunks
+            context: Optional request context for middleware (created if not provided)
 
         Returns:
             Result dictionary with chunks_created count
@@ -412,6 +550,39 @@ class RAGPipeline:
             logger.info(f"Auto-selected chunking strategy: {chunking_strategy} for {filename}")
 
         logger.info(f"Ingesting file: {filename} (strategy: {chunking_strategy}, namespace: {namespace})")
+
+        # Create request context if not provided
+        if context is None:
+            from datetime import datetime, timezone
+            from uuid import uuid4
+            from stache_ai.middleware.context import RequestContext
+            context = RequestContext(
+                request_id=str(uuid4()),
+                timestamp=datetime.now(timezone.utc),
+                namespace=namespace or self.config.default_namespace,
+                source="api"
+            )
+
+        # Load file content for enrichment
+        from stache_ai.loaders import load_document
+        text = load_document(str(path), filename)
+
+        # Apply enrichment middleware before chunking
+        current_text = text
+        current_metadata = metadata or {}
+        for enricher in self.enrichers:
+            from stache_ai.middleware.chain import MiddlewareRejection
+            result = await enricher.process(current_text, current_metadata, context)
+            if result.action == "reject":
+                raise MiddlewareRejection(enricher.__class__.__name__, result.reason)
+            if result.action == "transform":
+                current_text = result.content or current_text
+                if result.metadata is not None:
+                    current_metadata = {**current_metadata, **result.metadata}
+
+        # Use enriched content and metadata
+        text = current_text
+        metadata = current_metadata
 
         # Build metadata prefix
         metadata_prefix = ""
@@ -439,6 +610,7 @@ class RAGPipeline:
         strategy = ChunkingStrategyFactory.create(chunking_strategy)
 
         # For hierarchical chunking, pass the file path directly
+        # For other strategies, use the enriched text
         if chunking_strategy == "hierarchical":
             chunk_objects = strategy.chunk(
                 "",  # Empty text, file_path is used
@@ -447,9 +619,6 @@ class RAGPipeline:
                 file_path=str(path)
             )
         else:
-            # For other strategies, load text first
-            from stache_ai.loaders import load_document
-            text = load_document(str(path), filename)
             chunk_objects = strategy.chunk(
                 text,
                 chunk_size=effective_chunk_size,
@@ -553,6 +722,29 @@ class RAGPipeline:
             metadatas=metadatas,
             namespace=ns
         )
+
+        # Call chunk observers after storage (advisory only)
+        for observer in self.chunk_observers:
+            from stache_ai.middleware.base import StorageResult
+            storage_result = StorageResult(
+                vector_ids=ids,
+                namespace=ns,
+                index="documents",
+                doc_id=doc_id,
+                chunk_count=len(chunks_for_embedding),
+                embedding_model=self.embedding_provider.get_name()
+            )
+            # Prepare chunks as (text, metadata) tuples
+            chunk_tuples = list(zip(chunks_for_embedding, metadatas))
+            try:
+                result = await observer.on_chunks_stored(chunk_tuples, storage_result, context)
+                if result.action == "reject":
+                    logger.warning(
+                        f"Chunk observer {observer.__class__.__name__} rejected storage: {result.reason}. "
+                        "This is advisory only - chunks were already stored."
+                    )
+            except Exception as e:
+                logger.error(f"Chunk observer {observer.__class__.__name__} failed: {e}")
 
         # Create document summary record for fast catalog and semantic discovery
         summary_text, headings, summary_id = self._create_document_summary(
@@ -719,7 +911,7 @@ class RAGPipeline:
         """Get list of available chunking strategies"""
         return ChunkingStrategyFactory.get_available_strategies()
 
-    def query(
+    async def query(
         self,
         question: str,
         top_k: int = 5,
@@ -727,7 +919,8 @@ class RAGPipeline:
         namespace: str | None = None,
         rerank: bool = False,
         model: str | None = None,
-        filter: dict[str, Any] | None = None
+        filter: dict[str, Any] | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Query the knowledge base
@@ -740,17 +933,55 @@ class RAGPipeline:
             rerank: Whether to rerank results for better relevance
             model: Optional model ID to use for synthesis (overrides default)
             filter: Optional metadata filter (e.g., {"source": "meeting notes"})
+            context: Optional request context for middleware (created if not provided)
 
         Returns:
             Dictionary with question, answer (if synthesize=True), and sources
         """
         logger.info(f"Querying: {question} (synthesize={synthesize}, namespace={namespace}, rerank={rerank}, model={model}, filter={filter})")
 
-        # Generate query embedding (uses embed_query for providers that differentiate)
-        query_embedding = self.embedding_provider.embed_query(question)
-
         # Use provided namespace or default from config
         ns = namespace or self.config.default_namespace
+
+        # Create request context if not provided
+        if context is None:
+            from datetime import datetime, timezone
+            from uuid import uuid4
+            from stache_ai.middleware.context import RequestContext
+            context = RequestContext(
+                request_id=str(uuid4()),
+                timestamp=datetime.now(timezone.utc),
+                namespace=ns,
+                source="api"
+            )
+
+        # Create query context for middleware
+        from stache_ai.middleware.context import QueryContext
+        query_context = QueryContext.from_request_context(
+            context=context,
+            query=question,
+            top_k=top_k,
+            filters=filter
+        )
+
+        # Apply query processor middleware
+        current_query = question
+        current_filters = filter
+        for processor in self.query_processors:
+            from stache_ai.middleware.chain import MiddlewareRejection
+            result = await processor.process(current_query, current_filters, query_context)
+            if result.action == "reject":
+                raise MiddlewareRejection(processor.__class__.__name__, result.reason)
+            if result.action == "transform":
+                current_query = result.query or current_query
+                current_filters = result.filters or current_filters
+
+        # Use processed query and filters
+        question = current_query
+        filter = current_filters
+
+        # Generate query embedding (uses embed_query for providers that differentiate)
+        query_embedding = self.embedding_provider.embed_query(question)
 
         # Sanitize filter: remove reserved keys that conflict with explicit parameters
         sanitized_filter = None
@@ -781,6 +1012,38 @@ class RAGPipeline:
                 "score": result.get("score", 0)
             }
             for result in results
+        ]
+
+        # Convert to SearchResult objects for result processors
+        from stache_ai.middleware.results import SearchResult
+        search_results = [
+            SearchResult(
+                text=s["text"],
+                score=s["score"],
+                metadata=s["metadata"],
+                vector_id=s.get("id", "")
+            )
+            for s in sources
+        ]
+
+        # Apply result processor middleware
+        for processor in self.result_processors:
+            from stache_ai.middleware.chain import MiddlewareRejection
+            result = await processor.process(search_results, query_context)
+            if result.action == "reject":
+                raise MiddlewareRejection(processor.__class__.__name__, result.reason)
+            if result.action == "allow" and result.results is not None:
+                search_results = result.results
+
+        # Convert back to dict format for response
+        sources = [
+            {
+                "text": r.text,
+                "content": r.text,
+                "metadata": r.metadata,
+                "score": r.score
+            }
+            for r in search_results
         ]
 
         # Apply reranking if requested
@@ -976,6 +1239,103 @@ class RAGPipeline:
             info["insights_provider"] = self.insights_provider.get_name()
 
         return info
+
+    async def delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """
+        Delete a document by ID
+
+        Args:
+            doc_id: The document ID to delete
+            namespace: Namespace containing the document
+            context: Optional request context for middleware (created if not provided)
+
+        Returns:
+            Dictionary with deletion status
+        """
+        logger.info(f"Deleting document {doc_id} from namespace {namespace}")
+
+        # Create request context if not provided
+        if context is None:
+            from datetime import datetime, timezone
+            from uuid import uuid4
+            from stache_ai.middleware.context import RequestContext
+            context = RequestContext(
+                request_id=str(uuid4()),
+                timestamp=datetime.now(timezone.utc),
+                namespace=namespace,
+                source="api"
+            )
+
+        # Create delete target
+        from stache_ai.middleware.base import DeleteTarget
+        target = DeleteTarget(
+            target_type="document",
+            doc_id=doc_id,
+            namespace=namespace
+        )
+
+        # Call delete observers (pre-delete)
+        for observer in self.delete_observers:
+            from stache_ai.middleware.chain import MiddlewareRejection
+            result = await observer.on_delete(target, context)
+            if result.action == "reject":
+                raise MiddlewareRejection(observer.__class__.__name__, result.reason)
+
+        # Delete from document index (if enabled)
+        if self.document_index_provider:
+            try:
+                self.document_index_provider.delete_document(doc_id, namespace)
+                logger.info(f"Deleted document index entry for {doc_id}")
+            except Exception as e:
+                logger.error(f"Failed to delete document index for {doc_id}: {e}")
+
+        # Delete chunks from vector DB
+        # Query for all chunks belonging to this document
+        filter_dict = {"doc_id": doc_id}
+
+        # For providers that support metadata filtering, delete by filter
+        # Otherwise, we'd need to query first to get IDs (not implemented here)
+        try:
+            # Delete chunks with this doc_id
+            self.documents_provider.delete(
+                namespace=namespace,
+                filter=filter_dict
+            )
+            logger.info(f"Deleted document chunks for {doc_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete document chunks for {doc_id}: {e}")
+            raise
+
+        # Delete summary if exists
+        try:
+            # Query for summary with this doc_id
+            summary_filter = {"_type": "document_summary", "doc_id": doc_id}
+            self.summaries_provider.delete(
+                namespace=namespace,
+                filter=summary_filter
+            )
+            logger.info(f"Deleted document summary for {doc_id}")
+        except Exception as e:
+            # Non-critical - log and continue
+            logger.warning(f"Failed to delete document summary for {doc_id}: {e}")
+
+        # Call delete observers (post-delete)
+        for observer in self.delete_observers:
+            try:
+                await observer.on_delete_complete(target, context)
+            except Exception as e:
+                logger.error(f"Delete observer {observer.__class__.__name__} on_delete_complete failed: {e}")
+
+        return {
+            "success": True,
+            "doc_id": doc_id,
+            "namespace": namespace
+        }
 
 
 # Global pipeline instance with thread-safe initialization

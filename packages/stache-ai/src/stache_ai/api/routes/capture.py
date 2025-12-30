@@ -35,7 +35,7 @@ async def capture_thought(request: CaptureRequest):
     try:
         pipeline = get_pipeline()
 
-        result = pipeline.ingest_text(
+        result = await pipeline.ingest_text(
             text=request.text,
             metadata=request.metadata,
             chunking_strategy=request.chunking_strategy,

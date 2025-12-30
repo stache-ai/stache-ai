@@ -197,6 +197,24 @@ class Settings(BaseSettings):
     chunk_max_size: int = 2500  # Hard limit including metadata prefix
     chunk_metadata_reserve: int = 300  # Reserved space for prepended metadata (e.g., speaker, topic)
 
+    # ===== Middleware Configuration =====
+    # Enrichment
+    enrichment_enabled: bool = True
+    enrichment_auto_detect: bool = True  # Auto-detect content type
+    enrichment_plugins: list[str] | None = None  # Whitelist, None = all
+
+    # Audio transcription (lazy loaded, optional dependency)
+    whisper_model: str = "base"
+    whisper_enabled: bool = False  # Must explicitly enable
+
+    # Middleware chain behavior
+    middleware_default_on_error: Literal["allow", "reject", "skip"] = "reject"
+    middleware_timeout_seconds: float | None = None  # Global default timeout
+
+    # Observability
+    middleware_log_level: str = "INFO"
+    middleware_emit_metrics: bool = True
+
     # ===== Application Settings =====
     log_level: str = "info"
     upload_dir: str = "uploads"

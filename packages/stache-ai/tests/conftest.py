@@ -61,6 +61,7 @@ def mock_embedding_provider():
     """Mock embedding provider"""
     provider = MagicMock()
     provider.embed.return_value = [0.1] * 1536
+    provider.embed_query.return_value = [0.1] * 1536
     provider.embed_batch.return_value = [[0.1] * 1536, [0.2] * 1536]
     provider.get_dimensions.return_value = 1536
     provider.get_name.return_value = "MockEmbeddingProvider"
