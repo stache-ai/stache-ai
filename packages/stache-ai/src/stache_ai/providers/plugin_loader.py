@@ -11,6 +11,11 @@ Entry Point Groups:
     - stache.namespace: Namespace registry providers
     - stache.reranker: Reranker providers
     - stache.document_index: Document index providers
+    - stache.enrichment: Enrichment middleware
+    - stache.chunk_observer: Chunk observer middleware
+    - stache.query_processor: Query processor middleware
+    - stache.result_processor: Result processor middleware
+    - stache.delete_observer: Delete observer middleware
 
 Usage:
     # Get all providers of a type
@@ -56,6 +61,11 @@ PROVIDER_GROUPS = {
     'namespace': 'stache.namespace',
     'reranker': 'stache.reranker',
     'document_index': 'stache.document_index',
+    'enrichment': 'stache.enrichment',
+    'chunk_observer': 'stache.chunk_observer',
+    'query_processor': 'stache.query_processor',
+    'result_processor': 'stache.result_processor',
+    'delete_observer': 'stache.delete_observer',
 }
 
 # Cache for loaded providers: {provider_type: {name: class}}
@@ -112,7 +122,9 @@ def get_providers(provider_type: str) -> dict[str, ProviderType]:
 
     Args:
         provider_type: Provider type ('llm', 'embeddings', 'vectordb',
-                       'namespace', 'reranker', 'document_index')
+                       'namespace', 'reranker', 'document_index', 'enrichment',
+                       'chunk_observer', 'query_processor', 'result_processor',
+                       'delete_observer')
 
     Returns:
         Dictionary mapping provider names to provider classes

@@ -38,7 +38,7 @@ async def query_knowledge(request: QueryRequest):
     try:
         pipeline = get_pipeline()
 
-        result = pipeline.query(
+        result = await pipeline.query(
             question=request.query,
             top_k=request.top_k,
             synthesize=request.synthesize,
