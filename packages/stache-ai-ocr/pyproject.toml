@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stache-ai-ocr"
+version = "0.1.0"
+readme = "README.md"
+description = "OCR support for Stache AI document loaders"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Stache Contributors"}
+]
+keywords = ["stache", "ocr", "pdf", "document-processing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "stache-ai>=0.1.0",
+    "pdfplumber>=0.10.0",
+]
+
+[project.entry-points."stache.loader"]
+pdf-ocr = "stache_ai_ocr.loaders:OcrPdfLoader"
+
+[project.urls]
+Homepage = "https://github.com/stache-ai/stache-ai"
+Repository = "https://github.com/stache-ai/stache-ai"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["stache_ai_ocr*"]

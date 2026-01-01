@@ -16,6 +16,8 @@ Entry Point Groups:
     - stache.query_processor: Query processor middleware
     - stache.result_processor: Result processor middleware
     - stache.delete_observer: Delete observer middleware
+    - stache.loader: Document format loaders
+    - stache.chunking: Chunking strategies
 
 Usage:
     # Get all providers of a type
@@ -30,7 +32,11 @@ Usage:
 
 import importlib.metadata
 import logging
-from typing import Union
+from typing import TYPE_CHECKING, Union
+
+if TYPE_CHECKING:
+    from stache_ai.loaders.base import DocumentLoader
+    from stache_ai.chunking.base import ChunkingStrategy
 
 from .base import (
     DocumentIndexProvider,
@@ -45,12 +51,14 @@ logger = logging.getLogger(__name__)
 
 # Type alias for any provider class
 ProviderType = Union[
-    type[EmbeddingProvider],
-    type[LLMProvider],
-    type[VectorDBProvider],
-    type[NamespaceProvider],
-    type[DocumentIndexProvider],
-    type[RerankerProvider]
+    type["EmbeddingProvider"],
+    type["LLMProvider"],
+    type["VectorDBProvider"],
+    type["NamespaceProvider"],
+    type["DocumentIndexProvider"],
+    type["RerankerProvider"],
+    type["DocumentLoader"],
+    type["ChunkingStrategy"],
 ]
 
 # Entry point groups for each provider type
@@ -66,6 +74,8 @@ PROVIDER_GROUPS = {
     'query_processor': 'stache.query_processor',
     'result_processor': 'stache.result_processor',
     'delete_observer': 'stache.delete_observer',
+    'loader': 'stache.loader',
+    'chunking': 'stache.chunking',
 }
 
 # Cache for loaded providers: {provider_type: {name: class}}
@@ -124,7 +134,7 @@ def get_providers(provider_type: str) -> dict[str, ProviderType]:
         provider_type: Provider type ('llm', 'embeddings', 'vectordb',
                        'namespace', 'reranker', 'document_index', 'enrichment',
                        'chunk_observer', 'query_processor', 'result_processor',
-                       'delete_observer')
+                       'delete_observer', 'loader', 'chunking')
 
     Returns:
         Dictionary mapping provider names to provider classes

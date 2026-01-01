@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stache-ai-documents"
+version = "0.1.0"
+readme = "README.md"
+description = "Document format loaders for Stache AI (EPUB, DOCX, PPTX)"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Stache Contributors"}
+]
+keywords = ["stache", "document-processing", "epub", "docx", "pptx"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "stache-ai>=0.1.0",
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12.3",
+    "lxml>=5.1.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=0.6.23",
+]
+
+[project.entry-points."stache.loader"]
+epub = "stache_ai_documents.epub:EpubLoader"
+docx = "stache_ai_documents.docx:DocxLoader"
+pptx = "stache_ai_documents.pptx:PptxLoader"
+
+[project.urls]
+Homepage = "https://github.com/stache-ai/stache-ai"
+Repository = "https://github.com/stache-ai/stache-ai"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["stache_ai_documents*"]

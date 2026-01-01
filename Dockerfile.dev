@@ -20,6 +20,8 @@ WORKDIR /app
 ARG INSTALL_PROFILE=full
 # Enable OCR support for scanned PDFs (adds ~230MB)
 ARG WITH_OCR=true
+# Enable document format support (EPUB, DOCX, PPTX)
+ARG WITH_DOCUMENTS=true
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
@@ -40,18 +42,21 @@ RUN --mount=type=cache,target=/root/.cache/pip \
           /app/packages/stache-ai \
           /app/packages/stache-ai-qdrant \
           /app/packages/stache-ai-ollama \
-          /app/packages/stache-ai-mongodb ;; \
+          /app/packages/stache-ai-mongodb && \
+        if [ "$WITH_OCR" = "true" ]; then pip install /app/packages/stache-ai-ocr; fi && \
+        if [ "$WITH_DOCUMENTS" = "true" ]; then pip install /app/packages/stache-ai-documents; fi ;; \
       aws) \
         echo "Installing aws profile (bedrock, s3vectors, dynamodb)..." && \
         pip install \
           /app/packages/stache-ai \
           /app/packages/stache-ai-bedrock \
           /app/packages/stache-ai-s3vectors \
-          /app/packages/stache-ai-dynamodb ;; \
+          /app/packages/stache-ai-dynamodb && \
+        if [ "$WITH_OCR" = "true" ]; then pip install /app/packages/stache-ai-ocr; fi && \
+        if [ "$WITH_DOCUMENTS" = "true" ]; then pip install /app/packages/stache-ai-documents; fi ;; \
       minimal) \
         echo "Installing minimal profile (core only)..." && \
-        pip install \
-          /app/packages/stache-ai ;; \
+        pip install /app/packages/stache-ai ;; \
       full|*) \
         echo "Installing full profile (all providers)..." && \
         pip install \
@@ -67,7 +72,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
           /app/packages/stache-ai-dynamodb \
           /app/packages/stache-ai-s3vectors \
           /app/packages/stache-ai-redis \
-          /app/packages/stache-ai-pinecone ;; \
+          /app/packages/stache-ai-pinecone && \
+        if [ "$WITH_OCR" = "true" ]; then pip install /app/packages/stache-ai-ocr; fi && \
+        if [ "$WITH_DOCUMENTS" = "true" ]; then pip install /app/packages/stache-ai-documents; fi ;; \
     esac && \
     rm -rf /app/packages
 

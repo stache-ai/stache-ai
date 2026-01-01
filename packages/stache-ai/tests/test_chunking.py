@@ -293,9 +293,12 @@ class TestChunkingStrategyFactory:
             def chunk(self, text, chunk_size=2000, chunk_overlap=200, **kwargs):
                 return [Chunk(text=text, index=0, metadata={"strategy": "custom"})]
 
+        from stache_ai.providers import plugin_loader
+
         ChunkingStrategyFactory.register("custom_test", CustomStrategy)
         strategy = ChunkingStrategyFactory.create("custom_test")
         assert isinstance(strategy, CustomStrategy)
 
-        # Clean up
-        del ChunkingStrategyFactory._strategies["custom_test"]
+        # Clean up - reset both factory and plugin_loader
+        ChunkingStrategyFactory.reset()
+        plugin_loader.reset()

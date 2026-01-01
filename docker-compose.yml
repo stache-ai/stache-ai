@@ -58,7 +58,8 @@ services:
       args:
         - INSTALL_PROFILE=${INSTALL_PROFILE:-full}
         - WITH_OCR=${WITH_OCR:-true}
-        - STACHE_VERSION=${STACHE_VERSION:-0.1.0}
+        - WITH_DOCUMENTS=${WITH_DOCUMENTS:-true}
+        - STACHE_VERSION=${STACHE_VERSION:-0.1.2}
     container_name: stache-app
     ports:
       - "8000:8000"

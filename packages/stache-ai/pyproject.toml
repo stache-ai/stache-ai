@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai"
-version = "0.1.1"
+version = "0.1.2"
 readme = "README.md"
 description = "Personal AI-powered knowledge base with RAG"
 license = {text = "MIT"}
@@ -30,13 +30,7 @@ dependencies = [
     "python-multipart>=0.0.6",
     "pypdf2>=3.0.1",
     "pdfplumber>=0.10.3",
-    "ebooklib>=0.18",
-    "python-docx>=1.1.0",
-    "python-pptx>=0.6.23",
-    "beautifulsoup4>=4.12.3",
-    "lxml>=5.1.0",
     "markdown>=3.5.2",
-    "webvtt-py>=0.4.6",
     "python-dotenv>=1.0.1",
     "tiktoken>=0.5.2",
     "pydantic>=2.7.0",
@@ -67,6 +61,17 @@ ollama = [
 openai = [
     "stache-ai-openai>=0.1.0",
 ]
+# Optional document loaders
+ocr = [
+    "stache-ai-ocr>=0.1.0",
+]
+documents = [
+    "stache-ai-documents>=0.1.0",
+]
+all-loaders = [
+    "stache-ai-ocr>=0.1.0",
+    "stache-ai-documents>=0.1.0",
+]
 
 [project.scripts]
 stache-admin = "stache_ai.cli:cli"
@@ -82,6 +87,7 @@ stache-import = "stache_ai.cli.import_cmd:import_directory"
 
 [project.entry-points."stache.llm"]
 fallback = "stache_ai.providers.llm.fallback:FallbackLLMProvider"
+none = "stache_ai.providers.llm.none:NoneLLMProvider"
 
 [project.entry-points."stache.embeddings"]
 fallback = "stache_ai.providers.embeddings.fallback:FallbackEmbeddingProvider"
@@ -91,6 +97,18 @@ sqlite = "stache_ai.providers.namespace.sqlite:SQLiteNamespaceProvider"
 
 [project.entry-points."stache.reranker"]
 simple = "stache_ai.providers.reranker.simple:SimpleReranker"
+
+[project.entry-points."stache.loader"]
+text = "stache_ai.loaders.text:TextLoader"
+pdf = "stache_ai.loaders.pdf:PdfLoader"
+
+[project.entry-points."stache.chunking"]
+recursive = "stache_ai.chunking.recursive:RecursiveChunkingStrategy"
+markdown = "stache_ai.chunking.markdown:MarkdownChunkingStrategy"
+character = "stache_ai.chunking.character:CharacterChunkingStrategy"
+semantic = "stache_ai.chunking.semantic:SemanticChunkingStrategy"
+transcript = "stache_ai.chunking.transcript:TranscriptChunkingStrategy"
+hierarchical = "stache_ai.chunking.hierarchical:HierarchicalChunkingStrategy"
 
 [project.urls]
 Homepage = "https://github.com/stache-ai/stache-ai"

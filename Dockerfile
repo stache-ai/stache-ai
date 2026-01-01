@@ -20,8 +20,10 @@ WORKDIR /app
 ARG INSTALL_PROFILE=full
 # Enable OCR support for scanned PDFs (adds ~230MB)
 ARG WITH_OCR=true
+# Enable document format support (EPUB, DOCX, PPTX)
+ARG WITH_DOCUMENTS=true
 # Package version to install
-ARG STACHE_VERSION=0.1.0
+ARG STACHE_VERSION=0.1.2
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
@@ -37,36 +39,41 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         echo "Installing airgap profile (qdrant, ollama, mongodb)..." && \
         pip install \
           stache-ai==$STACHE_VERSION \
-          stache-ai-qdrant==$STACHE_VERSION \
-          stache-ai-ollama==$STACHE_VERSION \
-          stache-ai-mongodb==$STACHE_VERSION ;; \
+          stache-ai-qdrant \
+          stache-ai-ollama \
+          stache-ai-mongodb && \
+        if [ "$WITH_OCR" = "true" ]; then pip install stache-ai-ocr; fi && \
+        if [ "$WITH_DOCUMENTS" = "true" ]; then pip install stache-ai-documents; fi ;; \
       aws) \
         echo "Installing aws profile (bedrock, s3vectors, dynamodb)..." && \
         pip install \
           stache-ai==$STACHE_VERSION \
-          stache-ai-bedrock==$STACHE_VERSION \
-          stache-ai-s3vectors==$STACHE_VERSION \
-          stache-ai-dynamodb==$STACHE_VERSION ;; \
+          stache-ai-bedrock \
+          stache-ai-s3vectors \
+          stache-ai-dynamodb && \
+        if [ "$WITH_OCR" = "true" ]; then pip install stache-ai-ocr; fi && \
+        if [ "$WITH_DOCUMENTS" = "true" ]; then pip install stache-ai-documents; fi ;; \
       minimal) \
         echo "Installing minimal profile (core only)..." && \
-        pip install \
-          stache-ai==$STACHE_VERSION ;; \
+        pip install stache-ai==$STACHE_VERSION ;; \
       full|*) \
         echo "Installing full profile (all providers)..." && \
         pip install \
           stache-ai==$STACHE_VERSION \
-          stache-ai-qdrant==$STACHE_VERSION \
-          stache-ai-ollama==$STACHE_VERSION \
-          stache-ai-openai==$STACHE_VERSION \
-          stache-ai-anthropic==$STACHE_VERSION \
-          stache-ai-bedrock==$STACHE_VERSION \
-          stache-ai-cohere==$STACHE_VERSION \
-          stache-ai-mixedbread==$STACHE_VERSION \
-          stache-ai-mongodb==$STACHE_VERSION \
-          stache-ai-dynamodb==$STACHE_VERSION \
-          stache-ai-s3vectors==$STACHE_VERSION \
-          stache-ai-redis==$STACHE_VERSION \
-          stache-ai-pinecone==$STACHE_VERSION ;; \
+          stache-ai-qdrant \
+          stache-ai-ollama \
+          stache-ai-openai \
+          stache-ai-anthropic \
+          stache-ai-bedrock \
+          stache-ai-cohere \
+          stache-ai-mixedbread \
+          stache-ai-mongodb \
+          stache-ai-dynamodb \
+          stache-ai-s3vectors \
+          stache-ai-redis \
+          stache-ai-pinecone && \
+        if [ "$WITH_OCR" = "true" ]; then pip install stache-ai-ocr; fi && \
+        if [ "$WITH_DOCUMENTS" = "true" ]; then pip install stache-ai-documents; fi ;; \
     esac
 
 # Copy built frontend from stage 1
