@@ -47,7 +47,12 @@ client.interceptors.response.use(
 )
 
 export const checkHealth = async () => {
-  const response = await client.get('/api/ping')
+  // Call /api/health if authenticated, /api/ping otherwise
+  // This avoids initializing providers on serverless before login
+  const endpoint = authProvider !== 'none' && getAuthHeader().Authorization
+    ? '/api/health'
+    : '/api/ping'
+  const response = await client.get(endpoint)
   return response.data
 }
 

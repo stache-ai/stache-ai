@@ -38,7 +38,7 @@
             </select>
           </div>
           <label class="checkbox">
-            <input type="checkbox" v-model="synthesize" />
+            <input type="checkbox" v-model="synthesize" :disabled="!synthesisAvailable" />
             <span>AI synthesis</span>
           </label>
           <label class="checkbox">
@@ -136,6 +136,7 @@ const availableModels = ref([])
 const modelGroups = ref({ fast: [], balanced: [], premium: [] })
 
 const hasModelOptions = computed(() => availableModels.value.length > 0)
+const synthesisAvailable = computed(() => availableModels.value.length > 0)
 
 const sources = computed(() => {
   if (!result.value) return []
@@ -149,9 +150,15 @@ onMounted(async () => {
     const data = await listModels()
     availableModels.value = data.models || []
     modelGroups.value = data.grouped || { fast: [], balanced: [], premium: [] }
+
+    // Disable synthesis if no models available (e.g., llm_provider='none')
+    if (availableModels.value.length === 0) {
+      synthesize.value = false
+    }
   } catch (err) {
     console.warn('Failed to fetch models:', err)
-    // Silently fail - model selector just won't show
+    // Silently fail - disable synthesis if we can't fetch models
+    synthesize.value = false
   }
 })
 
@@ -324,6 +331,16 @@ const handleQuery = async () => {
 
 .checkbox span {
   color: #374151;
+}
+
+.checkbox input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.checkbox:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .loading {

@@ -80,9 +80,17 @@ const checkHealthStatus = async () => {
   }
 
   try {
+    // Use /api/health for authenticated users to get provider info
+    // Use /api/ping for non-authenticated to avoid initializing providers
     const health = await checkHealth()
-    healthStatus.value = health.status
-    llmProvider.value = health.providers?.llm_provider || 'LLM'
+    if (health.status) {
+      // Full health response with provider info
+      healthStatus.value = health.status
+      llmProvider.value = health.providers?.llm_provider || 'LLM'
+    } else {
+      // Ping response (just {ok: true})
+      healthStatus.value = health.ok ? 'healthy' : 'unhealthy'
+    }
   } catch (error) {
     healthStatus.value = 'unhealthy'
   }

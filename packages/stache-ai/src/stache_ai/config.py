@@ -12,11 +12,15 @@ class Settings(BaseSettings):
     Provider Selection:
         Provider names are strings that map to entry points. Available providers
         depend on which stache-ai-* packages are installed. Core provides:
-        - LLM: fallback
+        - LLM: none (no synthesis), fallback (local dev)
         - Embedding: fallback
         - VectorDB: (none built-in, requires plugin)
         - Namespace: sqlite
         - Reranker: simple
+
+    MCP-Only Deployments:
+        Set LLM_PROVIDER=none for search-only usage without synthesis.
+        No LLM credentials or external dependencies required.
 
     Install additional providers:
         pip install stache-ai-bedrock  # Adds bedrock LLM and embedding
@@ -26,8 +30,12 @@ class Settings(BaseSettings):
     # ===== Provider Selection =====
     # String-based to support dynamic plugin discovery
     llm_provider: str = Field(
-        default="fallback",
-        description="LLM provider name (discovered via stache.llm entry points)"
+        default="none",
+        description=(
+            "LLM provider name (discovered via stache.llm entry points). "
+            "Use 'none' for MCP-only deployments without synthesis. "
+            "Use 'fallback' for local dev, or 'bedrock'/'ollama' for production."
+        )
     )
     llm_model: str | None = None
 
