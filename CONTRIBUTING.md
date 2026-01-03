@@ -4,7 +4,7 @@
 
 ```bash
 # Clone and setup
-git clone https://github.com/stache-ai/stache.git
+git clone https://github.com/stache-ai/stache-ai.git
 cd stache/backend
 python3 -m venv venv
 source venv/bin/activate

@@ -93,7 +93,7 @@ pip install stache-mcp
 
 ### From Source
 ```bash
-git clone https://github.com/stache-ai/stache.git
+git clone https://github.com/stache-ai/stache-ai.git
 cd stache/backend
 pip install -e ".[dev]"
 ```
@@ -237,8 +237,8 @@ We welcome contributions! See `CONTRIBUTING.md` for:
 
 ## Support
 
-- **Issues**: https://github.com/stache-ai/stache/issues
-- **Discussions**: https://github.com/stache-ai/stache/discussions
+- **Issues**: https://github.com/stache-ai/stache-ai/issues
+- **Discussions**: https://github.com/stache-ai/stache-ai/discussions
 
 ## License
 
@@ -258,4 +258,4 @@ Built with:
 
 **Install now**: `pip install stache-ai`
 
-**Star the repo**: https://github.com/stache-ai/stache ⭐
+**Star the repo**: https://github.com/stache-ai/stache-ai ⭐

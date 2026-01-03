@@ -7,7 +7,7 @@
 ### Option 1: Clone the Repository (Recommended)
 
 ```bash
-git clone https://github.com/stache-ai/stache.git
+git clone https://github.com/stache-ai/stache-ai.git
 cd stache
 ```
 
@@ -31,16 +31,16 @@ docker compose -f docker-compose.yml -f docker-compose.openai.yml up -d
 **Linux/macOS:**
 ```bash
 mkdir stache && cd stache
-curl -O https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.local.yml
+curl -O https://raw.githubusercontent.com/stache-ai/stache-ai/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/stache-ai/stache-ai/main/docker-compose.local.yml
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 ```
 
 **Windows (PowerShell):**
 ```powershell
 mkdir stache; cd stache
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.yml" -OutFile "docker-compose.yml"
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.local.yml" -OutFile "docker-compose.local.yml"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache-ai/main/docker-compose.yml" -OutFile "docker-compose.yml"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache-ai/main/docker-compose.local.yml" -OutFile "docker-compose.local.yml"
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 ```
 
@@ -49,8 +49,8 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 **Linux/macOS:**
 ```bash
 mkdir stache && cd stache
-curl -O https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.openai.yml
+curl -O https://raw.githubusercontent.com/stache-ai/stache-ai/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/stache-ai/stache-ai/main/docker-compose.openai.yml
 echo "OPENAI_API_KEY=sk-..." > .env
 docker compose -f docker-compose.yml -f docker-compose.openai.yml up -d
 ```
@@ -58,8 +58,8 @@ docker compose -f docker-compose.yml -f docker-compose.openai.yml up -d
 **Windows (PowerShell):**
 ```powershell
 mkdir stache; cd stache
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.yml" -OutFile "docker-compose.yml"
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.openai.yml" -OutFile "docker-compose.openai.yml"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache-ai/main/docker-compose.yml" -OutFile "docker-compose.yml"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache-ai/main/docker-compose.openai.yml" -OutFile "docker-compose.openai.yml"
 "OPENAI_API_KEY=sk-..." | Out-File -Encoding utf8 .env
 docker compose -f docker-compose.yml -f docker-compose.openai.yml up -d
 ```
@@ -132,8 +132,8 @@ volumes:
 
 ## Documentation
 
-- [GitHub Repository](https://github.com/stache-ai/stache)
-- [Full Documentation](https://github.com/stache-ai/stache#readme)
+- [GitHub Repository](https://github.com/stache-ai/stache-ai)
+- [Full Documentation](https://github.com/stache-ai/stache-ai#readme)
 - [stache-tools (CLI + MCP)](https://github.com/stache-ai/stache-tools)
 
 ## License

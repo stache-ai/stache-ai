@@ -57,7 +57,7 @@ services:
   # Application (FastAPI backend + Vue frontend)
   # Pulls pre-built image by default. To build locally, add --build flag
   app:
-    image: ghcr.io/stache-ai/stache:latest
+    image: stacheai/stache-ai:latest
     build:
       context: .
       dockerfile: ${DOCKERFILE:-Dockerfile}

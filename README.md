@@ -77,7 +77,7 @@ Stache supports multiple vector database providers. Here's what works on each:
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/stache-ai/stache.git
+git clone https://github.com/stache-ai/stache-ai.git
 cd stache
 
 # 2. Configure environment

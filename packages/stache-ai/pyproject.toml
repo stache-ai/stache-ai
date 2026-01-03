@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai"
-version = "0.1.2"
+version = "0.1.3"
 readme = "README.md"
 description = "Personal AI-powered knowledge base with RAG"
 license = {text = "MIT"}
@@ -112,9 +112,9 @@ hierarchical = "stache_ai.chunking.hierarchical:HierarchicalChunkingStrategy"
 
 [project.urls]
 Homepage = "https://github.com/stache-ai/stache-ai"
-Documentation = "https://github.com/stache-ai/stache#readme"
+Documentation = "https://github.com/stache-ai/stache-ai#readme"
 Repository = "https://github.com/stache-ai/stache-ai"
-Issues = "https://github.com/stache-ai/stache/issues"
+Issues = "https://github.com/stache-ai/stache-ai/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
