@@ -1,0 +1,25 @@
+# Ollama on host machine (for Mac GPU acceleration via Metal)
+# Usage: docker compose -f docker-compose.yml -f docker-compose.ollama-host.yml up -d
+#
+# Requires Ollama running on host:
+#   brew install ollama
+#   ollama serve
+#   ollama pull mxbai-embed-large
+
+services:
+  # Override app configuration to use host Ollama
+  app:
+    environment:
+      - EMBEDDING_PROVIDER=ollama
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-mxbai-embed-large}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1024}
+      # Ollama timeouts
+      - OLLAMA_EMBEDDING_TIMEOUT=${OLLAMA_EMBEDDING_TIMEOUT:-90}
+      - OLLAMA_HEALTH_CHECK_TIMEOUT=${OLLAMA_HEALTH_CHECK_TIMEOUT:-5}
+      - OLLAMA_MAX_RETRIES=${OLLAMA_MAX_RETRIES:-3}
+      - OLLAMA_ENABLE_PARALLEL=${OLLAMA_ENABLE_PARALLEL:-true}
+      - OLLAMA_BATCH_SIZE=${OLLAMA_BATCH_SIZE:-4}
+      # Optional LLM (set LLM_PROVIDER=ollama in .env to enable)
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      - OLLAMA_LLM_TIMEOUT=${OLLAMA_LLM_TIMEOUT:-120}

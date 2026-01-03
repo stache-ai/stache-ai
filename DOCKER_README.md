@@ -4,27 +4,79 @@
 
 ## Quick Start
 
+### Option 1: Clone the Repository (Recommended)
+
 ```bash
-# Pull the image
-docker pull stacheai/stache-ai:latest
+git clone https://github.com/stache-ai/stache.git
+cd stache
+```
 
-# Run with docker-compose (recommended)
-curl -O https://raw.githubusercontent.com/stache-ai/stache-ai/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/stache-ai/stache-ai/main/.env.example
-cp .env.example .env
-# Edit .env with your API keys
-docker-compose up -d
+Then choose your embedding provider:
 
-# Open the UI
-open http://localhost:8000
+**Local Ollama (no API keys needed):**
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+```
+
+**OpenAI API:**
+```bash
+echo "OPENAI_API_KEY=sk-..." > .env
+docker compose -f docker-compose.yml -f docker-compose.openai.yml up -d
+```
+
+### Option 2: Download Files Only
+
+#### Local Ollama (no API keys)
+
+**Linux/macOS:**
+```bash
+mkdir stache && cd stache
+curl -O https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.local.yml
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+```
+
+**Windows (PowerShell):**
+```powershell
+mkdir stache; cd stache
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.yml" -OutFile "docker-compose.yml"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.local.yml" -OutFile "docker-compose.local.yml"
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+```
+
+#### OpenAI API
+
+**Linux/macOS:**
+```bash
+mkdir stache && cd stache
+curl -O https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.openai.yml
+echo "OPENAI_API_KEY=sk-..." > .env
+docker compose -f docker-compose.yml -f docker-compose.openai.yml up -d
+```
+
+**Windows (PowerShell):**
+```powershell
+mkdir stache; cd stache
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.yml" -OutFile "docker-compose.yml"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/stache-ai/stache/main/docker-compose.openai.yml" -OutFile "docker-compose.openai.yml"
+"OPENAI_API_KEY=sk-..." | Out-File -Encoding utf8 .env
+docker compose -f docker-compose.yml -f docker-compose.openai.yml up -d
+```
+
+### Verify
+
+```bash
+curl http://localhost:8000/api/health
+# Or open http://localhost:8000 in your browser
 ```
 
 ## Tags
 
 | Tag | OCR Support | Size | Description |
 |-----|-------------|------|-------------|
-| `latest`, `0.1.0` | Yes | ~715MB | Full featured with OCR for scanned PDFs |
-| `slim`, `0.1.0-slim` | No | ~485MB | Smaller image, text-based documents only |
+| `latest`, `0.1.2` | Yes | ~715MB | Full featured with OCR for scanned PDFs |
+| `slim`, `0.1.2-slim` | No | ~485MB | Smaller image, text-based documents only |
 
 ## Features
 
@@ -37,26 +89,25 @@ open http://localhost:8000
 
 ## Environment Variables
 
-Required:
+**For OpenAI:**
 ```bash
-OPENAI_API_KEY=sk-...        # or
-ANTHROPIC_API_KEY=sk-ant-... # at least one LLM provider
+OPENAI_API_KEY=sk-...
 ```
 
-Optional:
+**For Local Ollama (no API keys):**
 ```bash
-# Providers
-LLM_PROVIDER=openai          # openai, anthropic, ollama, bedrock
-EMBEDDING_PROVIDER=openai    # openai, ollama, bedrock, cohere
-VECTORDB_PROVIDER=qdrant     # qdrant, pinecone, s3vectors, redis
+# Use docker-compose.local.yml - no environment variables needed
+# Default embedding model: nomic-embed-text (768 dims)
+```
 
-# Qdrant (default vector DB)
-QDRANT_URL=http://localhost:6333
-QDRANT_COLLECTION=stache
+**Optional Settings:**
+```bash
+# Embedding model (for Ollama)
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text  # or mxbai-embed-large
+EMBEDDING_DIMENSION=768                   # or 1024 for mxbai-embed-large
 
-# Ollama (local models)
-OLLAMA_URL=http://host.docker.internal:11434
-OLLAMA_MODEL=llama3.2
+# Document storage
+DOCUMENT_INDEX_PROVIDER=mongodb           # Required for local setup
 ```
 
 ## Volumes
@@ -64,7 +115,10 @@ OLLAMA_MODEL=llama3.2
 ```yaml
 volumes:
   - ./data/uploads:/app/uploads    # Uploaded files
-  - ./data:/app/data               # SQLite namespace DB
+  - ./data:/app/data               # Application data
+  - ./data/qdrant:/qdrant/storage  # Vector database
+  - ./data/mongodb:/data/db        # Document metadata
+  - ./data/ollama:/root/.ollama    # Ollama models (local only)
 ```
 
 ## Ports
@@ -72,18 +126,15 @@ volumes:
 | Port | Service |
 |------|---------|
 | 8000 | Web UI + API |
-
-## Health Check
-
-```bash
-curl http://localhost:8000/health
-```
+| 6333 | Qdrant (vector DB) |
+| 11434 | Ollama (local only) |
+| 27017 | MongoDB |
 
 ## Documentation
 
-- [GitHub Repository](https://github.com/stache-ai/stache-ai)
-- [Full Documentation](https://github.com/stache-ai/stache-ai#readme)
-- [Provider Setup](https://github.com/stache-ai/stache-ai/blob/main/docs/plugins.md)
+- [GitHub Repository](https://github.com/stache-ai/stache)
+- [Full Documentation](https://github.com/stache-ai/stache#readme)
+- [stache-tools (CLI + MCP)](https://github.com/stache-ai/stache-tools)
 
 ## License
 

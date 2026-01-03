@@ -1,0 +1,59 @@
+# Local development with Ollama in Docker (Linux/Windows)
+# Usage: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# The embedding model is pulled automatically on first start.
+# To use a different model, set OLLAMA_EMBEDDING_MODEL in .env:
+#   all-minilm        - 45MB,  384 dims  - Fast, lightweight
+#   nomic-embed-text  - 275MB, 768 dims  - Good balance (default)
+#   mxbai-embed-large - 670MB, 1024 dims - Best quality
+
+services:
+  # Ollama for local embeddings (and optionally LLM)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: stache-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ${DATA_DIR:-./data}/ollama:/root/.ollama
+    environment:
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+    entrypoint: ["/bin/bash", "-c", "ollama serve & sleep 5 && ollama pull $${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text} && wait"]
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 512M
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Override app configuration for Ollama
+  app:
+    environment:
+      - EMBEDDING_PROVIDER=ollama
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-768}
+      - DOCUMENT_INDEX_PROVIDER=${DOCUMENT_INDEX_PROVIDER:-mongodb}
+      # Ollama timeouts
+      - OLLAMA_EMBEDDING_TIMEOUT=${OLLAMA_EMBEDDING_TIMEOUT:-90}
+      - OLLAMA_HEALTH_CHECK_TIMEOUT=${OLLAMA_HEALTH_CHECK_TIMEOUT:-5}
+      - OLLAMA_MAX_RETRIES=${OLLAMA_MAX_RETRIES:-3}
+      - OLLAMA_ENABLE_PARALLEL=${OLLAMA_ENABLE_PARALLEL:-true}
+      - OLLAMA_BATCH_SIZE=${OLLAMA_BATCH_SIZE:-4}
+      # Optional LLM (set LLM_PROVIDER=ollama in .env to enable)
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      - OLLAMA_LLM_TIMEOUT=${OLLAMA_LLM_TIMEOUT:-120}
+    depends_on:
+      vectordb:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy

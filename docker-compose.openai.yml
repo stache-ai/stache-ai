@@ -1,0 +1,12 @@
+# OpenAI API for embeddings
+# Usage: docker compose -f docker-compose.yml -f docker-compose.openai.yml up -d
+#
+# Requires OPENAI_API_KEY in environment or .env file
+
+services:
+  # Override app configuration for OpenAI
+  app:
+    environment:
+      - EMBEDDING_PROVIDER=openai
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_DIMENSION=1536
