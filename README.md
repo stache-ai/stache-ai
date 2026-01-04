@@ -93,6 +93,14 @@ open http://localhost:8000
 
 That's it.
 
+### Use with Claude (MCP)
+
+Connect Stache to Claude Desktop/Code for AI-powered knowledge retrieval:
+
+→ **[stache-tools setup guide](https://github.com/stache-ai/stache-tools#quick-start)**
+
+Windows users: Download `stache-mcp.exe` from [releases](https://github.com/stache-ai/stache-tools/releases) - no Python needed.
+
 ### Docker Hub
 
 Skip the build and pull directly from Docker Hub:
