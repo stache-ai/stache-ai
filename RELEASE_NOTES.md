@@ -4,7 +4,7 @@
 
 ## Overview
 
-Stache (formerly RAGBrain) is **storage for AI** - a flexible, production-ready infrastructure layer that gives AI systems persistent memory and knowledge retrieval capabilities through Retrieval-Augmented Generation (RAG).
+Stache is **storage for AI** - a flexible, production-ready infrastructure layer that gives AI systems persistent memory and knowledge retrieval capabilities through Retrieval-Augmented Generation (RAG).
 
 ## What is Stache?
 
@@ -23,7 +23,7 @@ Think of it as a database for AI - not just storing data, but making it retrieva
 - **New Name**: Stache (mustache emoji: 🥸)
 - **PyPI Package**: `stache-ai` (install with `pip install stache-ai`)
 - **Import Name**: `from stache import ...`
-- **CLI Command**: `stache` (formerly `ragbrain`)
+- **CLI Command**: `stache`
 - **GitHub Organization**: `stache-ai/*`
 
 ### Core Features ✨
@@ -66,18 +66,6 @@ Connect Stache to Claude Desktop for seamless knowledge base access:
 - **Namespace Management**: Organize documents into logical collections
 - **Pending Queue**: Stage documents before committing to vector DB
 - **Health Checks**: Monitor provider status and connectivity
-
-## Migration from RAGBrain
-
-If you're upgrading from RAGBrain, see `MIGRATION.md` for detailed instructions.
-
-**Quick summary**:
-1. Uninstall old package: `pip uninstall ragbrain ragbrain-mcp`
-2. Install new packages: `pip install stache-ai stache-mcp`
-3. Update imports: `from ragbrain` → `from stache`
-4. Update CLI commands: `ragbrain` → `stache`
-5. Update environment variables: `RAGBRAIN_*` → `STACHE_*` (MCP only)
-6. Update MCP config in Claude Desktop
 
 ## Installation
 
@@ -193,10 +181,8 @@ See `docs/plugins.md` for full guide.
 
 ## Known Limitations
 
-1. **Redis Key Prefixes**: Still use `ragbrain:` for backward compatibility
-2. **Default Collections**: Config defaults (e.g., `qdrant_collection`) still reference "ragbrain"
-3. **S3 Vectors**: `list_vectors` doesn't support metadata filtering (use `query_vectors`)
-4. **Text Metadata**: Must be marked as non-filterable (exceeds 2KB limit)
+1. **S3 Vectors**: `list_vectors` doesn't support metadata filtering (use `query_vectors`)
+2. **Text Metadata**: Must be marked as non-filterable (exceeds 2KB limit)
 
 See `CLAUDE.md` "Critical Lessons" section for details.
 
@@ -230,7 +216,6 @@ We welcome contributions! See `CONTRIBUTING.md` for:
 
 - **README**: Project overview and quick start
 - **CONTRIBUTING**: Development guide
-- **MIGRATION**: Upgrade from RAGBrain
 - **CLAUDE.md**: Internal development context
 - **docs/plugins.md**: Provider plugin guide
 - **docs/mcp-setup.md**: MCP integration guide

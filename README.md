@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-**Storage for AI** - A production-ready infrastructure layer that gives AI systems persistent memory and knowledge retrieval through RAG (Retrieval-Augmented Generation). Plugin-based architecture with direct API calls to OpenAI/Anthropic/Ollama/Bedrock and support for Qdrant, Pinecone, S3 Vectors, and more.
+**Curated Storage for AI** - A production-ready infrastructure layer that gives AI systems persistent memory and knowledge retrieval through RAG (Retrieval-Augmented Generation). Plugin-based architecture with direct API calls to OpenAI/Anthropic/Ollama/Bedrock and support for Qdrant, Pinecone, S3 Vectors, and more.
 
 ---
 

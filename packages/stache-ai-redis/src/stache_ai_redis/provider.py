@@ -13,17 +13,16 @@ from stache_ai.config import Settings
 logger = logging.getLogger(__name__)
 
 # Redis key prefixes
-# Note: Using 'ragbrain' prefix for backward compatibility with existing deployments
-NS_KEY_PREFIX = "ragbrain:namespace:"
-NS_INDEX_KEY = "ragbrain:namespaces"  # Set of all namespace IDs
+NS_KEY_PREFIX = "stache:namespace:"
+NS_INDEX_KEY = "stache:namespaces"  # Set of all namespace IDs
 
 
 class RedisNamespaceProvider(NamespaceProvider):
     """Redis-based namespace registry provider.
 
     Stores namespaces as JSON in Redis with:
-    - Individual keys for each namespace: ragbrain:namespace:{id}
-    - A set index of all namespace IDs: ragbrain:namespaces
+    - Individual keys for each namespace: stache:namespace:{id}
+    - A set index of all namespace IDs: stache:namespaces
 
     Supports Redis persistence (RDB/AOF) for durability.
     """

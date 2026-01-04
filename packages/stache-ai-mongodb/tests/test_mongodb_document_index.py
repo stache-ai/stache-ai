@@ -24,7 +24,7 @@ def mock_settings():
     """Create mock settings object for MongoDB configuration"""
     settings = MagicMock()
     settings.mongodb_uri = "mongodb://localhost:27017"
-    settings.mongodb_database = "test_ragbrain"
+    settings.mongodb_database = "test_stache"
     settings.mongodb_documents_collection = "test_documents"
     return settings
 

@@ -1,11 +1,11 @@
 # Frontend Environment Configuration
 
-RAGBrain frontend uses Vite, which requires environment variables to have a `VITE_` prefix to be exposed to the browser.
+Stache frontend uses Vite, which requires environment variables to have a `VITE_` prefix to be exposed to the browser.
 
 ## File Structure
 
 ```
-ragbrain/
+stache/
 ├── .env                    # Backend config
 ├── .env.example            # Backend template
 ├── .env.frontend           # Frontend template
