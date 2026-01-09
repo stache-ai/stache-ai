@@ -6,7 +6,8 @@ import Capture from './pages/Capture.vue'
 import Query from './pages/Query.vue'
 import Namespaces from './pages/Namespaces.vue'
 import PendingQueue from './pages/PendingQueue.vue'
-import auth, { authProvider, handleCallback } from './api/auth.js'
+import { loadConfig } from './config.js'
+import { initAuth, getAuthProvider, handleCallback, isAuthenticated, login } from './api/auth.js'
 
 const routes = [
   { path: '/', component: Home },
@@ -29,33 +30,53 @@ router.beforeEach((to, from, next) => {
   }
 
   // Skip auth check if provider is 'none' (local dev)
-  if (authProvider === 'none') {
+  if (getAuthProvider() === 'none') {
     next()
     return
   }
 
   // If not authenticated, trigger login
-  if (!auth.isAuthenticated()) {
-    auth.login()
+  if (!isAuthenticated()) {
+    login()
     return
   }
 
   next()
 })
 
-const app = createApp(App)
+// Initialize app after config is loaded
+async function init() {
+  // Load runtime config first
+  await loadConfig()
 
-// Global error handler to prevent blank screens
-app.config.errorHandler = (err, instance, info) => {
-  console.error('Vue Error:', err)
-  console.error('Component:', instance)
-  console.error('Info:', info)
+  // Initialize auth with loaded config
+  await initAuth()
+
+  const app = createApp(App)
+
+  // Global error handler to prevent blank screens
+  app.config.errorHandler = (err, instance, info) => {
+    console.error('Vue Error:', err)
+    console.error('Component:', instance)
+    console.error('Info:', info)
+  }
+
+  // Handle unhandled promise rejections
+  window.addEventListener('unhandledrejection', (event) => {
+    console.error('Unhandled Promise Rejection:', event.reason)
+  })
+
+  app.use(router)
+  app.mount('#app')
 }
 
-// Handle unhandled promise rejections
-window.addEventListener('unhandledrejection', (event) => {
-  console.error('Unhandled Promise Rejection:', event.reason)
+init().catch(err => {
+  console.error('Failed to initialize app:', err)
+  // Show error to user
+  document.getElementById('app').innerHTML = `
+    <div style="padding: 20px; color: red;">
+      <h2>Failed to initialize application</h2>
+      <pre>${err.message}</pre>
+    </div>
+  `
 })
-
-app.use(router)
-app.mount('#app')

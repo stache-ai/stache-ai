@@ -6,11 +6,16 @@
  * - 'cognito': AWS Cognito OAuth2 implicit flow
  * - 'apikey': Static API key (simple deployments)
  *
- * Configure via VITE_AUTH_PROVIDER environment variable.
+ * Configuration sources (in priority order):
+ * 1. Runtime: /config.json (for pre-built packages)
+ * 2. Build-time: VITE_* environment variables
  */
 
-// Auth provider from environment (default: none for local dev)
-const AUTH_PROVIDER = import.meta.env.VITE_AUTH_PROVIDER || 'none'
+import { getConfig, loadConfig } from '../config.js'
+
+// Will be set after config loads
+let authInstance = null
+let authProviderType = null
 
 /**
  * No-op auth provider (always authenticated, no tokens)
@@ -30,7 +35,7 @@ const noAuthProvider = {
  * API Key auth provider
  */
 function createApiKeyProvider() {
-  const API_KEY = import.meta.env.VITE_API_KEY || localStorage.getItem('stache_api_key') || ''
+  const API_KEY = getConfig('API_KEY') || localStorage.getItem('stache_api_key') || ''
 
   return {
     isConfigured: () => !!API_KEY,
@@ -58,11 +63,11 @@ function createApiKeyProvider() {
  */
 function createCognitoProvider() {
   const config = {
-    region: import.meta.env.VITE_AWS_REGION || 'us-east-1',
-    userPoolId: import.meta.env.VITE_COGNITO_USER_POOL_ID || '',
-    clientId: import.meta.env.VITE_COGNITO_CLIENT_ID || '',
-    domain: import.meta.env.VITE_COGNITO_DOMAIN || '',
-    redirectUri: import.meta.env.VITE_COGNITO_REDIRECT_URI || window.location.origin,
+    region: getConfig('AWS_REGION', 'us-east-1'),
+    userPoolId: getConfig('COGNITO_USER_POOL_ID', ''),
+    clientId: getConfig('COGNITO_CLIENT_ID', ''),
+    domain: getConfig('COGNITO_DOMAIN', ''),
+    redirectUri: getConfig('COGNITO_REDIRECT_URI') || window.location.origin,
   }
 
   const TOKEN_KEY = 'stache_id_token'
@@ -101,7 +106,7 @@ function createCognitoProvider() {
 
   const login = () => {
     if (!isConfigured()) {
-      console.error('Cognito not configured. Set VITE_COGNITO_* environment variables.')
+      console.error('Cognito not configured. Ensure config.json or VITE_COGNITO_* variables are set.')
       return
     }
     const loginUrl = new URL(`https://${config.domain}/login`)
@@ -164,7 +169,10 @@ function createCognitoProvider() {
  * Create auth provider based on configuration
  */
 function createAuthProvider() {
-  switch (AUTH_PROVIDER.toLowerCase()) {
+  const provider = getConfig('AUTH_PROVIDER', 'none')
+  authProviderType = provider.toLowerCase()
+
+  switch (authProviderType) {
     case 'cognito':
       return createCognitoProvider()
     case 'apikey':
@@ -175,18 +183,51 @@ function createAuthProvider() {
   }
 }
 
-// Export singleton instance
-const auth = createAuthProvider()
+/**
+ * Initialize auth - must be called after config is loaded
+ */
+export async function initAuth() {
+  await loadConfig()
+  authInstance = createAuthProvider()
+  return authInstance
+}
+
+/**
+ * Get auth instance (throws if not initialized)
+ */
+function getAuth() {
+  if (!authInstance) {
+    // Fallback: create with whatever config is available
+    authInstance = createAuthProvider()
+  }
+  return authInstance
+}
 
 // Named exports for convenience
-export const isConfigured = () => auth.isConfigured()
-export const isAuthenticated = () => auth.isAuthenticated()
-export const getToken = () => auth.getToken()
-export const getUser = () => auth.getUser()
-export const login = () => auth.login()
-export const logout = () => auth.logout()
-export const handleCallback = () => auth.handleCallback()
-export const getAuthHeader = () => auth.getAuthHeader()
-export const authProvider = AUTH_PROVIDER
+export const isConfigured = () => getAuth().isConfigured()
+export const isAuthenticated = () => getAuth().isAuthenticated()
+export const getToken = () => getAuth().getToken()
+export const getUser = () => getAuth().getUser()
+export const login = () => getAuth().login()
+export const logout = () => getAuth().logout()
+export const handleCallback = () => getAuth().handleCallback()
+export const getAuthHeader = () => getAuth().getAuthHeader()
+export const getAuthProvider = () => authProviderType || getConfig('AUTH_PROVIDER', 'none').toLowerCase()
 
-export default auth
+// Legacy export for backwards compatibility
+// Note: This is evaluated at import time, so it only reflects build-time config.
+// Use getAuthProvider() for runtime config support.
+export const authProvider = import.meta.env.VITE_AUTH_PROVIDER || 'none'
+
+export default {
+  initAuth,
+  isConfigured,
+  isAuthenticated,
+  getToken,
+  getUser,
+  login,
+  logout,
+  handleCallback,
+  getAuthHeader,
+  get authProvider() { return getAuthProvider() }
+}

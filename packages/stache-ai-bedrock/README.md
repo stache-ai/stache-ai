@@ -76,6 +76,14 @@ The Bedrock provider requires specific IAM permissions for model invocation.
         "bedrock:Converse"
       ],
       "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "aws-marketplace:ViewSubscriptions",
+        "aws-marketplace:Subscribe"
+      ],
+      "Resource": "*"
     }
   ]
 }
@@ -107,6 +115,11 @@ Resources:
                 - bedrock:InvokeModelWithResponseStream
                 - bedrock:Converse
               Resource: '*'
+            - Effect: Allow
+              Action:
+                - aws-marketplace:ViewSubscriptions
+                - aws-marketplace:Subscribe
+              Resource: '*'
 ```
 
 ### Terraform Example
@@ -119,6 +132,15 @@ data "aws_iam_policy_document" "bedrock" {
       "bedrock:InvokeModel",
       "bedrock:InvokeModelWithResponseStream",
       "bedrock:Converse"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "aws-marketplace:ViewSubscriptions",
+      "aws-marketplace:Subscribe"
     ]
     resources = ["*"]
   }

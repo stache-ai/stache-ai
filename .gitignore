@@ -29,6 +29,10 @@ ENV/
 .env
 .env.local
 *.env.production
+
+# Secrets (for act/local workflows)
+.secrets
+*.secrets
 # IDEs
 .vscode/
 .idea/
@@ -63,6 +67,7 @@ frontend/dist/
 frontend/.next/
 frontend/build/
 frontend/package-lock.json
+frontend/pkg/
 
 # Testing
 .pytest_cache/

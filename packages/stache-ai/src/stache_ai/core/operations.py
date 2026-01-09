@@ -1,5 +1,6 @@
 """Shared operations for common RAG tasks"""
 
+import asyncio
 import logging
 import uuid
 
@@ -8,6 +9,28 @@ from stache_ai.providers import NamespaceProviderFactory
 from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
+
+
+def _run_async(coro):
+    """Run an async coroutine from sync code.
+
+    Handles the case where we may or may not already be in an event loop.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No event loop running, create one
+        return asyncio.run(coro)
+
+    # Already in an event loop - this shouldn't happen in Lambda but handle it
+    if loop.is_running():
+        # Create a new loop in a thread (fallback)
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return loop.run_until_complete(coro)
 
 
 def do_search(query: str, namespace: str = None, top_k: int = 20,
@@ -36,14 +59,14 @@ def do_search(query: str, namespace: str = None, top_k: int = 20,
 
     try:
         pipeline = get_pipeline()
-        result = pipeline.query(
+        result = _run_async(pipeline.query(
             question=query,
             top_k=top_k,
             synthesize=False,  # ALWAYS disable synthesis
             namespace=namespace,
             rerank=rerank,
             filter=filter
-        )
+        ))
         return {"request_id": request_id, **result}
     except Exception as e:
         logger.error(f"[{request_id}] Search failed: {e}")
@@ -56,6 +79,7 @@ def do_search(query: str, namespace: str = None, top_k: int = 20,
 
 
 def do_ingest_text(text: str, metadata: dict = None, namespace: str = None,
+                   chunking_strategy: str = "recursive", prepend_metadata: list = None,
                    request_id: str = None) -> dict:
     """Ingest text - shared by HTTP routes and external integrations
 
@@ -63,6 +87,8 @@ def do_ingest_text(text: str, metadata: dict = None, namespace: str = None,
         text: Text to ingest
         metadata: Optional metadata dictionary
         namespace: Optional namespace for isolation
+        chunking_strategy: Strategy for chunking (recursive, markdown, semantic, character)
+        prepend_metadata: List of metadata keys to prepend to each chunk for better search
         request_id: Optional request ID for tracking
 
     Returns:
@@ -80,15 +106,17 @@ def do_ingest_text(text: str, metadata: dict = None, namespace: str = None,
         logger.error(f"[{request_id}] {error_msg}")
         raise ValueError(error_msg)
 
-    logger.info(f"[{request_id}] Ingest: {len(text)} chars, namespace={namespace}")
+    logger.info(f"[{request_id}] Ingest: {len(text)} chars, namespace={namespace}, strategy={chunking_strategy}")
 
     try:
         pipeline = get_pipeline()
-        result = pipeline.ingest_text(
+        result = _run_async(pipeline.ingest_text(
             text=text,
             metadata=metadata,
-            namespace=namespace
-        )
+            namespace=namespace,
+            chunking_strategy=chunking_strategy,
+            prepend_metadata=prepend_metadata
+        ))
         return {"request_id": request_id, **result}
     except ValueError:
         raise
