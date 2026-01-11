@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai-ocr"
-version = "0.1.0"
+version = "0.1.1"
 readme = "README.md"
 description = "OCR support for Stache AI document loaders"
 license = {text = "MIT"}
@@ -38,3 +38,8 @@ Repository = "https://github.com/stache-ai/stache-ai"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["stache_ai_ocr*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: Integration tests that use real PDF files",
+]

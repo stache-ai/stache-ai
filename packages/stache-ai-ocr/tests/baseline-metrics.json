@@ -1,0 +1,102 @@
+{
+  "timestamp": "2026-01-11T18:28:23.985144+00:00",
+  "python_version": "3.12.3",
+  "test_files": [
+    {
+      "filename": "01-text-based.pdf",
+      "stache_ai_ocr": {
+        "time_ms": 32.2,
+        "text_length": 928,
+        "success": true,
+        "error": null
+      },
+      "stache_tools_ocr": {
+        "time_ms": 3.08,
+        "text_length": 929,
+        "ocr_used": false,
+        "success": true,
+        "error": null
+      }
+    },
+    {
+      "filename": "02-empty.pdf",
+      "stache_ai_ocr": {
+        "time_ms": 1.32,
+        "text_length": 0,
+        "success": true,
+        "error": null
+      },
+      "stache_tools_ocr": {
+        "time_ms": 0.87,
+        "text_length": 0,
+        "ocr_used": false,
+        "success": true,
+        "error": null
+      }
+    },
+    {
+      "filename": "03-single-page.pdf",
+      "stache_ai_ocr": {
+        "time_ms": 3.11,
+        "text_length": 156,
+        "success": true,
+        "error": null
+      },
+      "stache_tools_ocr": {
+        "time_ms": 0.77,
+        "text_length": 157,
+        "ocr_used": false,
+        "success": true,
+        "error": null
+      }
+    },
+    {
+      "filename": "04-scanned.pdf",
+      "stache_ai_ocr": {
+        "time_ms": 1.12,
+        "text_length": 0,
+        "success": true,
+        "error": null
+      },
+      "stache_tools_ocr": {
+        "time_ms": 0.72,
+        "text_length": 0,
+        "ocr_used": false,
+        "success": true,
+        "error": null
+      }
+    },
+    {
+      "filename": "05-large-multipage.pdf",
+      "stache_ai_ocr": {
+        "time_ms": 115.97,
+        "text_length": 6276,
+        "success": true,
+        "error": null
+      },
+      "stache_tools_ocr": {
+        "time_ms": 8.72,
+        "text_length": 6287,
+        "ocr_used": false,
+        "success": true,
+        "error": null
+      }
+    },
+    {
+      "filename": "06-hybrid.pdf",
+      "stache_ai_ocr": {
+        "time_ms": 6.05,
+        "text_length": 372,
+        "success": true,
+        "error": null
+      },
+      "stache_tools_ocr": {
+        "time_ms": 1.07,
+        "text_length": 373,
+        "ocr_used": false,
+        "success": true,
+        "error": null
+      }
+    }
+  ]
+}
