@@ -15,6 +15,13 @@ class RequestContext:
 
     The `custom` dict uses namespaced keys to avoid collisions:
     Example: custom["ACLMiddleware.allowed_ns"] = ["ns1", "ns2"]
+
+    Provider Access:
+        For PostIngestProcessor middleware, providers are available via custom dict:
+        - custom.get("embedding_provider"): EmbeddingProvider
+        - custom.get("vectordb"): VectorDBProvider
+        - custom.get("document_index"): DocumentIndexProvider
+        - custom.get("llm_provider"): LLMProvider
     """
     request_id: str
     timestamp: datetime

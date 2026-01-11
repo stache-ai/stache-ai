@@ -95,14 +95,17 @@ def do_ingest_text(text: str, metadata: dict = None, namespace: str = None,
         Result dictionary with chunks_created and request_id
 
     Raises:
-        ValueError: If text exceeds 100KB
+        ValueError: If text exceeds max_ingest_text_bytes (default 10MB, configurable)
     """
     request_id = request_id or str(uuid.uuid4())
 
-    # Enforce max 100KB text
+    # Enforce max text size (configurable via MAX_INGEST_TEXT_BYTES env var)
     text_bytes = text.encode('utf-8')
-    if len(text_bytes) > 100 * 1024:  # 100KB
-        error_msg = f"Text exceeds maximum size of 100KB (got {len(text_bytes) / 1024:.1f}KB)"
+    max_bytes = settings.max_ingest_text_bytes
+    if len(text_bytes) > max_bytes:
+        size_mb = len(text_bytes) / 1024 / 1024
+        limit_mb = max_bytes / 1024 / 1024
+        error_msg = f"Text exceeds maximum size of {limit_mb:.1f}MB (got {size_mb:.1f}MB)"
         logger.error(f"[{request_id}] {error_msg}")
         raise ValueError(error_msg)
 

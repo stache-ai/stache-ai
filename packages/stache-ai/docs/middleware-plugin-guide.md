@@ -6,6 +6,7 @@ The Stache middleware plugin architecture enables developers to extend the RAG p
 
 - **Enrichment**: Transform content before chunking (ingest phase)
 - **Chunk Observation**: Monitor/audit chunks after storage (ingest phase)
+- **Post-Ingest Processing**: Generate artifacts after chunk storage (ingest phase)
 - **Query Processing**: Rewrite/filter queries before search (query phase)
 - **Result Processing**: Filter/enrich results after search (query phase)
 - **Delete Observation**: Validate and audit document deletion (delete phase)
@@ -194,7 +195,152 @@ class QuotaEnforcer(ChunkObserver):
 - `allow`: Continue normally
 - `reject`: Log warning (no rollback)
 
-### 3. QueryProcessor - Query Enhancement (Query Phase)
+### 3. PostIngestProcessor - Artifact Generation (Ingest Phase)
+
+PostIngestProcessors run **after chunks are stored** to generate additional artifacts like summaries, extracted entities, or metadata records. Unlike ChunkObserver (advisory), PostIngestProcessor creates new content that should be stored.
+
+**Use Cases**:
+- Generate document summaries for semantic discovery
+- Extract named entities for metadata enrichment
+- Create knowledge graph relationships
+- Compute document fingerprints or signatures
+
+**Key Features**:
+- **Non-blocking**: Failures never block ingestion (enforced `on_error="skip"`)
+- **Artifact collection**: Return structured artifacts for pipeline coordination
+- **Provider access**: Access embedding, vector DB, and document index via context
+- **Priority ordering**: Control execution sequence with priority values
+
+```python
+from stache_ai.middleware.base import PostIngestProcessor, StorageResult
+from stache_ai.middleware.results import PostIngestResult
+from stache_ai.middleware.context import RequestContext
+
+class DocumentSummaryGenerator(PostIngestProcessor):
+    """Generate semantic summaries for document discovery."""
+
+    priority = 50  # Lower values run earlier
+
+    async def process(
+        self,
+        chunks: list[tuple[str, dict]],
+        storage_result: StorageResult,
+        context: RequestContext
+    ) -> PostIngestResult:
+        """Generate summary from stored chunks.
+
+        Args:
+            chunks: List of (text, metadata) tuples that were stored
+            storage_result: Details about storage (doc_id, namespace, etc.)
+            context: Request context with provider access
+
+        Returns:
+            PostIngestResult with artifacts or skip action
+        """
+        # Access providers from context
+        embedding_provider = context.custom.get("embedding_provider")
+        summaries_provider = context.custom.get("summaries_provider")
+
+        if not embedding_provider or not summaries_provider:
+            return PostIngestResult(
+                action="skip",
+                reason="Required providers not available"
+            )
+
+        try:
+            # Combine first few chunks for summary
+            summary_text = " ".join(
+                chunk[0] for chunk in chunks[:5]
+            )[:1000]
+
+            # Generate embedding
+            summary_embedding = embedding_provider.embed(summary_text)
+
+            # Store summary record
+            summary_id = str(uuid.uuid4())
+            summaries_provider.insert(
+                vectors=[summary_embedding],
+                texts=[summary_text],
+                metadatas=[{
+                    "_type": "document_summary",
+                    "doc_id": storage_result.doc_id,
+                    "namespace": storage_result.namespace
+                }],
+                ids=[summary_id],
+                namespace=storage_result.namespace
+            )
+
+            # Return artifacts for document index
+            return PostIngestResult(
+                action="allow",
+                artifacts={
+                    "summary": summary_text,
+                    "summary_embedding": summary_embedding,
+                    "summary_id": summary_id
+                }
+            )
+
+        except Exception as e:
+            # Errors are logged but don't block ingestion
+            return PostIngestResult(
+                action="skip",
+                reason=f"Summary generation failed: {e}"
+            )
+```
+
+**Provider Access Pattern**:
+```python
+# Access providers via context.custom
+config = context.custom.get("config")
+embedding_provider = context.custom.get("embedding_provider")
+vectordb = context.custom.get("vectordb")
+document_index = context.custom.get("document_index")
+llm_provider = context.custom.get("llm_provider")
+```
+
+**StorageResult Fields**:
+```python
+storage_result.vector_ids     # IDs of stored vectors
+storage_result.namespace      # Target namespace
+storage_result.index         # Index name
+storage_result.doc_id        # Document ID (from metadata or generated)
+storage_result.chunk_count   # Number of chunks stored
+storage_result.embedding_model  # Embedding model used
+```
+
+**Error Handling**:
+PostIngestProcessor enforces `on_error="skip"` at the base class level. Exceptions should be caught and returned as skip actions to avoid blocking ingestion:
+
+```python
+try:
+    # ... artifact generation ...
+    return PostIngestResult(action="allow", artifacts=artifacts)
+except Exception as e:
+    return PostIngestResult(
+        action="skip",
+        reason=f"Failed: {e}"
+    )
+```
+
+**Actions**:
+- `allow`: Continue with generated artifacts (if any)
+- `skip`: Skip this processor (logged with reason)
+
+Note: No `reject` action - failures should not block ingestion.
+
+**Entry point**: `stache.post_ingest`
+
+**Built-in Implementations**:
+- `HeuristicSummaryGenerator`: Extracts headings and content preview for semantic document discovery (see `stache_ai.middleware.postingest.summary`)
+
+**Registration Example**:
+```toml
+[project.entry-points."stache.post_ingest"]
+summary = "my_package.middleware:DocumentSummaryGenerator"
+entity_extractor = "my_package.middleware:EntityExtractor"
+```
+
+### 4. QueryProcessor - Query Enhancement (Query Phase)
 
 QueryProcessors run **before vector search** and can:
 - Expand queries with synonyms
@@ -262,7 +408,7 @@ class QueryContext:
 - `transform`: Use modified query and/or filters
 - `reject`: Block query with reason
 
-### 4. ResultProcessor - Result Enhancement (Query Phase)
+### 5. ResultProcessor - Result Enhancement (Query Phase)
 
 ResultProcessors run **after vector search** and can:
 - Filter results by ACLs
@@ -341,7 +487,7 @@ class StreamingResultProcessor(ResultProcessor):
 - `allow`: Return results (possibly modified)
 - `reject`: Block entire query response
 
-### 5. DeleteObserver - Deletion Auditing (Delete Phase)
+### 6. DeleteObserver - Deletion Auditing (Delete Phase)
 
 DeleteObservers run **before and after deletion** for validation and auditing.
 
@@ -789,6 +935,240 @@ Here's what happens during a request with multiple middleware:
 9. **Respect mode settings**: Implement both `process()` (batch) and `process_item()` (stream)
 10. **Consider performance**: Chain runs synchronously per middleware
 
+## Metrics and Observability
+
+### Monitoring PostIngestProcessor Performance
+
+PostIngestProcessors run after chunk storage, so monitoring their performance helps identify bottlenecks:
+
+```python
+from stache_ai.middleware.base import PostIngestProcessor, StorageResult
+from stache_ai.middleware.results import PostIngestResult
+from stache_ai.middleware.context import RequestContext
+import logging
+import time
+
+logger = logging.getLogger(__name__)
+
+class InstrumentedSummaryGenerator(PostIngestProcessor):
+    """Summary generator with performance tracking."""
+
+    priority = 50
+
+    async def process(
+        self,
+        chunks: list[tuple[str, dict]],
+        storage_result: StorageResult,
+        context: RequestContext
+    ) -> PostIngestResult:
+        start_time = time.monotonic()
+
+        try:
+            # ... summary generation logic ...
+
+            duration = time.monotonic() - start_time
+
+            # Log metrics
+            logger.info(
+                f"Summary generated for doc_id={storage_result.doc_id} "
+                f"in {duration:.3f}s "
+                f"(chunks={storage_result.chunk_count}, "
+                f"request_id={context.request_id})"
+            )
+
+            return PostIngestResult(
+                action="allow",
+                artifacts={
+                    "summary": summary_text,
+                    "processing_time": duration
+                }
+            )
+
+        except Exception as e:
+            duration = time.monotonic() - start_time
+            logger.error(
+                f"Summary generation failed for doc_id={storage_result.doc_id} "
+                f"after {duration:.3f}s: {e}",
+                extra={"request_id": context.request_id}
+            )
+            return PostIngestResult(
+                action="skip",
+                reason=f"Failed: {e}"
+            )
+```
+
+### Tracking Artifact Generation
+
+Monitor which artifacts are being generated and their sizes:
+
+```python
+class EntityExtractor(PostIngestProcessor):
+    priority = 100
+
+    async def process(self, chunks, storage_result, context):
+        # ... extract entities ...
+
+        logger.info(
+            f"Extracted {len(entities)} entities from doc_id={storage_result.doc_id}",
+            extra={
+                "doc_id": storage_result.doc_id,
+                "entity_count": len(entities),
+                "namespace": storage_result.namespace,
+                "request_id": context.request_id
+            }
+        )
+
+        return PostIngestResult(
+            action="allow",
+            artifacts={
+                "entities": entities,
+                "entity_count": len(entities)
+            }
+        )
+```
+
+### Key Metrics to Track
+
+For **PostIngestProcessor** implementations:
+
+1. **Processing Time**: Duration from chunks received to artifacts returned
+2. **Skip Rate**: Percentage of documents where processing was skipped
+3. **Artifact Size**: Size of generated artifacts (summaries, embeddings, etc.)
+4. **Chunk Count**: Correlation between chunk count and processing time
+5. **Provider Latency**: Time spent calling embedding/vector DB providers
+6. **Error Rate**: Frequency of exceptions caught and returned as skip
+
+### Request Context Fields for Tracing
+
+Use these fields from `RequestContext` for distributed tracing:
+
+```python
+async def process(self, chunks, storage_result, context):
+    logger.info(
+        "Processing document",
+        extra={
+            "request_id": context.request_id,  # Unique per request
+            "trace_id": context.trace_id,      # Optional external trace ID
+            "user_id": context.user_id,        # User identity
+            "tenant_id": context.tenant_id,    # Multi-tenant tracking
+            "namespace": context.namespace,    # Document namespace
+            "source": context.source,          # "api", "mcp", or "cli"
+            "timestamp": context.timestamp.isoformat()
+        }
+    )
+```
+
+### Structured Logging Example
+
+```python
+import structlog
+
+logger = structlog.get_logger()
+
+class LoggingPostIngestProcessor(PostIngestProcessor):
+    async def process(self, chunks, storage_result, context):
+        log = logger.bind(
+            middleware="LoggingPostIngestProcessor",
+            request_id=context.request_id,
+            doc_id=storage_result.doc_id,
+            namespace=storage_result.namespace
+        )
+
+        log.info("Starting artifact generation", chunk_count=len(chunks))
+
+        try:
+            # ... processing ...
+            log.info("Artifact generation complete", artifact_count=len(artifacts))
+            return PostIngestResult(action="allow", artifacts=artifacts)
+        except Exception as e:
+            log.error("Artifact generation failed", error=str(e))
+            return PostIngestResult(action="skip", reason=str(e))
+```
+
+### CloudWatch Metrics (AWS Deployment)
+
+For Lambda deployments, emit CloudWatch metrics:
+
+```python
+import boto3
+
+cloudwatch = boto3.client('cloudwatch')
+
+class CloudWatchPostIngestProcessor(PostIngestProcessor):
+    async def process(self, chunks, storage_result, context):
+        start = time.time()
+
+        try:
+            result = await self._generate_artifacts(chunks, storage_result, context)
+
+            # Emit success metric
+            cloudwatch.put_metric_data(
+                Namespace='Stache/PostIngest',
+                MetricData=[
+                    {
+                        'MetricName': 'ProcessingTime',
+                        'Value': time.time() - start,
+                        'Unit': 'Seconds',
+                        'Dimensions': [
+                            {'Name': 'Processor', 'Value': self.__class__.__name__},
+                            {'Name': 'Namespace', 'Value': storage_result.namespace}
+                        ]
+                    },
+                    {
+                        'MetricName': 'ChunkCount',
+                        'Value': len(chunks),
+                        'Unit': 'Count'
+                    }
+                ]
+            )
+
+            return result
+
+        except Exception as e:
+            # Emit error metric
+            cloudwatch.put_metric_data(
+                Namespace='Stache/PostIngest',
+                MetricData=[
+                    {
+                        'MetricName': 'Errors',
+                        'Value': 1,
+                        'Unit': 'Count',
+                        'Dimensions': [
+                            {'Name': 'Processor', 'Value': self.__class__.__name__}
+                        ]
+                    }
+                ]
+            )
+
+            return PostIngestResult(action="skip", reason=str(e))
+```
+
+### Performance Benchmarking
+
+Use the built-in timing from `context.timestamp`:
+
+```python
+async def process(self, chunks, storage_result, context):
+    request_start = context.timestamp
+
+    # ... processing ...
+
+    from datetime import datetime, timezone
+    processing_duration = (datetime.now(timezone.utc) - request_start).total_seconds()
+
+    return PostIngestResult(
+        action="allow",
+        artifacts={
+            "summary": summary,
+            "metrics": {
+                "request_duration": processing_duration,
+                "chunk_count": len(chunks),
+                "summary_length": len(summary)
+            }
+        }
+    )
+```
+
 ## Deployment
 
 ### Local Development
@@ -872,18 +1252,25 @@ for plugin in plugins:
 
 - `MiddlewareBase`: Base for all middleware (priority, dependencies, timeouts)
 - `Enricher`: Content transformation before chunking
+- `ChunkObserver`: Storage auditing (advisory only)
+- `PostIngestProcessor`: Artifact generation after chunk storage
 - `QueryProcessor`: Query rewriting before search
 - `ResultProcessor`: Result filtering after search
-- `ChunkObserver`: Storage auditing (advisory only)
 - `DeleteObserver`: Deletion validation and auditing
 
 ### Result Classes
 
 - `EnrichmentResult`: Action, content, metadata (allow/transform/reject)
+- `ObserverResult`: Action (allow/reject)
+- `PostIngestResult`: Action, artifacts (allow/skip)
 - `QueryProcessorResult`: Action, query, filters (allow/transform/reject)
 - `ResultProcessorResult`: Action, results (allow/reject)
-- `ObserverResult`: Action (allow/reject)
 - `SearchResult`: text, score, metadata, vector_id
+
+### Data Classes
+
+- `StorageResult`: Information about stored chunks (vector_ids, namespace, doc_id, chunk_count, embedding_model)
+- `DeleteTarget`: What is being deleted (target_type, doc_id, namespace, chunk_ids)
 
 ### Context Classes
 

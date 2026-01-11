@@ -5,6 +5,37 @@ All notable changes to stache-ai will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-01-11
+
+### Added
+
+- **PostIngestProcessor Middleware**: New middleware type for generating artifacts after document ingestion
+  - `PostIngestProcessor` base class with enforced skip-on-error semantics
+  - `HeuristicSummaryGenerator` built-in implementation for document summarization
+  - Entry point: `stache.postingest_processor` for plugin registration
+  - `PostIngestResult` dataclass for structured artifact output
+
+- **Middleware Chain Enhancements**:
+  - `MiddlewareChain.run_postingest()` method for processing post-ingest chains
+  - Support for async middleware execution
+  - Comprehensive error handling with optional skip-on-error behavior
+
+### Changed
+
+- Document summary generation refactored from pipeline into middleware architecture
+- Summary generation now controlled via `enable_summary_generation` config flag
+- Pipeline's `_create_document_summary()` removed in favor of middleware-based approach
+
+### Fixed
+
+- Thread-safe lazy loading for post-ingest processor properties
+
+## [0.1.4] - 2026-01-06
+
+### Changed
+
+- Version bump for PyPI metadata consistency
+
 ## [0.1.3] - 2026-01-03
 
 ### Fixed

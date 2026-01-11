@@ -16,6 +16,7 @@ Entry Point Groups:
     - stache.query_processor: Query processor middleware
     - stache.result_processor: Result processor middleware
     - stache.delete_observer: Delete observer middleware
+    - stache.postingest_processor: Post-ingest processor middleware
     - stache.loader: Document format loaders
     - stache.chunking: Chunking strategies
 
@@ -74,6 +75,7 @@ PROVIDER_GROUPS = {
     'query_processor': 'stache.query_processor',
     'result_processor': 'stache.result_processor',
     'delete_observer': 'stache.delete_observer',
+    'postingest_processor': 'stache.postingest_processor',
     'loader': 'stache.loader',
     'chunking': 'stache.chunking',
 }

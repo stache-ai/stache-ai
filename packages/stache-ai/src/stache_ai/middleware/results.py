@@ -68,3 +68,39 @@ class ResultProcessorResult:
     action: Literal["allow", "reject"]
     results: list[SearchResult] | None = None
     reason: str | None = None
+
+
+@dataclass
+class PostIngestResult:
+    """Result from post-ingest processor middleware (after chunk storage).
+
+    PostIngestProcessors generate artifacts (summaries, extracted entities, etc.)
+    that should be stored. The pipeline coordinates storage.
+
+    Actions:
+        allow: Continue with artifacts (if any)
+        skip: Skip this processor (log reason)
+
+    Note: No "reject" action - failures should not block ingestion.
+    Use on_error="skip" enforced at base class level.
+
+    Artifacts:
+        Dictionary of generated content to store. Common keys:
+        - "summary": Text summary of the document
+        - "summary_embedding": Vector embedding of summary
+        - "headings": List of extracted section headings
+        - Custom keys for plugin-specific artifacts
+
+    Warning: Duplicate keys will overwrite earlier artifacts.
+    """
+    action: Literal["allow", "skip"]
+    artifacts: dict[str, Any] | None = None
+    reason: str | None = None
+
+    def __post_init__(self):
+        """Validate artifacts dictionary if provided."""
+        if self.artifacts is not None:
+            if not isinstance(self.artifacts, dict):
+                raise TypeError(f"artifacts must be dict, got {type(self.artifacts)}")
+            # Note: We don't enforce strict typing of artifact values yet
+            # Future: could add artifact type registry for validation

@@ -18,6 +18,7 @@ from .results import (
     ObserverResult,
     QueryProcessorResult,
     ResultProcessorResult,
+    PostIngestResult,
 )
 from .base import (
     MiddlewareBase,
@@ -28,6 +29,7 @@ from .base import (
     ResultProcessor,
     DeleteObserver,
     DeleteTarget,
+    PostIngestProcessor,
 )
 from .chain import (
     MiddlewareChain,
@@ -45,6 +47,7 @@ __all__ = [
     "ObserverResult",
     "QueryProcessorResult",
     "ResultProcessorResult",
+    "PostIngestResult",
     # Base classes
     "MiddlewareBase",
     "Enricher",
@@ -54,6 +57,7 @@ __all__ = [
     "ResultProcessor",
     "DeleteObserver",
     "DeleteTarget",
+    "PostIngestProcessor",
     # Chain executor
     "MiddlewareChain",
     "MiddlewareError",

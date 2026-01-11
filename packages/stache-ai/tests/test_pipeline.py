@@ -6,6 +6,9 @@ import pytest
 
 from stache_ai.rag.pipeline import RAGPipeline, get_pipeline
 
+# Use anyio for async test support
+pytestmark = pytest.mark.anyio
+
 
 class TestRAGPipeline:
     """Tests for RAGPipeline class"""
@@ -13,6 +16,8 @@ class TestRAGPipeline:
     @pytest.fixture
     def mock_pipeline(self, mock_embedding_provider, mock_llm_provider, mock_vectordb_provider, mock_document_index_provider, mock_documents_provider, mock_summaries_provider, mock_insights_provider):
         """Create a pipeline with mocked providers"""
+        from stache_ai.middleware.postingest.summary import HeuristicSummaryGenerator
+
         pipeline = RAGPipeline()
         pipeline._embedding_provider = mock_embedding_provider
         pipeline._llm_provider = mock_llm_provider
@@ -22,6 +27,13 @@ class TestRAGPipeline:
         pipeline._documents_provider = mock_documents_provider
         pipeline._summaries_provider = mock_summaries_provider
         pipeline._insights_provider = mock_insights_provider
+        # Mock middleware lists (empty by default)
+        pipeline._enrichers = []
+        pipeline._chunk_observers = []
+        pipeline._postingest_processors = [HeuristicSummaryGenerator()]
+        pipeline._query_processors = []
+        pipeline._result_processors = []
+        pipeline._delete_observers = []
         return pipeline
 
     def test_pipeline_initialization(self, test_settings):
@@ -77,9 +89,9 @@ class TestRAGPipeline:
             assert provider == mock_provider
             mock_factory.create.assert_called_once()
 
-    def test_ingest_text_basic(self, mock_pipeline):
+    async def test_ingest_text_basic(self, mock_pipeline):
         """Test basic text ingestion"""
-        result = mock_pipeline.ingest_text(
+        result = await mock_pipeline.ingest_text(
             text="This is test content for ingestion.",
             metadata={"filename": "test.txt"}
         )
@@ -92,9 +104,9 @@ class TestRAGPipeline:
         assert mock_pipeline._documents_provider.insert.call_count == 1
         assert mock_pipeline._summaries_provider.insert.call_count == 1
 
-    def test_ingest_text_with_namespace(self, mock_pipeline):
+    async def test_ingest_text_with_namespace(self, mock_pipeline):
         """Test text ingestion with namespace"""
-        result = mock_pipeline.ingest_text(
+        result = await mock_pipeline.ingest_text(
             text="Test content",
             namespace="test-namespace"
         )
@@ -104,9 +116,9 @@ class TestRAGPipeline:
         call_args = mock_pipeline._documents_provider.insert.call_args
         assert call_args.kwargs.get("namespace") == "test-namespace"
 
-    def test_ingest_text_with_chunking_strategy(self, mock_pipeline):
+    async def test_ingest_text_with_chunking_strategy(self, mock_pipeline):
         """Test text ingestion with specific chunking strategy"""
-        result = mock_pipeline.ingest_text(
+        result = await mock_pipeline.ingest_text(
             text="# Header\n\nContent paragraph.",
             chunking_strategy="markdown"
         )
@@ -114,12 +126,12 @@ class TestRAGPipeline:
         assert result["success"] is True
         assert result["chunks_created"] > 0
 
-    def test_ingest_text_with_prepend_metadata(self, mock_pipeline):
+    async def test_ingest_text_with_prepend_metadata(self, mock_pipeline):
         """Test text ingestion with metadata prepended to chunks"""
         # Disable auto-split for this test to check embed_batch directly
         mock_pipeline.config.embedding_auto_split_enabled = False
 
-        result = mock_pipeline.ingest_text(
+        result = await mock_pipeline.ingest_text(
             text="Content about AI and machine learning.",
             metadata={"speaker": "John Doe", "topic": "AI"},
             prepend_metadata=["speaker", "topic"]
@@ -132,9 +144,9 @@ class TestRAGPipeline:
         # At least one chunk should have the prepended metadata
         assert any("Speaker: John Doe" in text for text in embedded_texts)
 
-    def test_query_with_synthesis(self, mock_pipeline):
+    async def test_query_with_synthesis(self, mock_pipeline):
         """Test query with LLM synthesis"""
-        result = mock_pipeline.query(
+        result = await mock_pipeline.query(
             question="What is Stache?",
             top_k=3,
             synthesize=True
@@ -146,9 +158,9 @@ class TestRAGPipeline:
         assert result["question"] == "What is Stache?"
         mock_pipeline._llm_provider.generate_with_context.assert_called_once()
 
-    def test_query_without_synthesis(self, mock_pipeline):
+    async def test_query_without_synthesis(self, mock_pipeline):
         """Test query without LLM synthesis (search only)"""
-        result = mock_pipeline.query(
+        result = await mock_pipeline.query(
             question="What is Stache?",
             top_k=3,
             synthesize=False
@@ -159,9 +171,9 @@ class TestRAGPipeline:
         assert "answer" not in result
         mock_pipeline._llm_provider.generate_with_context.assert_not_called()
 
-    def test_query_with_namespace(self, mock_pipeline):
+    async def test_query_with_namespace(self, mock_pipeline):
         """Test query with namespace filter"""
-        result = mock_pipeline.query(
+        result = await mock_pipeline.query(
             question="Test question",
             namespace="test-namespace"
         )
@@ -171,9 +183,9 @@ class TestRAGPipeline:
         call_args = mock_pipeline._documents_provider.search.call_args
         assert call_args.kwargs.get("namespace") == "test-namespace"
 
-    def test_query_returns_sources(self, mock_pipeline):
+    async def test_query_returns_sources(self, mock_pipeline):
         """Test that query returns properly formatted sources"""
-        result = mock_pipeline.query(
+        result = await mock_pipeline.query(
             question="Test question",
             synthesize=False
         )
@@ -184,9 +196,9 @@ class TestRAGPipeline:
             assert "metadata" in source
             assert "score" in source
 
-    def test_search_method(self, mock_pipeline):
+    async def test_search_method(self, mock_pipeline):
         """Test search method (alias for query without synthesis)"""
-        result = mock_pipeline.search(
+        result = await mock_pipeline.search(
             query="Test query",
             top_k=5
         )
@@ -210,11 +222,11 @@ class TestRAGPipeline:
         assert "vectordb_provider" in info
         assert "embedding_dimensions" in info
 
-    def test_query_empty_results(self, mock_pipeline):
+    async def test_query_empty_results(self, mock_pipeline):
         """Test query when no results found"""
         mock_pipeline._documents_provider.search.return_value = []
 
-        result = mock_pipeline.query(
+        result = await mock_pipeline.query(
             question="Unknown topic",
             synthesize=True
         )
@@ -255,7 +267,7 @@ class TestGetPipeline:
 class TestPipelineIntegration:
     """Integration tests for RAG pipeline (with mocks)"""
 
-    def test_full_ingest_and_query_flow(
+    async def test_full_ingest_and_query_flow(
         self,
         mock_embedding_provider,
         mock_llm_provider,
@@ -275,16 +287,23 @@ class TestPipelineIntegration:
         pipeline._documents_provider = mock_documents_provider
         pipeline._summaries_provider = mock_summaries_provider
         pipeline._insights_provider = mock_insights_provider
+        # Mock middleware lists
+        pipeline._enrichers = []
+        pipeline._chunk_observers = []
+        pipeline._postingest_processors = []
+        pipeline._query_processors = []
+        pipeline._result_processors = []
+        pipeline._delete_observers = []
 
         # Ingest some content
-        ingest_result = pipeline.ingest_text(
+        ingest_result = await pipeline.ingest_text(
             text="Stache is a personal knowledge base system. It uses AI to help organize information.",
             metadata={"filename": "intro.txt", "type": "documentation"}
         )
         assert ingest_result["success"] is True
 
         # Query the content
-        query_result = pipeline.query(
+        query_result = await pipeline.query(
             question="What is Stache?",
             synthesize=True
         )
@@ -293,7 +312,7 @@ class TestPipelineIntegration:
         assert "answer" in query_result
         assert len(query_result["sources"]) > 0
 
-    def test_ingest_with_different_strategies(
+    async def test_ingest_with_different_strategies(
         self,
         mock_embedding_provider,
         mock_vectordb_provider,
@@ -312,6 +331,13 @@ class TestPipelineIntegration:
         pipeline._documents_provider = mock_documents_provider
         pipeline._summaries_provider = mock_summaries_provider
         pipeline._insights_provider = mock_insights_provider
+        # Mock middleware lists
+        pipeline._enrichers = []
+        pipeline._chunk_observers = []
+        pipeline._postingest_processors = []
+        pipeline._query_processors = []
+        pipeline._result_processors = []
+        pipeline._delete_observers = []
 
         strategies = ["recursive", "markdown", "character"]
 
@@ -319,7 +345,7 @@ class TestPipelineIntegration:
             mock_vectordb_provider.reset_mock()
             mock_embedding_provider.reset_mock()
 
-            result = pipeline.ingest_text(
+            result = await pipeline.ingest_text(
                 text=sample_text,
                 chunking_strategy=strategy
             )

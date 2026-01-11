@@ -92,12 +92,14 @@ class RAGPipeline:
         # Middleware
         self._enrichers = None
         self._chunk_observers = None
+        self._postingest_processors = None
         self._query_processors = None
         self._result_processors = None
         self._delete_observers = None
         # Thread-safe locks for middleware lazy initialization
         self._enrichers_lock = threading.Lock()
         self._chunk_observers_lock = threading.Lock()
+        self._postingest_processors_lock = threading.Lock()
         self._query_processors_lock = threading.Lock()
         self._result_processors_lock = threading.Lock()
         self._delete_observers_lock = threading.Lock()
@@ -204,6 +206,19 @@ class RAGPipeline:
                     self._chunk_observers.sort(key=lambda o: o.priority)
                     logger.info(f"Loaded {len(self._chunk_observers)} chunk observers")
         return self._chunk_observers
+
+    @property
+    def postingest_processors(self):
+        """Lazy-load post-ingest processor middleware"""
+        if self._postingest_processors is None:
+            with self._postingest_processors_lock:
+                if self._postingest_processors is None:  # Double-check pattern
+                    from stache_ai.providers.plugin_loader import get_providers
+                    processor_classes = get_providers('postingest_processor')
+                    self._postingest_processors = [cls() for cls in processor_classes.values()]
+                    self._postingest_processors.sort(key=lambda p: p.priority)
+                    logger.info(f"Loaded {len(self._postingest_processors)} post-ingest processors")
+        return self._postingest_processors
 
     @property
     def query_processors(self):
@@ -427,19 +442,21 @@ class RAGPipeline:
             namespace=ns
         )
 
+        # Create storage result and chunk tuples for middleware
+        from stache_ai.middleware.base import StorageResult
+        storage_result = StorageResult(
+            vector_ids=ids,
+            namespace=ns,
+            index="documents",
+            doc_id=doc_id,
+            chunk_count=len(chunks_for_embedding),
+            embedding_model=self.embedding_provider.get_name()
+        )
+        # Prepare chunks as (text, metadata) tuples
+        chunk_tuples = list(zip(chunks_for_embedding, metadatas))
+
         # Call chunk observers after storage (advisory only)
         for observer in self.chunk_observers:
-            from stache_ai.middleware.base import StorageResult
-            storage_result = StorageResult(
-                vector_ids=ids,
-                namespace=ns,
-                index="documents",
-                doc_id=doc_id,
-                chunk_count=len(chunks_for_embedding),
-                embedding_model=self.embedding_provider.get_name()
-            )
-            # Prepare chunks as (text, metadata) tuples
-            chunk_tuples = list(zip(chunks_for_embedding, metadatas))
             try:
                 result = await observer.on_chunks_stored(chunk_tuples, storage_result, context)
                 if result.action == "reject":
@@ -462,15 +479,26 @@ class RAGPipeline:
             if len(text) > 30:
                 preview += "..."
             filename = f"Capture {timestamp} - {preview}"
-        summary_text, headings, summary_id = self._create_document_summary(
-            doc_id=doc_id,
-            filename=filename,
-            namespace=ns,
-            chunks=chunks,
-            chunk_metadatas=metadatas,
-            created_at=created_at,
-            metadata=metadata
+
+        # Run post-ingest processors (summary generation, entity extraction, etc.)
+        from stache_ai.middleware.chain import MiddlewareChain
+
+        # Populate context with providers for PostIngestProcessors
+        context.custom["embedding_provider"] = self.embedding_provider
+        context.custom["summaries_provider"] = self.summaries_provider
+        context.custom["config"] = self.config
+
+        artifacts = await MiddlewareChain.run_postingest(
+            processors=self.postingest_processors,
+            chunks=chunk_tuples,
+            storage_result=storage_result,
+            context=context
         )
+
+        # Extract summary artifacts (if generated)
+        summary_text = artifacts.get("summary")
+        headings = artifacts.get("headings", [])
+        summary_id = artifacts.get("summary_id")
 
         # Create document index entry for efficient metadata queries (dual-write pattern)
         # This is wrapped in try/except to prevent ingestion failure if index write fails
@@ -723,19 +751,21 @@ class RAGPipeline:
             namespace=ns
         )
 
+        # Create storage result and chunk tuples for middleware
+        from stache_ai.middleware.base import StorageResult
+        storage_result = StorageResult(
+            vector_ids=ids,
+            namespace=ns,
+            index="documents",
+            doc_id=doc_id,
+            chunk_count=len(chunks_for_embedding),
+            embedding_model=self.embedding_provider.get_name()
+        )
+        # Prepare chunks as (text, metadata) tuples
+        chunk_tuples = list(zip(chunks_for_embedding, metadatas))
+
         # Call chunk observers after storage (advisory only)
         for observer in self.chunk_observers:
-            from stache_ai.middleware.base import StorageResult
-            storage_result = StorageResult(
-                vector_ids=ids,
-                namespace=ns,
-                index="documents",
-                doc_id=doc_id,
-                chunk_count=len(chunks_for_embedding),
-                embedding_model=self.embedding_provider.get_name()
-            )
-            # Prepare chunks as (text, metadata) tuples
-            chunk_tuples = list(zip(chunks_for_embedding, metadatas))
             try:
                 result = await observer.on_chunks_stored(chunk_tuples, storage_result, context)
                 if result.action == "reject":
@@ -746,16 +776,25 @@ class RAGPipeline:
             except Exception as e:
                 logger.error(f"Chunk observer {observer.__class__.__name__} failed: {e}")
 
-        # Create document summary record for fast catalog and semantic discovery
-        summary_text, headings, summary_id = self._create_document_summary(
-            doc_id=doc_id,
-            filename=filename,
-            namespace=ns,
-            chunks=chunks,
-            chunk_metadatas=chunk_metadatas,
-            created_at=created_at,
-            metadata=metadata
+        # Run post-ingest processors (summary generation, entity extraction, etc.)
+        from stache_ai.middleware.chain import MiddlewareChain
+
+        # Populate context with providers for PostIngestProcessors
+        context.custom["embedding_provider"] = self.embedding_provider
+        context.custom["summaries_provider"] = self.summaries_provider
+        context.custom["config"] = self.config
+
+        artifacts = await MiddlewareChain.run_postingest(
+            processors=self.postingest_processors,
+            chunks=chunk_tuples,
+            storage_result=storage_result,
+            context=context
         )
+
+        # Extract summary artifacts (if generated)
+        summary_text = artifacts.get("summary")
+        headings = artifacts.get("headings", [])
+        summary_id = artifacts.get("summary_id")
 
         # Create document index entry for efficient metadata queries (dual-write pattern)
         # This is wrapped in try/except to prevent ingestion failure if index write fails
@@ -800,112 +839,6 @@ class RAGPipeline:
 
         return result
 
-    def _create_document_summary(
-        self,
-        doc_id: str,
-        filename: str,
-        namespace: str,
-        chunks: list[str],
-        chunk_metadatas: list[dict[str, Any]],
-        created_at: str,
-        metadata: dict[str, Any] | None = None
-    ) -> tuple[str | None, list[str], str | None]:
-        """
-        Create a document summary record in the vector DB for fast catalog
-        and semantic discovery.
-
-        The summary record has _type: "document_summary" to distinguish
-        it from regular chunks. It contains:
-        - Document info (filename, namespace, doc_id)
-        - Headings extracted from chunks (for semantic search)
-        - First ~1500 chars of content (for topic matching)
-        - Chunk count for display
-
-        Args:
-            doc_id: The document ID
-            filename: Original filename
-            namespace: Namespace the document belongs to
-            chunks: List of chunk texts
-            chunk_metadatas: Metadata from each chunk (may contain headings)
-            created_at: ISO timestamp
-            metadata: Original document metadata
-
-        Returns:
-            Tuple of (summary_text, headings, summary_id) for document index creation,
-            or (None, [], None) if summary creation fails
-        """
-        try:
-            # Extract unique headings from chunk metadata (from hierarchical chunking)
-            headings = []
-            seen_headings = set()
-            for chunk_meta in chunk_metadatas:
-                for heading in chunk_meta.get("headings", []):
-                    if heading and heading not in seen_headings:
-                        headings.append(heading)
-                        seen_headings.add(heading)
-
-            # Build summary text for semantic search
-            # Format: Document: {filename}\nNamespace: {namespace}\nHeadings: {...}\n\n{first 500 chars}
-            summary_parts = [
-                f"Document: {filename}",
-                f"Namespace: {namespace}"
-            ]
-
-            if headings:
-                summary_parts.append(f"Headings: {', '.join(headings[:20])}")  # Limit to 20 headings
-
-            # Add first ~1500 chars of content from first chunks for better semantic matching
-            content_preview = ""
-            char_count = 0
-            for chunk in chunks:
-                remaining = 1500 - char_count
-                if remaining <= 0:
-                    break
-                content_preview += chunk[:remaining] + " "
-                char_count += len(chunk[:remaining])
-
-            if content_preview.strip():
-                summary_parts.append("")  # Empty line before content
-                summary_parts.append(content_preview.strip())
-
-            summary_text = "\n".join(summary_parts)
-
-            # Generate embedding for summary
-            summary_embedding = self.embedding_provider.embed(summary_text)
-
-            # Create summary record - use a new UUID (Qdrant requires valid UUID or integer)
-            summary_id = str(uuid.uuid4())
-            summary_metadata = {
-                "_type": "document_summary",
-                "doc_id": doc_id,
-                "filename": filename,
-                "namespace": namespace,
-                "chunk_count": len(chunks),
-                "created_at": created_at,
-                **(metadata or {})
-            }
-            # Only include headings if non-empty (S3 Vectors rejects empty arrays)
-            if headings:
-                summary_metadata["headings"] = headings[:50]
-
-            # Insert summary record
-            self.summaries_provider.insert(
-                vectors=[summary_embedding],
-                texts=[summary_text],
-                metadatas=[summary_metadata],
-                ids=[summary_id],
-                namespace=namespace
-            )
-
-            logger.info(f"Created document summary for {filename} (doc_id: {doc_id}, headings: {len(headings)})")
-
-            # Return summary data for document index creation
-            return summary_text, headings, summary_id
-
-        except Exception as e:
-            # Don't fail the whole ingestion if summary creation fails
-            logger.error(f"Failed to create document summary for {filename}: {e}")
-            return None, [], None
 
     def get_available_chunking_strategies(self) -> list[str]:
         """Get list of available chunking strategies"""

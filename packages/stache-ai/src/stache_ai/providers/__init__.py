@@ -30,9 +30,11 @@ from .factories import (
     VectorDBProviderFactory,
 )
 
-# Pre-load providers at import time for eager discovery
-# This ensures entry points are resolved early
-plugin_loader.load_all()
+# Pre-loading providers removed to avoid circular imports
+# Providers are loaded lazily on first access via get_providers()
+# This allows stache-ai-documents loaders to import from stache_ai.loaders.base
+# without triggering premature plugin discovery
+# plugin_loader.load_all()
 
 __all__ = [
     # Base classes

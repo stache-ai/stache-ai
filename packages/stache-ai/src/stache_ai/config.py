@@ -205,6 +205,11 @@ class Settings(BaseSettings):
     chunk_max_size: int = 2500  # Hard limit including metadata prefix
     chunk_metadata_reserve: int = 300  # Reserved space for prepended metadata (e.g., speaker, topic)
 
+    # Max input text size for single ingest operation (before chunking)
+    # Prevents abuse and memory issues. Set to 10MB to support large PDFs/documents.
+    # Lambda has 6MB payload limit, so this protects against near-limit payloads.
+    max_ingest_text_bytes: int = 10 * 1024 * 1024  # 10MB
+
     # ===== Middleware Configuration =====
     # Enrichment
     enrichment_enabled: bool = True
@@ -214,6 +219,12 @@ class Settings(BaseSettings):
     # Audio transcription (lazy loaded, optional dependency)
     whisper_model: str = "base"
     whisper_enabled: bool = False  # Must explicitly enable
+
+    # Post-ingest processing
+    enable_summary_generation: bool = Field(
+        default=True,
+        description="Generate document summaries via PostIngestProcessor middleware"
+    )
 
     # Middleware chain behavior
     middleware_default_on_error: Literal["allow", "reject", "skip"] = "reject"

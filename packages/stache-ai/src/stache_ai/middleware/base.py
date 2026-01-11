@@ -6,7 +6,7 @@ from typing import Literal, Any, ClassVar, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .context import RequestContext, QueryContext
-    from .results import EnrichmentResult, ObserverResult, QueryProcessorResult, ResultProcessorResult, SearchResult
+    from .results import EnrichmentResult, ObserverResult, QueryProcessorResult, ResultProcessorResult, SearchResult, PostIngestResult
 
 
 class MiddlewareBase(ABC):
@@ -260,5 +260,79 @@ class ChunkObserver(MiddlewareBase):
             ObserverResult with action:
             - allow: Continue (normal case)
             - reject: Log error/warning (NO ROLLBACK in Phase 1)
+        """
+        pass
+
+
+class PostIngestProcessor(MiddlewareBase):
+    """Base class for post-ingest artifact generation.
+
+    PostIngestProcessors run after chunks are stored to generate
+    additional artifacts (summaries, extracted entities, etc.).
+    Unlike ChunkObserver (advisory), PostIngestProcessor generates
+    new content that should be stored.
+
+    Error Handling:
+        ALWAYS uses on_error="skip" (enforced at base class level).
+        Failures should not block ingestion. The pipeline logs errors
+        but continues processing.
+
+    Provider Access:
+        Access providers via context.custom for artifact generation:
+        - context.custom.get("embedding_provider"): EmbeddingProvider
+        - context.custom.get("vectordb"): VectorDBProvider
+        - context.custom.get("document_index"): DocumentIndexProvider
+        - context.custom.get("summaries_provider"): SummariesProvider
+        - context.custom.get("config"): Settings
+
+    Example:
+        class SummaryGenerator(PostIngestProcessor):
+            priority = 50  # Run before entity extraction
+
+            async def process(self, chunks, storage_result, context):
+                # Combine chunk text
+                full_text = " ".join(chunk[0] for chunk in chunks[:10])
+
+                # Generate summary (using LLM via context.llm_provider)
+                summary = await generate_summary(full_text)
+
+                # Generate embedding
+                embedding = await context.embedding_provider.embed([summary])
+
+                return PostIngestResult(
+                    action="allow",
+                    artifacts={
+                        "summary": summary,
+                        "summary_embedding": embedding[0]
+                    }
+                )
+    """
+
+    # Enforce skip-on-error semantics
+    on_error: ClassVar[Literal["skip"]] = "skip"
+
+    @abstractmethod
+    async def process(
+        self,
+        chunks: list[tuple[str, dict[str, Any]]],
+        storage_result: StorageResult,
+        context: "RequestContext"
+    ) -> "PostIngestResult":
+        """Generate artifacts after chunk storage.
+
+        Args:
+            chunks: List of (text, metadata) tuples that were stored
+            storage_result: Details about the storage operation
+            context: Request context with provider access via custom dict
+
+        Returns:
+            PostIngestResult with:
+            - allow: Continue with artifacts (if any)
+            - skip: Skip this processor with reason (logged)
+
+        Note: Providers accessed via context.custom:
+            - context.custom.get("embedding_provider")
+            - context.custom.get("vectordb")
+            - context.custom.get("document_index")
         """
         pass

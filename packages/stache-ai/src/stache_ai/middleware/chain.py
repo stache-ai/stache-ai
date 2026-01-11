@@ -227,3 +227,94 @@ class MiddlewareChain(Generic[T, R]):
                     logger.warning(f"on_chain_complete failed for {middleware.__class__.__name__}: {e}")
 
         return current, results
+
+    @staticmethod
+    async def run_postingest(
+        processors: list,
+        chunks: list[tuple[str, dict[str, Any]]],
+        storage_result: Any,
+        context: "RequestContext"
+    ) -> dict[str, Any]:
+        """Execute PostIngestProcessors in priority order.
+
+        PostIngestProcessors generate artifacts (summaries, entities, etc.) after
+        chunk storage. This method coordinates execution and artifact collection.
+
+        Args:
+            processors: List of PostIngestProcessor instances
+            chunks: List of (text, metadata) tuples that were stored
+            storage_result: StorageResult with doc_id, namespace, etc.
+            context: Request context with provider access
+
+        Returns:
+            Combined artifacts dict from all processors.
+            Keys from later processors overwrite earlier ones (logged as warning).
+
+        Note:
+            - Processors execute in priority order (lower priority = earlier)
+            - Failures are logged but don't block (on_error="skip" enforced)
+            - Artifact key conflicts result in warning logs
+        """
+        # Import here to avoid circular imports
+        from .results import PostIngestResult
+
+        # Sort by priority (lower values run first)
+        sorted_processors = sorted(processors, key=lambda p: p.priority)
+
+        combined_artifacts: dict[str, Any] = {}
+
+        for processor in sorted_processors:
+            name = processor.__class__.__name__
+            start_time = time.monotonic()
+
+            try:
+                # Execute processor with timeout protection
+                if processor.timeout_seconds:
+                    result: PostIngestResult = await asyncio.wait_for(
+                        processor.process(chunks, storage_result, context),
+                        timeout=processor.timeout_seconds
+                    )
+                else:
+                    result: PostIngestResult = await processor.process(chunks, storage_result, context)
+
+                elapsed_ms = (time.monotonic() - start_time) * 1000
+
+                logger.info(
+                    "postingest_processor_executed",
+                    extra={
+                        "processor": name,
+                        "action": result.action,
+                        "duration_ms": round(elapsed_ms, 2),
+                        "request_id": context.request_id,
+                    }
+                )
+
+                if result.action == "skip":
+                    logger.info(f"PostIngestProcessor {name} skipped: {result.reason}")
+                    continue
+
+                # Collect artifacts
+                if result.artifacts:
+                    # Check for key conflicts
+                    overlapping_keys = set(result.artifacts.keys()) & set(combined_artifacts.keys())
+                    if overlapping_keys:
+                        logger.warning(
+                            f"PostIngestProcessor {name} overwrites artifacts: {overlapping_keys}. "
+                            f"Previous values will be lost."
+                        )
+
+                    combined_artifacts.update(result.artifacts)
+
+            except Exception as e:
+                # PostIngestProcessor enforces on_error="skip"
+                logger.error(
+                    "postingest_processor_error",
+                    extra={
+                        "processor": name,
+                        "error": str(e),
+                        "request_id": context.request_id,
+                    }
+                )
+                # Continue with next processor
+
+        return combined_artifacts
