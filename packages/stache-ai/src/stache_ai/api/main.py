@@ -2,6 +2,7 @@
 
 import logging
 import os
+from importlib.metadata import entry_points
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -58,6 +59,15 @@ app.include_router(pending.router, prefix="/api", tags=["pending"])
 app.include_router(namespaces.router, prefix="/api", tags=["namespaces"])
 app.include_router(models.router, prefix="/api", tags=["models"])
 app.include_router(insights.router, prefix="/api", tags=["insights"])
+
+# Discover and mount route plugins (e.g., enterprise concepts API)
+for ep in entry_points(group="stache.routes"):
+    try:
+        router = ep.load()
+        app.include_router(router, prefix="/api", tags=[ep.name])
+        logger.info(f"Loaded route plugin: {ep.name}")
+    except Exception as e:
+        logger.warning(f"Failed to load route plugin {ep.name}: {e}")
 
 # Serve static frontend files
 static_dir = Path("/app/static")

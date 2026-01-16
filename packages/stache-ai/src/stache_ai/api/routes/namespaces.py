@@ -319,13 +319,14 @@ async def update_namespace(
 async def delete_namespace(
     namespace_id: str = Path(..., description="Namespace ID"),
     cascade: bool = Query(False, description="Delete child namespaces too"),
-    delete_documents: bool = Query(False, description="Also delete all documents in namespace from vector DB")
+    delete_documents: bool = Query(True, description="Also delete all documents in namespace from vector DB")
 ):
     """
     Delete a namespace.
 
     - cascade=true: Also delete all child namespaces
-    - delete_documents=true: Also delete all documents from vector DB (DANGEROUS!)
+    - delete_documents=true (default): Also delete all documents from vector DB
+    - delete_documents=false: Keep documents but delete namespace metadata only
 
     By default, fails if namespace has children (use cascade=true to force).
     """

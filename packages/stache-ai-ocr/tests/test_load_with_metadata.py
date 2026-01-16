@@ -47,9 +47,6 @@ class TestLoadWithMetadata:
         expected_text = f"{page_text}\n\n{page_text}\n\n{page_text}"
         assert result.text == expected_text
         assert result.page_count == 3
-        # char_count includes the \n\n separators (4 chars total between 3 pages)
-        assert result.char_count == len(expected_text.strip())
-        assert result.chars_per_page == pytest.approx(101.33, rel=0.01)
         assert result.ocr_used is False
         assert result.ocr_failed is False
         assert result.ocr_method is None
@@ -77,8 +74,6 @@ class TestLoadWithMetadata:
         expected_ocr_text = f"{ocr_text}\n\n{ocr_text}"
         assert result.text == expected_ocr_text
         assert result.page_count == 2
-        assert result.char_count == len(expected_ocr_text.strip())
-        assert result.chars_per_page == pytest.approx(950.5, rel=0.01)
         assert result.ocr_used is True
         assert result.ocr_failed is False
         assert result.ocr_method == "ocrmypdf"
@@ -117,8 +112,6 @@ class TestLoadWithMetadata:
         expected_text = f"{sparse_text}\n\n{sparse_text}"
         assert result.text == expected_text
         assert result.page_count == 2
-        assert result.char_count == len(expected_text.strip())
-        assert result.chars_per_page == pytest.approx(11.0, rel=0.01)
         assert result.ocr_used is True
         assert result.ocr_failed is True
         assert result.ocr_method == "ocrmypdf"
@@ -178,7 +171,7 @@ class TestLoadWithMetadata:
         assert result.error_reason == "Unexpected error"
 
     def test_metadata_accuracy_single_page(self, loader, mock_pdf):
-        """Test metadata calculations for single-page PDF."""
+        """Test metadata for single-page PDF."""
         text = "Hello world"  # 11 chars
         mock_pdf_obj = mock_pdf([text])
 
@@ -186,11 +179,10 @@ class TestLoadWithMetadata:
             result = loader.load_with_metadata("test.pdf")
 
         assert result.page_count == 1
-        assert result.char_count == 11
-        assert result.chars_per_page == 11.0
+        assert result.text == text
 
     def test_metadata_accuracy_multi_page(self, loader, mock_pdf):
-        """Test metadata calculations for multi-page PDF."""
+        """Test metadata for multi-page PDF."""
         page1 = "A" * 100
         page2 = "B" * 200
         page3 = "C" * 300
@@ -199,11 +191,9 @@ class TestLoadWithMetadata:
         with patch("pdfplumber.open", return_value=mock_pdf_obj):
             result = loader.load_with_metadata("test.pdf")
 
-        # Total: 600 chars of content + 4 chars for \n\n separators
         expected_text = f"{page1}\n\n{page2}\n\n{page3}"
         assert result.page_count == 3
-        assert result.char_count == len(expected_text.strip())
-        assert result.chars_per_page == pytest.approx(201.33, rel=0.01)
+        assert result.text == expected_text
 
     def test_backward_compatibility_load_delegates(self, loader, mock_pdf):
         """Test that load() method delegates to load_with_metadata().text."""

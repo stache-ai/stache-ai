@@ -43,9 +43,9 @@ class TestIntegrationWithTestCorpus:
             assert pdf_path.exists(), f"Test corpus PDF not found: {pdf}"
 
     @pytest.mark.parametrize(
-        "pdf_file,expected_ocr,min_chars,max_chars,page_count",
+        "pdf_file,expected_ocr,min_text_len,max_text_len,page_count",
         [
-            # (filename, should_use_ocr, min_expected_chars, max_expected_chars, pages)
+            # (filename, should_use_ocr, min_expected_text_len, max_expected_text_len, pages)
             ("01-text-based.pdf", False, 900, 1000, 1),
             ("02-empty.pdf", True, 0, 100, 1),  # Empty - may have whitespace
             ("03-single-page.pdf", False, 150, 200, 1),
@@ -56,15 +56,14 @@ class TestIntegrationWithTestCorpus:
     )
     @pytest.mark.integration
     def test_load_with_test_corpus(
-        self, loader, pdf_file, expected_ocr, min_chars, max_chars, page_count
+        self, loader, pdf_file, expected_ocr, min_text_len, max_text_len, page_count
     ):
         """Test load_with_metadata() against test corpus PDFs.
 
         Validates:
         - Correct page count detection
-        - Character count within expected range
+        - Text length within expected range
         - OCR used as expected
-        - Metadata calculations are accurate
         """
         pdf_path = FIXTURES_DIR / pdf_file
         assert pdf_path.exists(), f"PDF file not found: {pdf_path}"
@@ -79,10 +78,11 @@ class TestIntegrationWithTestCorpus:
             f"{pdf_file}: Expected {page_count} pages, got {result.page_count}"
         )
 
-        # Verify character count is in expected range
+        # Verify text length is in expected range
+        text_len = len(result.text.strip())
         assert (
-            min_chars <= result.char_count <= max_chars
-        ), f"{pdf_file}: char_count {result.char_count} outside range [{min_chars}, {max_chars}]"
+            min_text_len <= text_len <= max_text_len
+        ), f"{pdf_file}: text length {text_len} outside range [{min_text_len}, {max_text_len}]"
 
         # Verify OCR usage (accounting for ocrmypdf binary availability)
         if expected_ocr:
@@ -107,13 +107,6 @@ class TestIntegrationWithTestCorpus:
             assert result.ocr_failed is False
             assert result.ocr_method is None
 
-        # Verify chars_per_page calculation is reasonable
-        expected_chars_per_page = result.char_count / page_count if page_count > 0 else 0
-        assert abs(result.chars_per_page - expected_chars_per_page) < 0.01, (
-            f"{pdf_file}: chars_per_page mismatch: "
-            f"expected {expected_chars_per_page}, got {result.chars_per_page}"
-        )
-
         # Verify text is not None
         assert result.text is not None, f"{pdf_file}: text should not be None"
 
@@ -124,12 +117,11 @@ class TestIntegrationWithTestCorpus:
         result = loader.load_with_metadata(str(pdf_path))
 
         assert result.page_count == 1
-        assert result.char_count >= 900  # Multiple paragraphs
+        assert len(result.text) >= 900  # Multiple paragraphs
         assert result.ocr_used is False
         assert result.ocr_failed is False
         assert result.ocr_method is None
         assert result.error_reason is None
-        assert len(result.text) >= 900
 
     @pytest.mark.integration
     def test_02_empty_triggers_ocr(self, loader):
@@ -139,7 +131,7 @@ class TestIntegrationWithTestCorpus:
 
         assert result.page_count == 1
         # Empty PDF - may extract some whitespace or nothing
-        assert result.char_count < 100
+        assert len(result.text.strip()) < 100
         # Should attempt OCR for empty document
         assert result.ocr_used is True
 
@@ -150,9 +142,8 @@ class TestIntegrationWithTestCorpus:
         result = loader.load_with_metadata(str(pdf_path))
 
         assert result.page_count == 1
-        assert 150 <= result.char_count <= 200  # Title + brief content
+        assert 150 <= len(result.text.strip()) <= 200  # Title + brief content
         assert result.ocr_used is False
-        assert result.chars_per_page == result.char_count
 
     @pytest.mark.integration
     def test_04_scanned_ocr_attempt(self, loader):
@@ -170,7 +161,7 @@ class TestIntegrationWithTestCorpus:
             assert "not found" in result.error_reason or "Timeout" in result.error_reason
         else:
             # OCR succeeded - expect some extracted text
-            assert result.char_count > 0
+            assert len(result.text) > 0
 
     @pytest.mark.integration
     def test_05_large_multipage_performance(self, loader):
@@ -179,9 +170,8 @@ class TestIntegrationWithTestCorpus:
         result = loader.load_with_metadata(str(pdf_path))
 
         assert result.page_count == 11
-        assert result.char_count >= 6000  # 11 pages of lorem ipsum
+        assert len(result.text) >= 6000  # 11 pages of lorem ipsum
         assert result.ocr_used is False
-        assert result.chars_per_page >= 500  # Multiple paragraphs per page
 
     @pytest.mark.integration
     def test_06_hybrid_mixed_content(self, loader):
@@ -192,7 +182,7 @@ class TestIntegrationWithTestCorpus:
         assert result.page_count == 2
         # Page 1 has sufficient text to avoid OCR
         assert result.ocr_used is False
-        assert 300 <= result.char_count <= 500
+        assert 300 <= len(result.text.strip()) <= 500
 
     @pytest.mark.integration
     def test_metadata_to_dict_serialization(self, loader):
@@ -205,8 +195,6 @@ class TestIntegrationWithTestCorpus:
         assert isinstance(result_dict, dict)
         assert "text" in result_dict
         assert "page_count" in result_dict
-        assert "char_count" in result_dict
-        assert "chars_per_page" in result_dict
         assert "ocr_used" in result_dict
         assert "ocr_failed" in result_dict
         assert "ocr_method" in result_dict
@@ -296,8 +284,6 @@ class TestEdgeCases:
             # Check all required fields are present
             assert result.text is not None
             assert result.page_count > 0
-            assert result.char_count >= 0
-            assert result.chars_per_page >= 0
             assert isinstance(result.ocr_used, bool)
             assert isinstance(result.ocr_failed, bool)
 

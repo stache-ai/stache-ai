@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai"
-version = "0.1.5"
+version = "0.1.7"
 readme = "README.md"
 description = "Personal AI-powered knowledge base with RAG"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "Stache Contributors"}
@@ -112,6 +112,7 @@ hierarchical = "stache_ai.chunking.hierarchical:HierarchicalChunkingStrategy"
 
 [project.entry-points."stache.postingest_processor"]
 heuristic_summary = "stache_ai.middleware.postingest.summary:HeuristicSummaryGenerator"
+
 
 [project.urls]
 Homepage = "https://github.com/stache-ai/stache-ai"

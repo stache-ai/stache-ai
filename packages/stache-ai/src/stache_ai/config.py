@@ -220,10 +220,34 @@ class Settings(BaseSettings):
     whisper_model: str = "base"
     whisper_enabled: bool = False  # Must explicitly enable
 
+
+    # AI Enrichment configuration
+    ai_enrichment_enabled: bool = Field(
+        default=True,
+        description="Enable AI-powered metadata enrichment (requires plugin)"
+    )
+    ai_enrichment_model: str | None = Field(
+        default=None,
+        description="Model for AI enrichment (None = use default LLM model)"
+    )
+    ai_enrichment_max_tokens: int = 1024
+    ai_enrichment_temperature: float = 0.0  # Deterministic for metadata
+
     # Post-ingest processing
     enable_summary_generation: bool = Field(
         default=True,
         description="Generate document summaries via PostIngestProcessor middleware"
+    )
+
+    concept_index_provider: str = Field(
+        default="dynamodb",
+        description="Concept index provider (dynamodb or mongodb, requires enterprise package)"
+    )
+    concept_similarity_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description="Similarity threshold for concept deduplication"
     )
 
     # Middleware chain behavior

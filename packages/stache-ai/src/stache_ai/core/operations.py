@@ -468,3 +468,4 @@ def do_delete_document(doc_id: str, namespace: str = "default", request_id: str 
     except Exception as e:
         logger.error(f"[{request_id}] Delete document failed: {e}")
         return {"request_id": request_id, "error": str(e), "success": False}
+

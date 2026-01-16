@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai-ollama"
-version = "0.1.0"
+version = "0.1.1"
 readme = "README.md"
 description = "Ollama provider for Stache AI"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "Stache Contributors"}
 ]

@@ -86,7 +86,7 @@ class OcrPdfLoader(DocumentLoader):
         Example:
             >>> loader = OcrPdfLoader(timeout=300)
             >>> result = loader.load_with_metadata("document.pdf")
-            >>> print(f"Extracted {result.char_count} chars")
+            >>> print(f"Extracted {len(result.text)} chars")
             >>> if result.ocr_used:
             ...     print(f"Used OCR: {result.ocr_method}")
             >>> if result.ocr_failed:
@@ -106,8 +106,6 @@ class OcrPdfLoader(DocumentLoader):
                     text_parts.append(text)
 
         extracted_text = "\n\n".join(text_parts)
-        char_count = len(extracted_text.strip())
-        chars_per_page = char_count / page_count if page_count > 0 else 0
 
         # Check if OCR is needed based on text density
         if not self._needs_ocr(extracted_text, page_count):
@@ -115,12 +113,7 @@ class OcrPdfLoader(DocumentLoader):
             return OcrLoadResult(
                 text=extracted_text,
                 page_count=page_count,
-                char_count=char_count,
-                chars_per_page=chars_per_page,
-                ocr_used=False,
-                ocr_failed=False,
-                ocr_method=None,
-                error_reason=None
+                ocr_used=False
             )
 
         # OCR is needed
@@ -132,25 +125,17 @@ class OcrPdfLoader(DocumentLoader):
 
             if ocr_text.strip():
                 # OCR succeeded
-                ocr_char_count = len(ocr_text.strip())
-                ocr_chars_per_page = ocr_char_count / page_count if page_count > 0 else 0
                 return OcrLoadResult(
                     text=ocr_text,
                     page_count=page_count,
-                    char_count=ocr_char_count,
-                    chars_per_page=ocr_chars_per_page,
                     ocr_used=True,
-                    ocr_failed=False,
-                    ocr_method="ocrmypdf",
-                    error_reason=None
+                    ocr_method="ocrmypdf"
                 )
             else:
                 # OCR returned empty - treat as failure
                 return OcrLoadResult(
                     text=extracted_text,
                     page_count=page_count,
-                    char_count=char_count,
-                    chars_per_page=chars_per_page,
                     ocr_used=True,
                     ocr_failed=True,
                     ocr_method="ocrmypdf",
@@ -161,8 +146,6 @@ class OcrPdfLoader(DocumentLoader):
             return OcrLoadResult(
                 text=extracted_text,
                 page_count=page_count,
-                char_count=char_count,
-                chars_per_page=chars_per_page,
                 ocr_used=True,
                 ocr_failed=True,
                 ocr_method="ocrmypdf",
@@ -172,8 +155,6 @@ class OcrPdfLoader(DocumentLoader):
             return OcrLoadResult(
                 text=extracted_text,
                 page_count=page_count,
-                char_count=char_count,
-                chars_per_page=chars_per_page,
                 ocr_used=True,
                 ocr_failed=True,
                 ocr_method="ocrmypdf",
@@ -183,8 +164,6 @@ class OcrPdfLoader(DocumentLoader):
             return OcrLoadResult(
                 text=extracted_text,
                 page_count=page_count,
-                char_count=char_count,
-                chars_per_page=chars_per_page,
                 ocr_used=True,
                 ocr_failed=True,
                 ocr_method="ocrmypdf",

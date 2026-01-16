@@ -279,3 +279,127 @@ Answer:"""
             else:
                 logger.error(f"Bedrock error ({error_code}): {e}")
                 raise
+
+    @property
+    def capabilities(self) -> set[str]:
+        """Bedrock supports structured output via tool use."""
+        return {"structured_output", "tool_use"}
+
+    def _validate_schema(self, result: dict, schema: dict) -> dict:
+        """Validate LLM output against schema's required fields.
+
+        Args:
+            result: The parsed LLM output
+            schema: JSON schema with optional 'required' field
+
+        Returns:
+            The validated result
+
+        Raises:
+            ValueError: If required fields are missing
+        """
+        required = schema.get("required", [])
+        if required:
+            missing = [f for f in required if f not in result]
+            if missing:
+                raise ValueError(f"LLM output missing required fields: {missing}")
+        return result
+
+    def generate_structured(
+        self,
+        prompt: str,
+        schema: dict,
+        max_tokens: int = 2048,
+        temperature: float = 0.0,
+        **kwargs
+    ) -> dict:
+        """Generate structured output using Bedrock tool use API.
+
+        Supports Nova (Converse API) and Claude (InvokeModel) families.
+        """
+        import json
+
+        model_id = kwargs.get("model_id", self.model_id)
+
+        try:
+            # Nova/Amazon models use Converse API
+            if "nova" in model_id.lower() or "amazon" in model_id.lower():
+                response = self.client.converse(
+                    modelId=model_id,
+                    messages=[{"role": "user", "content": [{"text": prompt}]}],
+                    toolConfig={
+                        "tools": [{
+                            "toolSpec": {
+                                "name": "extract_data",
+                                "description": "Extract structured data from document",
+                                "inputSchema": {"json": schema}
+                            }
+                        }],
+                        "toolChoice": {"tool": {"name": "extract_data"}}
+                    },
+                    inferenceConfig={"maxTokens": max_tokens, "temperature": temperature}
+                )
+
+                # Extract tool use response
+                for content in response.get("output", {}).get("message", {}).get("content", []):
+                    if "toolUse" in content:
+                        result = content["toolUse"].get("input", {})
+                        return self._validate_schema(result, schema)
+
+                raise ValueError("No tool use found in Converse response")
+
+            # Claude/Anthropic models use InvokeModel with Anthropic format
+            elif "anthropic" in model_id.lower() or "claude" in model_id.lower():
+                request_body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "tools": [{
+                        "name": "extract_data",
+                        "description": "Extract structured data from document",
+                        "input_schema": schema
+                    }],
+                    "tool_choice": {"type": "tool", "name": "extract_data"},
+                    "max_tokens": max_tokens,
+                    "temperature": temperature
+                }
+
+                response = self.client.invoke_model(
+                    modelId=model_id,
+                    contentType="application/json",
+                    accept="application/json",
+                    body=json.dumps(request_body)
+                )
+
+                # Parse response
+                result = json.loads(response["body"].read())
+
+                # Extract tool use content
+                for content in result.get("content", []):
+                    if content.get("type") == "tool_use":
+                        tool_result = content.get("input", {})
+                        return self._validate_schema(tool_result, schema)
+
+                raise ValueError("No tool use found in InvokeModel response")
+
+            else:
+                raise NotImplementedError(
+                    f"Unsupported model family: {model_id}. "
+                    "Structured output requires Nova or Claude models."
+                )
+
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_msg = e.response['Error'].get('Message', str(e))
+
+            if error_code == 'AccessDeniedException':
+                raise RuntimeError(
+                    f"Access denied to Bedrock model '{model_id}'. "
+                    "Ensure model is enabled and IAM permissions configured."
+                ) from e
+            elif error_code == 'ValidationException':
+                raise ValueError(
+                    f"Invalid request to Bedrock: {error_msg}"
+                ) from e
+            else:
+                logger.error(f"Bedrock error ({error_code}): {e}")
+                raise RuntimeError(f"Bedrock API error: {error_msg}") from e

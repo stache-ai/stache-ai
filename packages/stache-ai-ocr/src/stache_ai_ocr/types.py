@@ -7,8 +7,7 @@ from dataclasses import dataclass, asdict
 class OcrLoadResult:
     """Result of OCR-enhanced PDF loading.
 
-    This dataclass provides rich metadata about the OCR process, enabling
-    better diagnostics, logging, and decision-making in higher-level tools.
+    This dataclass provides essential metadata about the OCR process.
 
     Attributes:
         text: Extracted text content from the PDF. Empty string if extraction
@@ -23,20 +22,13 @@ class OcrLoadResult:
         error_reason: Human-readable reason why OCR failed. None if OCR succeeded
             or was not attempted. Examples: "Timeout after 300s", "ocrmypdf binary
             not found", "Unsupported PDF encryption".
-        char_count: Total number of characters extracted from the document.
-            Useful for validating extraction quality.
-        chars_per_page: Average characters per page. Used as heuristic to
-            detect scanned PDFs (low values like <100 indicate likely scanned).
-            Calculated as char_count / page_count.
 
     Example:
         >>> result = OcrLoadResult(
         ...     text="Extracted content",
         ...     page_count=5,
         ...     ocr_used=True,
-        ...     ocr_method="ocrmypdf",
-        ...     char_count=1500,
-        ...     chars_per_page=300.0
+        ...     ocr_method="ocrmypdf"
         ... )
         >>> result.to_dict()
         {
@@ -45,17 +37,13 @@ class OcrLoadResult:
             'ocr_used': True,
             'ocr_failed': False,
             'ocr_method': 'ocrmypdf',
-            'error_reason': None,
-            'char_count': 1500,
-            'chars_per_page': 300.0
+            'error_reason': None
         }
     """
 
     text: str
     page_count: int
     ocr_used: bool
-    char_count: int
-    chars_per_page: float
     ocr_failed: bool = False
     ocr_method: str | None = None
     error_reason: str | None = None

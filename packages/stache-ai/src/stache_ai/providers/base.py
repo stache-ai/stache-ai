@@ -200,6 +200,52 @@ class LLMProvider(ABC):
         """Get provider name"""
         return self.__class__.__name__
 
+    def generate_structured(
+        self,
+        prompt: str,
+        schema: dict,
+        max_tokens: int = 2048,
+        temperature: float = 0.0,
+        **kwargs
+    ) -> dict:
+        """Generate JSON output matching schema (synchronous).
+
+        Use asyncio.to_thread() when calling from async contexts.
+
+        Args:
+            prompt: Input prompt
+            schema: JSON schema defining output structure
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature (0.0 = deterministic)
+            **kwargs: Provider-specific parameters
+
+        Returns:
+            Parsed JSON dict matching schema
+
+        Raises:
+            NotImplementedError: If provider doesn't support structured output
+            ValueError: If output doesn't match schema
+            RuntimeError: On API errors
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support structured output. "
+            "Override generate_structured() in subclass."
+        )
+
+    @property
+    def capabilities(self) -> set[str]:
+        """Return set of supported operations.
+
+        Override in subclasses to declare capabilities.
+
+        Returns:
+            Set of capability strings. Common capabilities:
+            - "structured_output": Supports generate_structured()
+            - "tool_use": Supports function calling
+            - "streaming": Supports streaming responses
+        """
+        return set()
+
 
 class NamespaceProvider(ABC):
     """Abstract base class for namespace registry providers"""

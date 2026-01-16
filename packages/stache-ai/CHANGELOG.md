@@ -5,6 +5,24 @@ All notable changes to stache-ai will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-01-16
+
+### Added
+
+- **Concept Operations**: New `do_search_concepts`, `do_search_concepts_with_docs`, `do_get_concept_documents`, `do_get_document_concepts`, and `do_get_related_documents` operations for enterprise concept discovery
+- **DeleteObserver Middleware**: Built-in delete observer support in middleware chain
+
+### Fixed
+
+- Fixed `embed_query()` usage in concept search operations (was incorrectly passing list to single-string API)
+- License format updated to modern pyproject.toml string format
+
+## [0.1.6] - 2026-01-14
+
+### Added
+
+- Concept discovery operations integration with enterprise middleware
+
 ## [0.1.5] - 2026-01-11
 
 ### Added

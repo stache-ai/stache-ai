@@ -11,6 +11,7 @@ from botocore.exceptions import ClientError
 
 from stache_ai.providers.base import NamespaceProvider
 from stache_ai.config import Settings
+from . import sanitize_for_dynamodb
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,8 @@ class DynamoDBNamespaceProvider(NamespaceProvider):
         now = datetime.now(timezone.utc).isoformat()
         item = self._to_dynamodb_item(id, name, description, parent_id, metadata, filter_keys, now, now)
 
-        self.table.put_item(Item=item)
+        # Sanitize floats to Decimal for DynamoDB compatibility
+        self.table.put_item(Item=sanitize_for_dynamodb(item))
         logger.info(f"Created namespace: {id}")
 
         return self.get(id)

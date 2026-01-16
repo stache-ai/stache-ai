@@ -89,6 +89,7 @@ class RAGPipeline:
         self._documents_provider = None
         self._summaries_provider = None
         self._insights_provider = None
+        self._concept_index = None
         # Middleware
         self._enrichers = None
         self._chunk_observers = None
@@ -180,6 +181,17 @@ class RAGPipeline:
         return self._document_index_provider
 
     @property
+    def concept_index(self):
+        """Lazy-load concept index provider from enterprise package."""
+        if self._concept_index is None:
+            try:
+                from stache_ai_enterprise_common import get_concept_index
+                self._concept_index = get_concept_index(self.config)
+            except ImportError:
+                pass  # Enterprise not installed
+        return self._concept_index
+
+    @property
     def enrichers(self):
         """Lazy-load enrichment middleware"""
         if self._enrichers is None:
@@ -187,7 +199,14 @@ class RAGPipeline:
                 if self._enrichers is None:  # Double-check pattern
                     from stache_ai.providers.plugin_loader import get_providers
                     enricher_classes = get_providers('enrichment')
-                    self._enrichers = [cls() for cls in enricher_classes.values()]
+                    # Try instantiating with config, fall back to no-args for compatibility
+                    self._enrichers = []
+                    for cls in enricher_classes.values():
+                        try:
+                            self._enrichers.append(cls(self.config))
+                        except TypeError:
+                            # Middleware doesn't accept config
+                            self._enrichers.append(cls())
                     # Sort by phase (extract -> transform -> enrich), then by priority
                     phase_order = {'extract': 0, 'transform': 1, 'enrich': 2}
                     self._enrichers.sort(key=lambda e: (phase_order.get(e.phase, 2), e.priority))
@@ -202,7 +221,12 @@ class RAGPipeline:
                 if self._chunk_observers is None:  # Double-check pattern
                     from stache_ai.providers.plugin_loader import get_providers
                     observer_classes = get_providers('chunk_observer')
-                    self._chunk_observers = [cls() for cls in observer_classes.values()]
+                    self._chunk_observers = []
+                    for cls in observer_classes.values():
+                        try:
+                            self._chunk_observers.append(cls(self.config))
+                        except TypeError:
+                            self._chunk_observers.append(cls())
                     self._chunk_observers.sort(key=lambda o: o.priority)
                     logger.info(f"Loaded {len(self._chunk_observers)} chunk observers")
         return self._chunk_observers
@@ -215,7 +239,12 @@ class RAGPipeline:
                 if self._postingest_processors is None:  # Double-check pattern
                     from stache_ai.providers.plugin_loader import get_providers
                     processor_classes = get_providers('postingest_processor')
-                    self._postingest_processors = [cls() for cls in processor_classes.values()]
+                    self._postingest_processors = []
+                    for cls in processor_classes.values():
+                        try:
+                            self._postingest_processors.append(cls(self.config))
+                        except TypeError:
+                            self._postingest_processors.append(cls())
                     self._postingest_processors.sort(key=lambda p: p.priority)
                     logger.info(f"Loaded {len(self._postingest_processors)} post-ingest processors")
         return self._postingest_processors
@@ -228,7 +257,12 @@ class RAGPipeline:
                 if self._query_processors is None:  # Double-check pattern
                     from stache_ai.providers.plugin_loader import get_providers
                     processor_classes = get_providers('query_processor')
-                    self._query_processors = [cls() for cls in processor_classes.values()]
+                    self._query_processors = []
+                    for cls in processor_classes.values():
+                        try:
+                            self._query_processors.append(cls(self.config))
+                        except TypeError:
+                            self._query_processors.append(cls())
                     self._query_processors.sort(key=lambda p: p.priority)
                     logger.info(f"Loaded {len(self._query_processors)} query processors")
         return self._query_processors
@@ -241,7 +275,12 @@ class RAGPipeline:
                 if self._result_processors is None:  # Double-check pattern
                     from stache_ai.providers.plugin_loader import get_providers
                     processor_classes = get_providers('result_processor')
-                    self._result_processors = [cls() for cls in processor_classes.values()]
+                    self._result_processors = []
+                    for cls in processor_classes.values():
+                        try:
+                            self._result_processors.append(cls(self.config))
+                        except TypeError:
+                            self._result_processors.append(cls())
                     self._result_processors.sort(key=lambda p: p.priority)
                     logger.info(f"Loaded {len(self._result_processors)} result processors")
         return self._result_processors
@@ -254,7 +293,12 @@ class RAGPipeline:
                 if self._delete_observers is None:  # Double-check pattern
                     from stache_ai.providers.plugin_loader import get_providers
                     observer_classes = get_providers('delete_observer')
-                    self._delete_observers = [cls() for cls in observer_classes.values()]
+                    self._delete_observers = []
+                    for cls in observer_classes.values():
+                        try:
+                            self._delete_observers.append(cls(self.config))
+                        except TypeError:
+                            self._delete_observers.append(cls())
                     self._delete_observers.sort(key=lambda o: o.priority)
                     logger.info(f"Loaded {len(self._delete_observers)} delete observers")
         return self._delete_observers
@@ -487,6 +531,8 @@ class RAGPipeline:
         context.custom["embedding_provider"] = self.embedding_provider
         context.custom["summaries_provider"] = self.summaries_provider
         context.custom["config"] = self.config
+        context.custom["concept_index"] = self.concept_index
+        context.custom["vectordb"] = self.vectordb_provider
 
         artifacts = await MiddlewareChain.run_postingest(
             processors=self.postingest_processors,
@@ -521,8 +567,16 @@ class RAGPipeline:
                 )
                 logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
             except Exception as e:
-                # Log error but continue - document is in vector DB and searchable
-                logger.error(f"Failed to create document index for {filename}: {e}")
+                # Log error with full stack trace for debugging
+                logger.error(
+                    f"Failed to create document index for {filename}: {e}",
+                    exc_info=True,
+                    extra={
+                        "doc_id": doc_id,
+                        "namespace": ns,
+                        "metadata_keys": list(metadata.keys()) if metadata else [],
+                    }
+                )
 
         # Build result
         result = {
@@ -783,6 +837,8 @@ class RAGPipeline:
         context.custom["embedding_provider"] = self.embedding_provider
         context.custom["summaries_provider"] = self.summaries_provider
         context.custom["config"] = self.config
+        context.custom["concept_index"] = self.concept_index
+        context.custom["vectordb"] = self.vectordb_provider
 
         artifacts = await MiddlewareChain.run_postingest(
             processors=self.postingest_processors,
@@ -818,8 +874,16 @@ class RAGPipeline:
                 )
                 logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
             except Exception as e:
-                # Log error but continue - document is in vector DB and searchable
-                logger.error(f"Failed to create document index for {filename}: {e}")
+                # Log error with full stack trace for debugging
+                logger.error(
+                    f"Failed to create document index for {filename}: {e}",
+                    exc_info=True,
+                    extra={
+                        "doc_id": doc_id,
+                        "namespace": ns,
+                        "metadata_keys": list(metadata.keys()) if metadata else [],
+                    }
+                )
 
         result = {
             "chunks_created": len(embeddings),
@@ -1211,6 +1275,10 @@ class RAGPipeline:
             doc_id=doc_id,
             namespace=namespace
         )
+
+        # Populate context with providers for DeleteObservers
+        context.custom["config"] = self.config
+        context.custom["concept_index"] = self.concept_index
 
         # Call delete observers (pre-delete)
         for observer in self.delete_observers:

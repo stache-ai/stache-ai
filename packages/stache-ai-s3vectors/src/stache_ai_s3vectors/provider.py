@@ -163,9 +163,18 @@ class S3VectorsProvider(VectorDBProvider):
         filterable_bytes = len(filterable_json.encode('utf-8'))
 
         if filterable_bytes > 2048:  # 2 KB
+            # Log detailed breakdown of metadata sizes for debugging
+            field_sizes = {k: len(json.dumps(v).encode('utf-8')) for k, v in filterable_dict.items()}
+            sorted_fields = sorted(field_sizes.items(), key=lambda x: x[1], reverse=True)
+            top_fields = sorted_fields[:5]  # Show top 5 largest fields
+            logger.error(
+                f"Metadata size breakdown (top 5 largest fields): "
+                f"{', '.join(f'{k}={v}B' for k, v in top_fields)}"
+            )
             raise ValueError(
                 f"Filterable metadata size is {filterable_bytes} bytes, "
-                f"exceeds S3 Vectors limit of 2KB. Reduce metadata fields."
+                f"exceeds S3 Vectors limit of 2KB. Reduce metadata fields. "
+                f"Largest fields: {', '.join(f'{k}={v}B' for k, v in top_fields[:3])}"
             )
 
         # Check total metadata limit (40 KB) - includes text
@@ -282,7 +291,13 @@ class S3VectorsProvider(VectorDBProvider):
         }
 
         if query_filter:
-            query_params['filter'] = query_filter
+            # S3 Vectors requires $and for multiple filter conditions
+            if len(query_filter) > 1:
+                query_params['filter'] = {
+                    '$and': [{k: v} for k, v in query_filter.items()]
+                }
+            else:
+                query_params['filter'] = query_filter
 
         response = self._with_retry(self.client.query_vectors, **query_params)
 
@@ -369,12 +384,12 @@ class S3VectorsProvider(VectorDBProvider):
                 # Primitives pass through directly
                 formatted[k] = v
             elif isinstance(v, list):
-                # S3 Vectors supports arrays - convert items to strings if needed
+                # S3 Vectors supports arrays - convert items to proper format
                 if all(isinstance(item, (str, int, float, bool)) for item in v):
                     formatted[k] = v
                 else:
-                    # Convert complex items to strings
-                    formatted[k] = [str(item) if not isinstance(item, (str, int, float, bool)) else item for item in v]
+                    # JSON-encode complex items (dicts, nested lists) for proper serialization
+                    formatted[k] = [json.dumps(item) if not isinstance(item, (str, int, float, bool)) else item for item in v]
             elif isinstance(v, dict):
                 # Flatten nested dicts by JSON-encoding them
                 formatted[k] = json.dumps(v)

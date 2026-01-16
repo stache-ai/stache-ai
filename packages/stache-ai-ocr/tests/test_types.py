@@ -15,8 +15,6 @@ class TestOcrLoadResult:
             ocr_used=True,
             ocr_failed=False,
             ocr_method="ocrmypdf",
-            char_count=2500,
-            chars_per_page=250.0,
         )
 
         assert result.text == "Extracted content from PDF"
@@ -24,8 +22,6 @@ class TestOcrLoadResult:
         assert result.ocr_used is True
         assert result.ocr_failed is False
         assert result.ocr_method == "ocrmypdf"
-        assert result.char_count == 2500
-        assert result.chars_per_page == 250.0
 
     def test_default_values(self):
         """Test that ocr_failed defaults to False and ocr_method/error_reason to None."""
@@ -33,8 +29,6 @@ class TestOcrLoadResult:
             text="Simple text",
             page_count=5,
             ocr_used=False,
-            char_count=1000,
-            chars_per_page=200.0,
         )
 
         assert result.ocr_failed is False
@@ -49,13 +43,10 @@ class TestOcrLoadResult:
             ocr_used=True,
             ocr_failed=True,
             ocr_method="ocrmypdf",
-            char_count=150,
-            chars_per_page=7.5,
         )
 
         assert result.ocr_failed is True
         assert result.ocr_used is True
-        assert result.chars_per_page == 7.5  # Low value indicates scanned
 
     def test_to_dict_serialization(self):
         """Test to_dict() produces correct dictionary."""
@@ -64,8 +55,6 @@ class TestOcrLoadResult:
             page_count=3,
             ocr_used=True,
             ocr_method="tesseract",
-            char_count=900,
-            chars_per_page=300.0,
         )
 
         result_dict = result.to_dict()
@@ -77,8 +66,6 @@ class TestOcrLoadResult:
             "ocr_failed": False,
             "ocr_method": "tesseract",
             "error_reason": None,
-            "char_count": 900,
-            "chars_per_page": 300.0,
         }
 
         assert result_dict == expected
@@ -89,8 +76,6 @@ class TestOcrLoadResult:
             text="Direct extraction",
             page_count=2,
             ocr_used=False,
-            char_count=500,
-            chars_per_page=250.0,
         )
 
         result_dict = result.to_dict()
@@ -106,62 +91,25 @@ class TestOcrLoadResult:
             ocr_used=True,
             ocr_failed=True,
             ocr_method="ocrmypdf",
-            char_count=0,
-            chars_per_page=0.0,
         )
 
         assert result.text == ""
-        assert result.char_count == 0
-        assert result.chars_per_page == 0.0
         assert result.ocr_failed is True
-
-    def test_scanned_pdf_heuristic_low_density(self):
-        """Test chars_per_page heuristic for scanned PDF detection."""
-        # Scanned PDF: low chars per page
-        scanned_result = OcrLoadResult(
-            text="abc",
-            page_count=5,
-            ocr_used=True,
-            ocr_method="ocrmypdf",
-            char_count=50,
-            chars_per_page=10.0,
-        )
-
-        assert scanned_result.chars_per_page < 100  # Heuristic threshold
-
-    def test_native_pdf_heuristic_high_density(self):
-        """Test chars_per_page heuristic for native (text-based) PDF."""
-        # Native PDF: high chars per page
-        native_result = OcrLoadResult(
-            text="A" * 5000,
-            page_count=10,
-            ocr_used=False,
-            char_count=5000,
-            chars_per_page=500.0,
-        )
-
-        assert native_result.chars_per_page > 100  # Well above threshold
 
     def test_type_hints_validation(self):
         """Test that type hints are correct (Python 3.9+ union syntax)."""
-        # This test verifies the structure exists and is valid
-        # Type checking is done by mypy/static analyzers, but we verify instantiation
         result_with_none = OcrLoadResult(
             text="test",
             page_count=1,
             ocr_used=False,
-            char_count=4,
-            chars_per_page=4.0,
-            ocr_method=None,  # Explicitly None
+            ocr_method=None,
         )
 
         result_with_string = OcrLoadResult(
             text="test",
             page_count=1,
             ocr_used=True,
-            char_count=4,
-            chars_per_page=4.0,
-            ocr_method="ocrmypdf",  # String value
+            ocr_method="ocrmypdf",
         )
 
         assert result_with_none.ocr_method is None
@@ -175,9 +123,7 @@ class TestOcrLoadResult:
             ocr_used=True,
             ocr_failed=False,
             ocr_method="ocrmypdf",
-            char_count=1000,
-            chars_per_page=200.0,
-            error_reason=None,  # No error on success
+            error_reason=None,
         )
 
         assert result.ocr_failed is False
@@ -193,8 +139,6 @@ class TestOcrLoadResult:
             ocr_failed=True,
             ocr_method="ocrmypdf",
             error_reason="Timeout exceeded: 300s",
-            char_count=50,
-            chars_per_page=0.5,
         )
 
         assert result.ocr_failed is True
@@ -208,10 +152,8 @@ class TestOcrLoadResult:
             page_count=10,
             ocr_used=True,
             ocr_failed=True,
-            ocr_method=None,  # No method used since binary missing
+            ocr_method=None,
             error_reason="ocrmypdf binary not found in PATH",
-            char_count=100,
-            chars_per_page=10.0,
         )
 
         assert result.ocr_failed is True
@@ -228,8 +170,6 @@ class TestOcrLoadResult:
             ocr_failed=True,
             ocr_method="tesseract",
             error_reason="Unsupported PDF encryption",
-            char_count=0,
-            chars_per_page=0.0,
         )
 
         result_dict = result.to_dict()
@@ -244,8 +184,6 @@ class TestOcrLoadResult:
             text="Normal extraction",
             page_count=3,
             ocr_used=False,
-            char_count=300,
-            chars_per_page=100.0,
         )
 
         assert result.error_reason is None

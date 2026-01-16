@@ -7,7 +7,7 @@ name = "stache-ai-documents"
 version = "0.1.0"
 readme = "README.md"
 description = "Document format loaders for Stache AI (EPUB, DOCX, PPTX)"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "Stache Contributors"}

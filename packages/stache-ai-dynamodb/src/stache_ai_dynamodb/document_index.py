@@ -7,6 +7,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from stache_ai.providers.base import DocumentIndexProvider
+from . import sanitize_for_dynamodb
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +175,9 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             item["file_size"] = file_size
 
         try:
-            self.table.put_item(Item=item)
+            # Sanitize floats to Decimal for DynamoDB compatibility
+            sanitized_item = sanitize_for_dynamodb(item)
+            self.table.put_item(Item=sanitized_item)
             logger.info(f"Created document index: {doc_id} in namespace {namespace}")
             return item
         except ClientError as e:
