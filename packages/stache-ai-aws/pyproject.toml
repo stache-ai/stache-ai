@@ -8,7 +8,7 @@ version = "0.1.0"
 readme = "README.md"
 description = "AWS providers bundle for Stache AI (includes S3 Vectors, DynamoDB, and Bedrock)"
 requires-python = ">=3.10"
-license = "MIT"
+license = {text = "MIT"}
 authors = [
     {name = "Stache Contributors"}
 ]
@@ -16,7 +16,6 @@ keywords = ["stache", "rag", "ai", "aws", "bedrock", "dynamodb", "s3vectors"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
