@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0,<70.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stache-ai-enrichment"
+version = "0.1.0"
+description = "AI-powered metadata enrichment for Stache (standard features)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Stache Contributors"}
+]
+keywords = ["stache", "rag", "ai", "enrichment", "metadata"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "stache-ai>=0.1.7,<1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.entry-points."stache.enrichment"]
+ai_summary = "stache_ai_enrichment.enrichers:SummaryEnricher"
+
+[project.urls]
+Homepage = "https://github.com/stache-ai/stache-ai"
+Repository = "https://github.com/stache-ai/stache-ai"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["stache_ai_enrichment*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
