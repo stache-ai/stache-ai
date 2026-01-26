@@ -141,6 +141,23 @@ class QueryProcessor(MiddlewareBase):
 
 
 @dataclass
+class GuardResult:
+    """Result from ingest guard middleware (pre-enrichment validation)."""
+    action: Literal["allow", "reject"]
+    reason: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+@dataclass
+class ErrorResult:
+    """Result from error processor middleware."""
+    handled: bool = False
+    """Whether error was handled (does not suppress exception)."""
+    metadata: dict[str, Any] | None = None
+    """Additional metadata about error handling."""
+
+
+@dataclass
 class DeleteTarget:
     """What is being deleted."""
     target_type: Literal["document", "namespace", "chunks"]
@@ -177,6 +194,76 @@ class DeleteObserver(MiddlewareBase):
         context: "RequestContext"
     ) -> None:
         """Called after successful deletion. Override for audit/sync."""
+        pass
+
+
+class IngestGuard(MiddlewareBase):
+    """Base class for pre-enrichment validation.
+
+    IngestGuards run BEFORE Enrichers to validate content and block
+    ingestion early if needed. Use cases:
+    - PII detection (block before LLM enrichment)
+    - Malware scanning
+    - Deduplication checks
+    - ACL validation
+
+    Guards cannot transform content - only allow or reject.
+
+    Error Handling:
+        on_error="reject" (default) - Block ingestion on guard failure
+        on_error="allow" - Continue if guard fails (log warning)
+    """
+
+    @abstractmethod
+    async def validate(
+        self,
+        content: str,
+        metadata: dict[str, Any],
+        context: "RequestContext"
+    ) -> "GuardResult":
+        """Validate content before enrichment."""
+        pass
+
+
+class ErrorProcessor(MiddlewareBase):
+    """Base class for error handling during ingestion.
+
+    ErrorProcessors run when pipeline encounters an exception, allowing
+    cleanup or recovery actions. Use cases:
+    - Restore soft-deleted documents on REINGEST_VERSION failure
+    - Release external resources allocated during enrichment
+    - Log detailed error context for debugging
+    - Trigger alerts for specific error patterns
+
+    IMPORTANT: ErrorProcessors CANNOT suppress exceptions - the original
+    exception is always re-raised. They can only perform cleanup/recovery.
+
+    Error handling is best-effort - if an ErrorProcessor itself fails,
+    the error is logged but does not block other processors.
+    """
+
+    @abstractmethod
+    async def on_error(
+        self,
+        exception: Exception,
+        context: "RequestContext",
+        partial_state: dict[str, Any],
+    ) -> "ErrorResult":
+        """Handle pipeline error.
+
+        Args:
+            exception: The exception that occurred
+            context: Request context with namespace, source, etc.
+            partial_state: Partial pipeline state at time of error:
+                - metadata: Document metadata dict
+                - doc_id: Generated document ID
+                - namespace: Target namespace
+                - vectors_inserted: Whether vectors were written
+                - chunk_ids: Vector IDs if inserted
+
+        Returns:
+            ErrorResult indicating whether error was handled
+        """
         pass
 
 

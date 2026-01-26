@@ -76,6 +76,8 @@ PROVIDER_GROUPS = {
     'result_processor': 'stache.result_processor',
     'delete_observer': 'stache.delete_observer',
     'postingest_processor': 'stache.postingest_processor',
+    'ingest_guard': 'stache.ingest_guard',  # NEW
+    'error_processor': 'stache.error_processor',  # NEW
     'loader': 'stache.loader',
     'chunking': 'stache.chunking',
 }

@@ -367,6 +367,57 @@ class QdrantVectorDBProvider(VectorDBProvider):
             for p in points
         ]
 
+    def get_vectors_with_embeddings(
+        self,
+        ids: List[str],
+        namespace: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve vectors WITH their embeddings for updating
+
+        Args:
+            ids: List of vector IDs to retrieve
+            namespace: Optional namespace filter
+
+        Returns:
+            List of dicts with id, vector, and metadata
+        """
+        if not ids:
+            return []
+
+        try:
+            points = self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=ids,
+                with_vectors=True,
+                with_payload=True
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Failed to retrieve vectors by IDs. Ensure IDs are valid Qdrant point IDs: {e}"
+            )
+
+        results = []
+        for point in points:
+            # Filter by namespace if provided
+            if namespace and point.payload.get("namespace") != namespace:
+                continue
+
+            metadata = dict(point.payload) or {}
+            # Don't pop text - leave it in metadata
+
+            results.append({
+                "id": str(point.id),
+                "vector": point.vector,
+                "metadata": metadata
+            })
+
+        return results
+
+    @property
+    def max_batch_size(self) -> int:
+        """Maximum number of vectors that can be updated in a single batch"""
+        return 1000
+
     @property
     def capabilities(self) -> set:
         """Qdrant supports metadata scanning, server-side filtering, and export"""

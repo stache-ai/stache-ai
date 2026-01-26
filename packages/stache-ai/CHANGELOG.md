@@ -5,6 +5,78 @@ All notable changes to stache-ai will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-01-25
+
+### Added
+
+- **Hash-Based Deduplication**: Content-addressable storage prevents duplicate ingestion
+  - SHA-256 hashing of document content with smart fingerprint strategies
+  - `IngestGuard` middleware for pre-ingestion duplicate detection
+  - `SKIP` vs `REINGEST_VERSION` modes for handling duplicates
+  - Source path and file modification time tracking for intelligent updates
+  - Document identifier reservation with atomic operations
+
+- **Soft Delete and Trash Management**: Universal soft-delete with 30-day retention
+  - `soft_delete_document`, `restore_document`, `list_trash` operations
+  - Status-based filtering (`active`, `deleting`, `purging`, `purged`)
+  - Trash entries with expiration timestamps and audit metadata
+  - `permanently_delete_document` for explicit trash emptying
+  - Automatic cleanup workers for expired trash items
+
+- **Error Recovery Architecture**: Automatic rollback on failed updates
+  - `ErrorProcessor` middleware type for post-error handling
+  - `ReingestRecoveryProcessor` auto-restores old documents if new version fails
+  - Prevents data loss from partial ingestion failures
+
+- **Document Update Operations**: Provider-agnostic metadata updates
+  - `update_document_metadata` in all vector DB providers (S3 Vectors, Qdrant, Pinecone, MongoDB)
+  - Support for namespace migration, filename updates, custom metadata
+  - `get_vectors_with_embeddings` for efficient document re-writes
+  - `max_batch_size` property for batch operation limits
+
+- **Trash Management Routes**: New FastAPI endpoints
+  - `GET /api/trash` - List documents in trash with namespace filtering
+  - `POST /api/trash/{doc_id}/restore` - Restore from trash
+  - `DELETE /api/trash/{doc_id}` - Permanent delete with cleanup job creation
+
+- **Cleanup Workers**: Async background processing
+  - `cleanup_worker.py` for permanent vector deletion
+  - Job-based architecture with failure tracking
+  - Scheduled workers for expired trash processing
+
+### Changed
+
+- **VectorDBProvider Base Class**: `update_status` method now has default no-op implementation (no longer abstract)
+  - Providers without status filtering log warnings but don't break instantiation
+  - S3 Vectors implements full status-based soft delete
+
+- **DocumentIndexProvider Base Class**: Added `filename` parameter to `complete_permanent_delete` signature
+  - Required for providers using filename in trash entry primary keys
+
+- **Pipeline Ingestion**: Enhanced with deduplication and error recovery
+  - Pre-ingestion checks via IngestGuard middleware
+  - Post-error recovery via ErrorProcessor middleware
+  - Automatic chunk cleanup on ingestion failures
+
+- **Search Operations**: S3 Vectors now automatically filters out soft-deleted vectors
+  - Status filter applied to all search queries (`status=active OR status NOT EXISTS`)
+  - Backward compatible with legacy vectors without status field
+
+### Fixed
+
+- Provider instantiation errors for Qdrant and Pinecone (removed abstract method requirement for `update_status`)
+- Signature mismatch in `complete_permanent_delete` (now consistent across base class and implementations)
+
+### Notes
+
+- **MongoDB Provider Limitations**: Hash deduplication and trash/restore features not supported
+  - Methods raise `NotImplementedError` with clear error messages
+  - Use DynamoDB provider for full feature support
+
+- **Default Configuration**: Deduplication enabled by default (`DEDUP_ENABLED=true`)
+  - Soft-delete operations require document index provider support
+  - Status filtering in vector DBs is provider-dependent (full support in S3 Vectors)
+
 ## [0.1.7] - 2026-01-16
 
 ### Added

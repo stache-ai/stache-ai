@@ -297,6 +297,128 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
             logger.error(f"Failed to update summary for {doc_id}: {e}")
             raise
 
+    def update_document_metadata(
+        self,
+        doc_id: str,
+        namespace: str,
+        updates: dict[str, Any]
+    ) -> bool:
+        """Update document metadata (namespace, filename, custom metadata)
+
+        For namespace migration, uses transactions if replica set available,
+        otherwise falls back to delete+insert.
+
+        Args:
+            doc_id: Document identifier to update
+            namespace: Current namespace for the document (required)
+            updates: Dictionary containing fields to update:
+                - namespace: New namespace to migrate document to (optional)
+                - filename: New filename (optional)
+                - metadata: New metadata dictionary to replace existing (optional)
+
+        Returns:
+            True if update was successful, False if document not found
+
+        Raises:
+            ValueError: If namespace is not provided
+            Exception: If MongoDB operation fails
+        """
+        from pymongo.errors import ConfigurationError, OperationFailure
+
+        if not namespace:
+            raise ValueError(
+                "Namespace is required for update_document_metadata in MongoDB provider"
+            )
+
+        # Extract fields from updates dict
+        new_namespace = updates.get("namespace")
+        new_filename = updates.get("filename")
+        metadata = updates.get("metadata")
+
+        # Namespace migration requires special handling (delete+insert or transaction)
+        if new_namespace and new_namespace != namespace:
+            # Try transaction first (replica set), fall back to delete+insert
+            try:
+                with self.client.start_session() as session:
+                    with session.start_transaction():
+                        # Fetch existing document
+                        old_id = {"namespace": namespace, "doc_id": doc_id}
+                        doc = self.collection.find_one({"_id": old_id}, session=session)
+                        if not doc:
+                            return False
+
+                        # Update namespace in document
+                        doc["_id"] = {"namespace": new_namespace, "doc_id": doc_id}
+                        doc["namespace"] = new_namespace
+
+                        # Update other fields if provided
+                        if new_filename:
+                            doc["filename"] = new_filename
+                        if metadata is not None:
+                            doc["metadata"] = metadata
+
+                        # Delete from old namespace, insert to new
+                        self.collection.delete_one({"_id": old_id}, session=session)
+                        self.collection.insert_one(doc, session=session)
+
+                        # Transaction commits automatically when context exits
+                        logger.info(
+                            f"Migrated document {doc_id} from {namespace} to {new_namespace}"
+                        )
+                        return True
+
+            except (ConfigurationError, OperationFailure) as e:
+                # Replica set not available, fall back to delete+insert
+                logger.warning(
+                    f"Transactions not supported, using delete+insert for migration: {e}"
+                )
+                old_id = {"namespace": namespace, "doc_id": doc_id}
+                doc = self.collection.find_one({"_id": old_id})
+                if not doc:
+                    return False
+
+                # Update document
+                doc["_id"] = {"namespace": new_namespace, "doc_id": doc_id}
+                doc["namespace"] = new_namespace
+                if new_filename:
+                    doc["filename"] = new_filename
+                if metadata is not None:
+                    doc["metadata"] = metadata
+
+                # Delete+insert (not atomic but best we can do)
+                self.collection.delete_one({"_id": old_id})
+                self.collection.insert_one(doc)
+                logger.info(
+                    f"Migrated document {doc_id} from {namespace} to {new_namespace} "
+                    "(no transaction)"
+                )
+                return True
+
+        # In-place updates (no namespace change)
+        else:
+            update_fields = {}
+            if new_filename:
+                update_fields["filename"] = new_filename
+            if metadata is not None:
+                update_fields["metadata"] = metadata
+
+            if not update_fields:
+                # No updates to perform
+                return True
+
+            try:
+                result = self.collection.update_one(
+                    {"_id": {"namespace": namespace, "doc_id": doc_id}},
+                    {"$set": update_fields}
+                )
+                if result.matched_count > 0:
+                    logger.info(f"Updated metadata for document {doc_id} in namespace {namespace}")
+                    return True
+                return False
+            except Exception as e:
+                logger.error(f"Failed to update metadata for {doc_id}: {e}")
+                raise
+
     def get_chunk_ids(
         self,
         doc_id: str,
@@ -351,6 +473,161 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
             Name of the document index provider
         """
         return "mongodb-document-index"
+
+    # ==================== Deduplication Methods (Not Implemented) ====================
+
+    def reserve_identifier(
+        self,
+        content_hash: str,
+        filename: str,
+        namespace: str,
+        doc_id: str,
+        source_path: str | None = None,
+        file_size: int | None = None,
+        file_modified_at: str | None = None,
+        metadata: dict[str, Any] | None = None
+    ) -> bool:
+        """MongoDB provider does not support deduplication features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support hash-based deduplication. "
+            "Use DynamoDB provider for deduplication features."
+        )
+
+    def get_document_by_identifier(
+        self,
+        content_hash: str,
+        filename: str,
+        namespace: str,
+        source_path: str | None = None
+    ) -> dict[str, Any] | None:
+        """MongoDB provider does not support deduplication features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support hash-based deduplication. "
+            "Use DynamoDB provider for deduplication features."
+        )
+
+    def complete_identifier_reservation(
+        self,
+        content_hash: str,
+        filename: str,
+        namespace: str,
+        doc_id: str,
+        chunk_count: int,
+        source_path: str | None = None
+    ) -> None:
+        """MongoDB provider does not support deduplication features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support hash-based deduplication. "
+            "Use DynamoDB provider for deduplication features."
+        )
+
+    def release_identifier(
+        self,
+        content_hash: str,
+        filename: str,
+        namespace: str,
+        source_path: str | None = None
+    ) -> None:
+        """MongoDB provider does not support deduplication features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support hash-based deduplication. "
+            "Use DynamoDB provider for deduplication features."
+        )
+
+    # ==================== Soft Delete / Trash Methods (Not Implemented) ====================
+
+    def soft_delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_by: str | None = None,
+        delete_reason: str = "user_initiated"
+    ) -> dict[str, Any]:
+        """MongoDB provider does not support trash/restore features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support soft delete and trash features. "
+            "Use DynamoDB provider for trash/restore functionality."
+        )
+
+    def restore_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_at_ms: int,
+        restored_by: str | None = None
+    ) -> dict[str, Any]:
+        """MongoDB provider does not support trash/restore features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support soft delete and trash features. "
+            "Use DynamoDB provider for trash/restore functionality."
+        )
+
+    def list_trash(
+        self,
+        namespace: str | None = None,
+        limit: int = 50,
+        next_key: str | None = None
+    ) -> dict[str, Any]:
+        """MongoDB provider does not support trash/restore features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support soft delete and trash features. "
+            "Use DynamoDB provider for trash/restore functionality."
+        )
+
+    def permanently_delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_at_ms: int,
+        deleted_by: str | None = None
+    ) -> dict[str, Any]:
+        """MongoDB provider does not support trash/restore features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support soft delete and trash features. "
+            "Use DynamoDB provider for trash/restore functionality."
+        )
+
+    def complete_permanent_delete(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_at_ms: int,
+        filename: str,
+    ) -> None:
+        """MongoDB provider does not support trash/restore features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support soft delete and trash features. "
+            "Use DynamoDB provider for trash/restore functionality."
+        )
+
+    def list_cleanup_jobs(self, limit: int = 10) -> list[dict[str, Any]]:
+        """MongoDB provider does not support trash/restore features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support soft delete and trash features. "
+            "Use DynamoDB provider for trash/restore functionality."
+        )
+
+    def mark_cleanup_job_failed(
+        self,
+        cleanup_job_id: str,
+        error_message: str
+    ) -> None:
+        """MongoDB provider does not support trash/restore features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support soft delete and trash features. "
+            "Use DynamoDB provider for trash/restore functionality."
+        )
+
+    def list_expired_trash(
+        self,
+        limit: int = 100,
+        next_key: str | None = None
+    ) -> dict[str, Any]:
+        """MongoDB provider does not support trash/restore features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support soft delete and trash features. "
+            "Use DynamoDB provider for trash/restore functionality."
+        )
 
     def close(self):
         """Close the MongoDB connection"""

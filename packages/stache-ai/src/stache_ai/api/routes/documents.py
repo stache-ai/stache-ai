@@ -1,8 +1,10 @@
 """Document management endpoints"""
 
 import logging
+from typing import Any
 
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, Body, HTTPException, Path, Query
+from pydantic import BaseModel, Field
 
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -482,15 +484,19 @@ async def get_document(
         if not doc:
             raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
 
+        # Get summary from top-level or fall back to metadata.ai_summary
+        metadata = doc.get("metadata", {})
+        summary = doc.get("summary") or metadata.get("ai_summary")
+
         return {
             "doc_id": doc.get("doc_id"),
             "filename": doc.get("filename"),
             "namespace": doc.get("namespace"),
             "chunk_count": doc.get("chunk_count"),
             "created_at": doc.get("created_at"),
-            "summary": doc.get("summary"),
+            "summary": summary,
             "headings": doc.get("headings", []),
-            "metadata": doc.get("metadata", {})
+            "metadata": metadata
         }
     except HTTPException:
         raise
@@ -502,20 +508,23 @@ async def get_document(
 @router.delete("/documents/id/{doc_id}")
 async def delete_document_by_id(
     doc_id: str = Path(..., description="Document ID (UUID) to delete"),
-    namespace: str = "default"
-):
+    namespace: str = "default",
+    permanent: bool = Query(False, description="If true, permanently delete. Otherwise, soft delete to trash.")
+) -> dict[str, Any]:
     """
-    Delete all chunks and summary record associated with a doc_id.
+    Delete document (soft delete - moves to trash by default).
 
-    Uses document index for efficient chunk ID lookup, then deletes vectors
-    from vector database and entry from document index in atomic operation.
+    Default: Soft delete (move to trash) with 30-day retention.
+    Query param ?permanent=true for immediate permanent delete.
     """
     try:
         pipeline = get_pipeline()
 
-        # Use document index if available (preferred method)
-        if pipeline.document_index_provider:
-            # Get chunk IDs from document index
+        if not pipeline.document_index_provider:
+            raise HTTPException(status_code=501, detail="Document index not available")
+
+        if permanent:
+            # Permanent delete - delete vectors and document immediately
             chunk_ids = pipeline.document_index_provider.get_chunk_ids(doc_id, namespace)
 
             if not chunk_ids:
@@ -528,47 +537,47 @@ async def delete_document_by_id(
             # Delete from document index
             pipeline.document_index_provider.delete_document(doc_id, namespace)
 
-            logger.info(f"Deleted document {doc_id} ({len(chunk_ids)} chunks) from {namespace}")
+            logger.info(f"Permanently deleted document {doc_id} ({len(chunk_ids)} chunks) from {namespace}")
 
             return {
-                "success": True,
+                "status": "deleted",
                 "doc_id": doc_id,
                 "namespace": namespace,
-                "chunks_deleted": len(chunk_ids)
+                "chunks_deleted": len(chunk_ids),
+                "message": "Document permanently deleted."
             }
+        else:
+            # Soft delete - move to trash
+            result = pipeline.document_index_provider.soft_delete_document(
+                doc_id=doc_id,
+                namespace=namespace,
+                deleted_by="api",
+                delete_reason="user_initiated",
+            )
 
-        # Fallback: Use legacy vector DB deletion (for backwards compatibility)
-        vectordb = pipeline.vectordb_provider
-        result = vectordb.delete_by_metadata(
-            field="doc_id",
-            value=doc_id
-        )
+            # Update vector status to exclude from search results
+            chunk_ids = result.get("chunk_ids", [])
+            if chunk_ids and hasattr(pipeline.vectordb_provider, "update_status"):
+                try:
+                    pipeline.vectordb_provider.update_status(chunk_ids, namespace, "deleting")
+                    logger.info(f"Updated {len(chunk_ids)} vectors to deleting status")
+                except Exception as e:
+                    # Log but don't fail - document is already in trash
+                    logger.warning(f"Failed to update vector status: {e}")
 
-        # Also explicitly delete the summary record by its ID
-        summary_id = f"summary_{doc_id}"
-        try:
-            vectordb.delete(ids=[summary_id])
-        except Exception:
-            pass  # Summary may not exist for older documents
-
-        if result["deleted"] == 0:
-            raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
-
-        logger.info(f"Deleted {result['deleted']} chunks + summary for doc_id: {doc_id}")
-
-        return {
-            "success": True,
-            "doc_id": doc_id,
-            "namespace": namespace,
-            "chunks_deleted": result["deleted"]
-        }
+            return {
+                "status": "deleted",
+                "doc_id": result["doc_id"],
+                "namespace": result["namespace"],
+                "deleted_at": result["deleted_at"],
+                "deleted_at_ms": result["deleted_at_ms"],
+                "purge_after": result["purge_after"],
+                "message": "Document moved to trash. Can be restored within 30 days.",
+            }
     except HTTPException:
         raise
-    except NotImplementedError:
-        raise HTTPException(
-            status_code=501,
-            detail="delete_by_metadata not implemented for current vector DB provider"
-        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to delete document: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -658,6 +667,90 @@ async def delete_document_by_filename(
         )
     except Exception as e:
         logger.error(f"Failed to delete document: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DocumentUpdateRequest(BaseModel):
+    """Request body for document metadata updates"""
+    namespace: str | None = Field(None, description="New namespace (migrates document)")
+    filename: str | None = Field(None, description="New filename")
+    metadata: dict[str, Any] | None = Field(None, description="Custom metadata (replaces existing)")
+    headings: list[str] | None = Field(None, description="Document headings (replaces existing)")
+
+
+@router.patch("/documents/{doc_id}")
+async def update_document_metadata(
+    doc_id: str = Path(..., description="Document UUID to update"),
+    current_namespace: str = Query("default", description="Current namespace"),
+    body: DocumentUpdateRequest = Body(...)
+):
+    """
+    Update document metadata (namespace, filename, custom metadata, headings)
+
+    This performs a dual-write to both DynamoDB document index and S3 Vectors.
+    Updates metadata for the document record and all associated chunk vectors.
+
+    **Supported Updates:**
+    - `namespace`: Migrate document to new namespace
+    - `filename`: Rename document
+    - `metadata`: Replace custom metadata dict
+    - `headings`: Replace document headings list
+
+    **Limitations:**
+    - Cannot update: doc_id, chunk_ids, created_at, chunk_count
+    - Summary updates: Use POST /api/generate-summaries endpoint
+
+    **Examples:**
+    ```
+    # Rename document
+    PATCH /api/documents/{doc_id}?current_namespace=default
+    {"filename": "new-name.pdf"}
+
+    # Migrate to new namespace
+    PATCH /api/documents/{doc_id}?current_namespace=old
+    {"namespace": "new"}
+
+    # Update custom metadata
+    PATCH /api/documents/{doc_id}?current_namespace=default
+    {"metadata": {"author": "John Doe", "tags": ["important"]}}
+    ```
+    """
+    # Build updates dict from request body
+    updates = {}
+    if body.namespace is not None:
+        updates["namespace"] = body.namespace
+    if body.filename is not None:
+        updates["filename"] = body.filename
+    if body.metadata is not None:
+        updates["metadata"] = body.metadata
+    if body.headings is not None:
+        updates["headings"] = body.headings
+
+    # Validate before entering try block to ensure 400 status code
+    if not updates:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one field must be provided (namespace, filename, metadata, headings)"
+        )
+
+    try:
+        pipeline = get_pipeline()
+
+        # Perform dual-write update
+        result = pipeline.update_document(doc_id, current_namespace, updates)
+
+        return {
+            "success": result["success"],
+            "doc_id": result["doc_id"],
+            "namespace": result["namespace"],
+            "updated_chunks": result["updated_chunks"],
+            "message": f"Updated document {doc_id} ({result['updated_chunks']} chunks)"
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update document {doc_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

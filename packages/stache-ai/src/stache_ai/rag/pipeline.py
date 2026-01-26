@@ -35,6 +35,8 @@ from stache_ai.rag.embedding_resilience import (
     BedrockErrorClassifier,
     OllamaErrorClassifier,
 )
+from stache_ai.types import IngestionResult, IngestionAction
+from stache_ai.utils.hashing import compute_hash_async
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,8 @@ class RAGPipeline:
         self._query_processors = None
         self._result_processors = None
         self._delete_observers = None
+        self._ingest_guards = None  # NEW: Run before enrichers
+        self._error_processors = None  # NEW: Run on ingestion failure
         # Thread-safe locks for middleware lazy initialization
         self._enrichers_lock = threading.Lock()
         self._chunk_observers_lock = threading.Lock()
@@ -104,6 +108,8 @@ class RAGPipeline:
         self._query_processors_lock = threading.Lock()
         self._result_processors_lock = threading.Lock()
         self._delete_observers_lock = threading.Lock()
+        self._ingest_guards_lock = threading.Lock()  # NEW
+        self._error_processors_lock = threading.Lock()  # NEW
 
     @property
     def embedding_provider(self):
@@ -179,6 +185,22 @@ class RAGPipeline:
             self._document_index_provider = DocumentIndexProviderFactory.create(self.config)
             logger.info(f"Initialized document index provider: {self._document_index_provider.get_name()}")
         return self._document_index_provider
+
+    @property
+    def namespace_provider(self):
+        """Lazy-load namespace provider for organization suggestions."""
+        if not hasattr(self, "_namespace_provider_instance"):
+            from stache_ai.providers import NamespaceProviderFactory
+            self._namespace_provider_instance = NamespaceProviderFactory.create(self.config)
+            logger.info(f"Initialized namespace provider: {self._namespace_provider_instance.get_name()}")
+        return self._namespace_provider_instance
+
+    def _get_namespace_provider(self):
+        """Get namespace provider, returns None if not configured."""
+        try:
+            return self.namespace_provider
+        except Exception:
+            return None
 
     @property
     def concept_index(self):
@@ -303,6 +325,42 @@ class RAGPipeline:
                     logger.info(f"Loaded {len(self._delete_observers)} delete observers")
         return self._delete_observers
 
+    @property
+    def ingest_guards(self):
+        """Lazy-load ingest guard middleware (runs before enrichers)"""
+        if self._ingest_guards is None:
+            with self._ingest_guards_lock:
+                if self._ingest_guards is None:  # Double-check pattern
+                    from stache_ai.providers.plugin_loader import get_providers
+                    guard_classes = get_providers('ingest_guard')
+                    self._ingest_guards = []
+                    for cls in guard_classes.values():
+                        try:
+                            self._ingest_guards.append(cls(self.config))
+                        except TypeError:
+                            self._ingest_guards.append(cls())
+                    self._ingest_guards.sort(key=lambda g: g.priority)
+                    logger.info(f"Loaded {len(self._ingest_guards)} ingest guards")
+        return self._ingest_guards
+
+    @property
+    def error_processors(self):
+        """Lazy-load error processor middleware (runs on ingestion failure)"""
+        if self._error_processors is None:
+            with self._error_processors_lock:
+                if self._error_processors is None:  # Double-check pattern
+                    from stache_ai.providers.plugin_loader import get_providers
+                    processor_classes = get_providers('error_processor')
+                    self._error_processors = []
+                    for cls in processor_classes.values():
+                        try:
+                            self._error_processors.append(cls(self.config))
+                        except TypeError:
+                            self._error_processors.append(cls())
+                    self._error_processors.sort(key=lambda p: p.priority)
+                    logger.info(f"Loaded {len(self._error_processors)} error processors")
+        return self._error_processors
+
     async def ingest_text(
         self,
         text: str,
@@ -313,7 +371,7 @@ class RAGPipeline:
         context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
-        Ingest text into the knowledge base
+        Ingest text into the knowledge base with deduplication support.
 
         Args:
             text: Text to ingest
@@ -328,7 +386,15 @@ class RAGPipeline:
         Returns:
             Result dictionary with chunks_created count
         """
+        import time
+        start_time = time.perf_counter()
+
         logger.info(f"Ingesting text (length: {len(text)}, strategy: {chunking_strategy}, namespace: {namespace})")
+
+        # Prepare metadata and namespace
+        metadata = metadata or {}
+        doc_id = str(uuid.uuid4())
+        ns = namespace or self.config.default_namespace
 
         # Create request context if not provided
         if context is None:
@@ -338,263 +404,451 @@ class RAGPipeline:
             context = RequestContext(
                 request_id=str(uuid4()),
                 timestamp=datetime.now(timezone.utc),
-                namespace=namespace or self.config.default_namespace,
+                namespace=ns,
                 source="api"
             )
 
-        # Apply enrichment middleware before chunking
-        current_text = text
-        current_metadata = metadata or {}
-        for enricher in self.enrichers:
-            from stache_ai.middleware.chain import MiddlewareRejection
-            result = await enricher.process(current_text, current_metadata, context)
-            if result.action == "reject":
-                raise MiddlewareRejection(enricher.__class__.__name__, result.reason)
-            if result.action == "transform":
-                current_text = result.content or current_text
-                if result.metadata is not None:
-                    current_metadata = {**current_metadata, **result.metadata}
-
-        # Use enriched content and metadata
-        text = current_text
-        metadata = current_metadata
-
-        # Build metadata prefix first so we can account for its size during chunking
-        metadata_prefix = ""
-        if prepend_metadata and metadata:
-            prefix_lines = []
-            for key in prepend_metadata:
-                if key in metadata:
-                    # Convert key to title case for readability (e.g., "speaker" -> "Speaker")
-                    label = key.replace("_", " ").title()
-                    prefix_lines.append(f"{label}: {metadata[key]}")
-            if prefix_lines:
-                metadata_prefix = "\n".join(prefix_lines) + "\n\n"
-                logger.info(f"Prepending metadata to chunks: {prepend_metadata}")
-
-        # Calculate effective chunk size accounting for metadata prefix
-        prefix_len = len(metadata_prefix)
-        if prefix_len > 0:
-            # Reduce chunk size to leave room for metadata prefix
-            effective_chunk_size = min(
-                self.config.chunk_size,
-                self.config.chunk_max_size - prefix_len
-            )
-            # Warn if prefix is larger than reserved space
-            if prefix_len > self.config.chunk_metadata_reserve:
-                logger.warning(
-                    f"Metadata prefix ({prefix_len} chars) exceeds reserved space "
-                    f"({self.config.chunk_metadata_reserve} chars). Consider increasing "
-                    f"CHUNK_METADATA_RESERVE or reducing metadata."
-                )
-        else:
-            effective_chunk_size = self.config.chunk_size
-
-        # Use chunking strategy factory with adjusted size
-        strategy = ChunkingStrategyFactory.create(chunking_strategy)
-        chunk_objects = strategy.chunk(
-            text,
-            chunk_size=effective_chunk_size,
-            chunk_overlap=self.config.chunk_overlap
-        )
-
-        # Extract text from chunk objects
-        chunks = [chunk.text for chunk in chunk_objects]
-
-        logger.info(f"Created {len(chunks)} chunks (effective size: {effective_chunk_size})")
-
-        # Prepend metadata to each chunk for embedding
-        chunks_for_embedding = [metadata_prefix + chunk for chunk in chunks] if metadata_prefix else chunks
-
-        # Prepare base metadata before embedding (needed for expansion later)
-        from datetime import datetime, timezone
-        metadata = metadata or {}
-        doc_id = str(uuid.uuid4())
-        created_at = datetime.now(timezone.utc).isoformat()
-        base_metadata = {
-            **metadata,
-            "doc_id": doc_id,
-            "created_at": created_at
-        }
-        metadatas = [
-            {
-                **base_metadata,
-                "chunk_index": i,
-                "total_chunks": len(chunks),
-            }
-            for i, _ in enumerate(chunks)
-        ]
-
-        # Wrap embedding provider with auto-split if enabled
-        split_count = 0
-        if self.config.embedding_auto_split_enabled:
-            # Choose error classifier based on provider
-            provider_name = self.embedding_provider.get_name().lower()
-            if 'ollama' in provider_name:
-                error_classifier = OllamaErrorClassifier()
-            elif 'bedrock' in provider_name:
-                error_classifier = BedrockErrorClassifier()
-            else:
-                error_classifier = None  # Use default
-
-            wrapper = AutoSplitEmbeddingWrapper(
-                provider=self.embedding_provider,
-                max_split_depth=self.config.embedding_auto_split_max_depth,
-                error_classifier=error_classifier,
-                enabled=True
-            )
-
-            # Use wrapper for embedding
-            results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding)
-
-            # Extract embeddings and texts
-            embeddings = [r.embedding for r in results]
-            texts_to_store = [r.text for r in results]
-
-            # Expand metadata for splits
-            expanded_metadatas = []
-            for r in results:
-                # Start with metadata from original chunk
-                if r.parent_index is not None and r.parent_index < len(metadatas):
-                    meta = {**metadatas[r.parent_index]}
-                else:
-                    meta = {**base_metadata, "chunk_index": 0, "total_chunks": len(chunks)}
-
-                # Add split metadata if this chunk was split
-                if r.was_split:
-                    meta['_split'] = True
-                    meta['_split_index'] = r.split_index
-                    meta['_split_total'] = r.split_total
-                    meta['_parent_chunk_index'] = r.parent_index
-
-                expanded_metadatas.append(meta)
-
-            metadatas = expanded_metadatas
-            chunks_for_embedding = texts_to_store
-        else:
-            # Auto-split disabled, use standard embed_batch
-            embeddings = self.embedding_provider.embed_batch(chunks_for_embedding)
-
-        # Use provided namespace or default from config
-        ns = namespace or self.config.default_namespace
-
-        # Insert into vector DB (store enriched chunks if metadata was prepended)
-        ids = self.documents_provider.insert(
-            vectors=embeddings,
-            texts=chunks_for_embedding,
-            metadatas=metadatas,
-            namespace=ns
-        )
-
-        # Create storage result and chunk tuples for middleware
-        from stache_ai.middleware.base import StorageResult
-        storage_result = StorageResult(
-            vector_ids=ids,
-            namespace=ns,
-            index="documents",
-            doc_id=doc_id,
-            chunk_count=len(chunks_for_embedding),
-            embedding_model=self.embedding_provider.get_name()
-        )
-        # Prepare chunks as (text, metadata) tuples
-        chunk_tuples = list(zip(chunks_for_embedding, metadatas))
-
-        # Call chunk observers after storage (advisory only)
-        for observer in self.chunk_observers:
-            try:
-                result = await observer.on_chunks_stored(chunk_tuples, storage_result, context)
-                if result.action == "reject":
-                    logger.warning(
-                        f"Chunk observer {observer.__class__.__name__} rejected storage: {result.reason}. "
-                        "This is advisory only - chunks were already stored."
-                    )
-            except Exception as e:
-                logger.error(f"Chunk observer {observer.__class__.__name__} failed: {e}")
-
-        # Create document summary for catalog/discovery
-        # Generate a readable filename if not provided
-        if metadata and metadata.get("filename"):
-            filename = metadata["filename"]
-        else:
-            # Create timestamp-based filename with text preview for captures
-            from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            preview = text[:30].replace("\n", " ").strip()
-            if len(text) > 30:
-                preview += "..."
-            filename = f"Capture {timestamp} - {preview}"
-
-        # Run post-ingest processors (summary generation, entity extraction, etc.)
-        from stache_ai.middleware.chain import MiddlewareChain
-
-        # Populate context with providers for PostIngestProcessors
-        context.custom["embedding_provider"] = self.embedding_provider
-        context.custom["summaries_provider"] = self.summaries_provider
+        # Attach providers to context (guards, enrichers, and error processors need access)
+        context.custom["document_index"] = self.document_index_provider
+        context.custom["vectordb"] = self.documents_provider
         context.custom["config"] = self.config
-        context.custom["concept_index"] = self.concept_index
-        context.custom["vectordb"] = self.vectordb_provider
+        context.custom["namespace_provider"] = self._get_namespace_provider()
 
-        artifacts = await MiddlewareChain.run_postingest(
-            processors=self.postingest_processors,
-            chunks=chunk_tuples,
-            storage_result=storage_result,
-            context=context
-        )
-
-        # Extract summary artifacts (if generated)
-        summary_text = artifacts.get("summary")
-        headings = artifacts.get("headings", [])
-        summary_id = artifacts.get("summary_id")
-
-        # Create document index entry for efficient metadata queries (dual-write pattern)
-        # This is wrapped in try/except to prevent ingestion failure if index write fails
-        if self.document_index_provider:
+        # Step 1: Run IngestGuards (pre-enrichment validation including dedup)
+        previous_doc_id = None
+        for guard in self.ingest_guards:
             try:
-                # Text ingestion - file_type is "text", file_size is the text byte size
-                file_size = len(text.encode('utf-8'))
+                guard_result = await guard.validate(text, metadata, context)
 
-                self.document_index_provider.create_document(
-                    doc_id=doc_id,
-                    filename=filename,
-                    namespace=ns,
-                    chunk_ids=ids,
-                    summary=summary_text,
-                    summary_embedding_id=summary_id,
-                    headings=headings,
-                    metadata=metadata,
-                    file_type="text",
-                    file_size=file_size
-                )
-                logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
+                if guard_result.action == "reject":
+                    logger.info(
+                        f"Ingestion blocked by guard: {guard.__class__.__name__}",
+                        extra={"reason": guard_result.reason}
+                    )
+
+                    return IngestionResult(
+                        action=IngestionAction.SKIP,
+                        doc_id=guard_result.metadata.get("existing_doc_id", doc_id) if guard_result.metadata else doc_id,
+                        namespace=ns,
+                        chunks_created=0,
+                        reason=guard_result.reason or "blocked by guard",
+                        content_hash=guard_result.metadata.get("content_hash", "") if guard_result.metadata else "",
+                    ).to_dict()
+
+                # Merge guard metadata (including content_hash, _reingest_version)
+                if guard_result.metadata:
+                    metadata.update(guard_result.metadata)
+                    if guard_result.metadata.get("_reingest_version"):
+                        previous_doc_id = guard_result.metadata.get("_previous_doc_id")
+
             except Exception as e:
-                # Log error with full stack trace for debugging
-                logger.error(
-                    f"Failed to create document index for {filename}: {e}",
-                    exc_info=True,
-                    extra={
-                        "doc_id": doc_id,
-                        "namespace": ns,
-                        "metadata_keys": list(metadata.keys()) if metadata else [],
-                    }
+                if guard.on_error == "reject":
+                    logger.error(f"Guard {guard.__class__.__name__} failed: {e}")
+                    raise
+                else:
+                    logger.warning(f"Guard {guard.__class__.__name__} failed (continuing): {e}")
+
+        # Step 2: Reserve identifier (atomic, prevents race conditions)
+        content_hash = metadata.get("content_hash")  # Attached by DeduplicationGuard
+        if self.config.dedup_enabled and self.document_index_provider and content_hash:
+            # For REINGEST_VERSION, don't reserve (identifier already exists for old version)
+            if not metadata.get("_reingest_version"):
+                reserved = self.document_index_provider.reserve_identifier(
+                    content_hash=content_hash,
+                    filename=metadata.get("filename", "text"),
+                    namespace=ns,
+                    doc_id=doc_id,
+                    source_path=metadata.get("source_path"),
+                    file_size=metadata.get("file_size"),
+                    file_modified_at=metadata.get("file_modified_at"),
                 )
 
-        # Build result
-        result = {
-            "chunks_created": len(chunks),
-            "success": True,
-            "ids": ids,
-            "namespace": ns,
-            "doc_id": doc_id,
-        }
+                if not reserved:
+                    # Race condition: another request reserved this identifier
+                    existing = self.document_index_provider.get_document_by_identifier(
+                        content_hash=content_hash,
+                        filename=metadata.get("filename", "text"),
+                        namespace=ns,
+                        source_path=metadata.get("source_path"),
+                    )
 
-        # Add split info if any occurred
-        if split_count > 0:
-            result["splits_created"] = split_count
-            result["info"] = [
-                f"{split_count} chunk(s) were auto-split due to embedding token limits"
+                    if existing:
+                        return IngestionResult(
+                            action=IngestionAction.SKIP,
+                            doc_id=existing["doc_id"],
+                            namespace=ns,
+                            chunks_created=0,
+                            reason="duplicate detected during reservation",
+                            content_hash=content_hash,
+                        ).to_dict()
+
+        # Clean up internal metadata flags (before enrichers see them)
+        metadata.pop("_reingest_version", None)
+        deleted_at_ms = metadata.pop("_deleted_at_ms", None)  # Save for error recovery
+        if previous_doc_id:
+            # Store in metadata for error recovery but don't pass to enrichers
+            metadata["_previous_doc_id"] = previous_doc_id
+            metadata["_deleted_at_ms"] = deleted_at_ms
+
+        # Step 3: Proceed with ingestion (identifier reserved or REINGEST_VERSION)
+        vectors_inserted = False
+        chunk_ids = []
+
+        try:
+            # Apply enrichment middleware before chunking
+            current_text = text
+            current_metadata = dict(metadata)  # Copy to avoid mutation
+            for enricher in self.enrichers:
+                from stache_ai.middleware.chain import MiddlewareRejection
+                result = await enricher.process(current_text, current_metadata, context)
+                if result.action == "reject":
+                    raise MiddlewareRejection(enricher.__class__.__name__, result.reason)
+                if result.action == "transform":
+                    current_text = result.content or current_text
+                    if result.metadata is not None:
+                        current_metadata = {**current_metadata, **result.metadata}
+
+            # Use enriched content and metadata
+            text = current_text
+            metadata = current_metadata
+
+            # Apply suggested namespace if auto-apply was requested
+            if "_suggested_namespace_to_apply" in metadata:
+                ns = metadata.pop("_suggested_namespace_to_apply")
+                logger.info(f"Auto-applying suggested namespace: {ns}")
+
+            # Build metadata prefix first so we can account for its size during chunking
+            metadata_prefix = ""
+            if prepend_metadata and metadata:
+                prefix_lines = []
+                for key in prepend_metadata:
+                    if key in metadata:
+                        # Convert key to title case for readability (e.g., "speaker" -> "Speaker")
+                        label = key.replace("_", " ").title()
+                        prefix_lines.append(f"{label}: {metadata[key]}")
+                if prefix_lines:
+                    metadata_prefix = "\n".join(prefix_lines) + "\n\n"
+                    logger.info(f"Prepending metadata to chunks: {prepend_metadata}")
+
+            # Calculate effective chunk size accounting for metadata prefix
+            prefix_len = len(metadata_prefix)
+            if prefix_len > 0:
+                # Reduce chunk size to leave room for metadata prefix
+                effective_chunk_size = min(
+                    self.config.chunk_size,
+                    self.config.chunk_max_size - prefix_len
+                )
+                # Warn if prefix is larger than reserved space
+                if prefix_len > self.config.chunk_metadata_reserve:
+                    logger.warning(
+                        f"Metadata prefix ({prefix_len} chars) exceeds reserved space "
+                        f"({self.config.chunk_metadata_reserve} chars). Consider increasing "
+                        f"CHUNK_METADATA_RESERVE or reducing metadata."
+                    )
+            else:
+                effective_chunk_size = self.config.chunk_size
+
+            # Use chunking strategy factory with adjusted size
+            strategy = ChunkingStrategyFactory.create(chunking_strategy)
+            chunk_objects = strategy.chunk(
+                text,
+                chunk_size=effective_chunk_size,
+                chunk_overlap=self.config.chunk_overlap
+            )
+
+            # Extract text from chunk objects
+            chunks = [chunk.text for chunk in chunk_objects]
+
+            logger.info(f"Created {len(chunks)} chunks (effective size: {effective_chunk_size})")
+
+            # Prepend metadata to each chunk for embedding
+            chunks_for_embedding = [metadata_prefix + chunk for chunk in chunks] if metadata_prefix else chunks
+
+            # Prepare base metadata before embedding (needed for expansion later)
+            from datetime import datetime, timezone
+            created_at = datetime.now(timezone.utc).isoformat()
+            base_metadata = {
+                **metadata,
+                "doc_id": doc_id,
+                "created_at": created_at,
+            }
+            metadatas = [
+                {
+                    **base_metadata,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                }
+                for i, _ in enumerate(chunks)
             ]
 
-        return result
+            # Wrap embedding provider with auto-split if enabled
+            split_count = 0
+            if self.config.embedding_auto_split_enabled:
+                # Choose error classifier based on provider
+                provider_name = self.embedding_provider.get_name().lower()
+                if 'ollama' in provider_name:
+                    error_classifier = OllamaErrorClassifier()
+                elif 'bedrock' in provider_name:
+                    error_classifier = BedrockErrorClassifier()
+                else:
+                    error_classifier = None  # Use default
+
+                wrapper = AutoSplitEmbeddingWrapper(
+                    provider=self.embedding_provider,
+                    max_split_depth=self.config.embedding_auto_split_max_depth,
+                    error_classifier=error_classifier,
+                    enabled=True
+                )
+
+                # Use wrapper for embedding
+                results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding)
+
+                # Extract embeddings and texts
+                embeddings = [r.embedding for r in results]
+                texts_to_store = [r.text for r in results]
+
+                # Expand metadata for splits
+                expanded_metadatas = []
+                for r in results:
+                    # Start with metadata from original chunk
+                    if r.parent_index is not None and r.parent_index < len(metadatas):
+                        meta = {**metadatas[r.parent_index]}
+                    else:
+                        meta = {**base_metadata, "chunk_index": 0, "total_chunks": len(chunks)}
+
+                    # Add split metadata if this chunk was split
+                    if r.was_split:
+                        meta['_split'] = True
+                        meta['_split_index'] = r.split_index
+                        meta['_split_total'] = r.split_total
+                        meta['_parent_chunk_index'] = r.parent_index
+
+                    expanded_metadatas.append(meta)
+
+                metadatas = expanded_metadatas
+                chunks_for_embedding = texts_to_store
+            else:
+                # Auto-split disabled, use standard embed_batch
+                embeddings = self.embedding_provider.embed_batch(chunks_for_embedding)
+
+            # Insert into vector DB (store enriched chunks if metadata was prepended)
+            ids = self.documents_provider.insert(
+                vectors=embeddings,
+                texts=chunks_for_embedding,
+                metadatas=metadatas,
+                namespace=ns
+            )
+            vectors_inserted = True
+            chunk_ids = ids
+
+            # Create storage result and chunk tuples for middleware
+            from stache_ai.middleware.base import StorageResult
+            storage_result = StorageResult(
+                vector_ids=ids,
+                namespace=ns,
+                index="documents",
+                doc_id=doc_id,
+                chunk_count=len(chunks_for_embedding),
+                embedding_model=self.embedding_provider.get_name()
+            )
+            # Prepare chunks as (text, metadata) tuples
+            chunk_tuples = list(zip(chunks_for_embedding, metadatas))
+
+            # Call chunk observers after storage (advisory only)
+            for observer in self.chunk_observers:
+                try:
+                    result = await observer.on_chunks_stored(chunk_tuples, storage_result, context)
+                    if result.action == "reject":
+                        logger.warning(
+                            f"Chunk observer {observer.__class__.__name__} rejected storage: {result.reason}. "
+                            "This is advisory only - chunks were already stored."
+                        )
+                except Exception as e:
+                    logger.error(f"Chunk observer {observer.__class__.__name__} failed: {e}")
+
+            # Create document summary for catalog/discovery
+            # Generate a readable filename if not provided
+            if metadata and metadata.get("filename"):
+                filename = metadata["filename"]
+            else:
+                # Create timestamp-based filename with text preview for captures
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                preview = text[:30].replace("\n", " ").strip()
+                if len(text) > 30:
+                    preview += "..."
+                filename = f"Capture {timestamp} - {preview}"
+
+            # Run post-ingest processors (summary generation, entity extraction, etc.)
+            from stache_ai.middleware.chain import MiddlewareChain
+
+            # Populate context with providers for PostIngestProcessors
+            context.custom["embedding_provider"] = self.embedding_provider
+            context.custom["summaries_provider"] = self.summaries_provider
+            context.custom["config"] = self.config
+            context.custom["concept_index"] = self.concept_index
+            context.custom["vectordb"] = self.vectordb_provider
+            context.custom["namespace_provider"] = self._get_namespace_provider()
+
+            artifacts = await MiddlewareChain.run_postingest(
+                processors=self.postingest_processors,
+                chunks=chunk_tuples,
+                storage_result=storage_result,
+                context=context
+            )
+
+            # Extract summary artifacts (if generated)
+            summary_text = artifacts.get("summary")
+            headings = artifacts.get("headings", [])
+            summary_id = artifacts.get("summary_id")
+
+            # Complete identifier reservation (if not REINGEST_VERSION)
+            if self.config.dedup_enabled and self.document_index_provider and content_hash:
+                if not previous_doc_id:  # New document, not version update
+                    self.document_index_provider.complete_identifier_reservation(
+                        content_hash=content_hash,
+                        filename=metadata.get("filename", "text"),
+                        namespace=ns,
+                        doc_id=doc_id,
+                        chunk_count=len(chunk_ids),
+                        source_path=metadata.get("source_path"),
+                    )
+
+            # Create document index entry for efficient metadata queries (dual-write pattern)
+            # This is wrapped in try/except to prevent ingestion failure if index write fails
+            if self.document_index_provider:
+                try:
+                    # Text ingestion - file_type is "text", file_size is the text byte size
+                    file_size = len(text.encode('utf-8'))
+
+                    # Strip internal metadata flags before storing (prevents leaking to doc metadata)
+                    clean_metadata = {
+                        k: v for k, v in metadata.items()
+                        if not k.startswith("_")
+                    }
+                    if content_hash:
+                        clean_metadata["content_hash"] = content_hash
+
+                    self.document_index_provider.create_document(
+                        doc_id=doc_id,
+                        filename=filename,
+                        namespace=ns,
+                        chunk_ids=ids,
+                        summary=summary_text,
+                        summary_embedding_id=summary_id,
+                        headings=headings,
+                        metadata=clean_metadata,
+                        file_type="text",
+                        file_size=file_size,
+                        chunk_count=len(chunk_ids),
+                    )
+                    logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
+                except Exception as e:
+                    # Log error with full stack trace for debugging
+                    logger.error(
+                        f"Failed to create document index for {filename}: {e}",
+                        exc_info=True,
+                        extra={
+                            "doc_id": doc_id,
+                            "namespace": ns,
+                            "metadata_keys": list(metadata.keys()) if metadata else [],
+                        }
+                    )
+
+            total_time = time.perf_counter() - start_time
+            action = IngestionAction.REINGEST_VERSION if previous_doc_id else IngestionAction.INGEST_NEW
+
+            logger.info(
+                "Document ingested successfully",
+                extra={
+                    "action": action.value,
+                    "doc_id": doc_id,
+                    "namespace": ns,
+                    "chunks_created": len(chunk_ids),
+                    "content_hash": content_hash[:16] if content_hash else "none",
+                    "previous_doc_id": previous_doc_id,
+                    "total_ms": int(total_time * 1000),
+                }
+            )
+
+            # Build result
+            result = {
+                "chunks_created": len(chunks),
+                "success": True,
+                "ids": ids,
+                "namespace": ns,
+                "doc_id": doc_id,
+                "action": action.value,
+            }
+
+            # Add split info if any occurred
+            if split_count > 0:
+                result["splits_created"] = split_count
+                result["info"] = [
+                    f"{split_count} chunk(s) were auto-split due to embedding token limits"
+                ]
+
+            if previous_doc_id:
+                result["previous_doc_id"] = previous_doc_id
+                result["reason"] = "updated version"
+            else:
+                result["reason"] = "new document"
+
+            if content_hash:
+                result["content_hash"] = content_hash
+
+            return result
+
+        except Exception as e:
+            # Run error processors for recovery (e.g., restore old doc on REINGEST_VERSION failure)
+            partial_state = {
+                "metadata": metadata,
+                "doc_id": doc_id,
+                "namespace": ns,
+                "vectors_inserted": vectors_inserted,
+                "chunk_ids": chunk_ids,
+            }
+
+            for error_processor in self.error_processors:
+                try:
+                    error_result = await error_processor.on_error(e, context, partial_state)
+                    if error_result.handled:
+                        logger.info(
+                            f"Error handled by processor: {error_processor.__class__.__name__}",
+                            extra=error_result.metadata or {}
+                        )
+                except Exception as handler_error:
+                    # Log but don't block other processors
+                    logger.error(
+                        f"Error processor {error_processor.__class__.__name__} failed: {handler_error}",
+                        exc_info=True
+                    )
+
+            # Release identifier reservation on failure
+            if self.config.dedup_enabled and self.document_index_provider and content_hash:
+                if not previous_doc_id:  # Only release if not REINGEST_VERSION
+                    try:
+                        self.document_index_provider.release_identifier(
+                            content_hash=content_hash,
+                            filename=metadata.get("filename", "text"),
+                            namespace=ns,
+                            source_path=metadata.get("source_path"),
+                        )
+                    except Exception as cleanup_error:
+                        logger.error(f"Failed to release identifier: {cleanup_error}")
+
+            # Attempt vector cleanup if partially inserted
+            if vectors_inserted and chunk_ids:
+                try:
+                    await self.documents_provider.delete_by_ids(
+                        ids=chunk_ids,
+                        namespace=ns
+                    )
+                    logger.info(f"Cleaned up {len(chunk_ids)} orphaned vectors after error")
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to cleanup orphaned vectors: {cleanup_error}")
+
+            raise e
 
     async def ingest_file(
         self,
@@ -839,6 +1093,7 @@ class RAGPipeline:
         context.custom["config"] = self.config
         context.custom["concept_index"] = self.concept_index
         context.custom["vectordb"] = self.vectordb_provider
+        context.custom["namespace_provider"] = self._get_namespace_provider()
 
         artifacts = await MiddlewareChain.run_postingest(
             processors=self.postingest_processors,
@@ -903,6 +1158,168 @@ class RAGPipeline:
 
         return result
 
+    def update_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        updates: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update document metadata in both DynamoDB and S3 Vectors
+
+        This is a dual-write operation that:
+        1. Updates document metadata in DynamoDB document index
+        2. Updates metadata for all chunks in S3 Vectors vector store
+
+        CRITICAL: S3 Vectors put_vectors requires BOTH data AND metadata.
+        Must fetch vectors with returnData=True before updating.
+
+        Args:
+            doc_id: Document UUID
+            namespace: Current namespace (for lookup)
+            updates: Fields to update (namespace, filename, metadata, headings)
+
+        Returns:
+            Dict with:
+                - success: bool
+                - updated_chunks: int (number of vectors updated)
+                - updated_document: bool (document index updated)
+
+        Raises:
+            ValueError: If document not found or updates invalid
+        """
+        if not self.document_index_provider:
+            raise ValueError("Document index required for metadata updates")
+
+        # 1. Get chunk IDs from document index
+        chunk_ids = self.document_index_provider.get_chunk_ids(doc_id, namespace)
+        if not chunk_ids:
+            raise ValueError(f"Document {doc_id} not found in namespace {namespace}")
+
+        new_namespace = updates.get("namespace", namespace)
+
+        # 2. Update S3 Vectors FIRST (idempotent, safe to retry)
+        # If this fails, DynamoDB is unchanged and operation can be retried
+        chunks_updated = 0
+
+        try:
+            # Fetch vectors WITH embeddings using new method
+            # Use documents_provider (not vectordb_provider) to match ingestion behavior
+            # Don't filter by namespace - we're fetching by exact IDs which are globally unique
+            # This handles retry scenarios where vectors may already be in the new namespace
+            vectors_data = self.documents_provider.get_vectors_with_embeddings(
+                chunk_ids,
+                namespace=None  # Don't filter - IDs are unique
+            )
+
+            # Prepare metadata updates, filtering out summary chunks
+            updated_vectors = []
+            updated_metadatas = []
+            updated_ids = []
+
+            for vec in vectors_data:
+                # Use normalized format from get_vectors_with_embeddings()
+                vec_id = vec.get("id")
+                embedding = vec.get("vector")
+                metadata = vec.get("metadata", {})
+
+                # Skip summary chunks - they're managed separately
+                vec_type = metadata.get("_type")
+                if vec_type == "document_summary":
+                    logger.debug(f"Skipping summary chunk {vec_id}")
+                    continue
+
+                # Update namespace in metadata
+                if "namespace" in updates:
+                    metadata["namespace"] = new_namespace
+
+                # Update filename in metadata
+                if "filename" in updates:
+                    metadata["filename"] = updates["filename"]
+
+                # Merge custom metadata
+                if "metadata" in updates:
+                    # Preserve system metadata (_type, doc_id, chunk_index, etc)
+                    system_keys = {k for k in metadata.keys() if k.startswith("_")}
+                    system_metadata = {k: metadata[k] for k in system_keys}
+
+                    # Merge user metadata
+                    metadata.update(updates["metadata"])
+                    metadata.update(system_metadata)  # System metadata takes precedence
+
+                updated_ids.append(vec_id)
+                updated_metadatas.append(metadata)
+                updated_vectors.append(embedding)
+
+            if not updated_ids:
+                logger.warning(f"No regular chunks found for document {doc_id} (only summaries?)")
+            else:
+                # Re-write vectors with updated metadata
+                # Provider insert() is an upsert - updates metadata in-place
+                # Use documents_provider to match ingestion behavior
+                batch_size = self.documents_provider.max_batch_size
+                for i in range(0, len(updated_ids), batch_size):
+                    batch_ids = updated_ids[i:i + batch_size]
+                    batch_vectors = updated_vectors[i:i + batch_size]
+                    batch_metadatas = updated_metadatas[i:i + batch_size]
+
+                    # Extract text from metadata (already normalized)
+                    # Remove 'text' from metadata dicts to avoid metadata size issues
+                    texts = []
+                    cleaned_metadatas = []
+                    for j, m in enumerate(batch_metadatas):
+                        text = m.get("text", "")
+                        if not text:
+                            logger.warning(f"Chunk {batch_ids[j]} has empty text field during update")
+                        texts.append(text)
+
+                        # Remove text from metadata dict (will be passed separately)
+                        cleaned_meta = {k: v for k, v in m.items() if k != "text"}
+                        cleaned_metadatas.append(cleaned_meta)
+
+                    self.documents_provider.insert(
+                        ids=batch_ids,
+                        vectors=batch_vectors,
+                        texts=texts,
+                        metadatas=cleaned_metadatas,
+                        namespace=new_namespace  # Namespace in metadata updated
+                    )
+
+                chunks_updated = len(updated_ids)
+                logger.info(f"Updated {chunks_updated} chunk vectors for document {doc_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to update vectors for document {doc_id}: {e}")
+            # Raise exception - vectors must be updated before DynamoDB
+            # Caller can retry since DynamoDB is unchanged
+            raise RuntimeError(f"Vector update failed: {e}") from e
+
+        # 3. Update DynamoDB document index SECOND (after vectors succeed)
+        # If DynamoDB update fails, vectors have updated metadata but are still searchable
+        # User can retry the operation to fix DynamoDB consistency
+        doc_updated = False
+        try:
+            doc_updated = self.document_index_provider.update_document_metadata(
+                doc_id, namespace, updates
+            )
+        except Exception as e:
+            logger.error(f"Failed to update document index for {doc_id}: {e}")
+            # Log warning but don't raise - vectors are already updated
+            # Admin can manually fix DynamoDB inconsistency
+            logger.warning(
+                f"INCONSISTENCY: Vectors updated for {doc_id} but document index failed. "
+                f"Remediation steps:\n"
+                f"1. Retry the update operation (vectors are idempotent)\n"
+                f"2. Or manually fix DynamoDB: update_document_metadata('{doc_id}', '{namespace}', {updates})\n"
+                f"Error: {e}"
+            )
+
+        return {
+            "success": doc_updated,
+            "updated_chunks": chunks_updated,
+            "updated_document": doc_updated,
+            "doc_id": doc_id,
+            "namespace": new_namespace
+        }
 
     def get_available_chunking_strategies(self) -> list[str]:
         """Get list of available chunking strategies"""
@@ -990,6 +1407,9 @@ class RAGPipeline:
                 logger.warning(f"Removed reserved keys from filter: {removed}")
             if not sanitized_filter:
                 sanitized_filter = None
+
+        # Note: Deleted documents are excluded by vector-level status filter in VectorDBProvider
+        # The provider's search() method filters out vectors with status != "active"
 
         # Search vector DB - fetch more results if reranking
         search_top_k = top_k * 3 if rerank else top_k

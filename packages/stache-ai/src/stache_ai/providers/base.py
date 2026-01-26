@@ -2,7 +2,7 @@
 
 import builtins
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Dict
 
 
 class EmbeddingProvider(ABC):
@@ -405,6 +405,16 @@ class VectorDBProvider(ABC):
 
         Returns:
             List of inserted vector IDs
+
+        **CRITICAL**: Implementations MUST set status="active" on all new vectors:
+
+        ```python
+        for metadata in metadatas:
+            if "status" not in metadata:
+                metadata["status"] = "active"
+        ```
+
+        This ensures new vectors are searchable by default.
         """
         pass
 
@@ -427,6 +437,53 @@ class VectorDBProvider(ABC):
 
         Returns:
             List of results with text, metadata, and scores
+
+        **CRITICAL**: Implementations MUST filter out soft-deleted vectors.
+
+        **Status Filtering Logic**:
+        Include vectors where:
+        - status field doesn't exist (legacy vectors), OR
+        - status == "active"
+
+        Exclude vectors where:
+        - status == "deleting", OR
+        - status == "purging", OR
+        - status == "purged"
+
+        **Provider-Specific Implementations**:
+
+        S3 Vectors (MongoDB-like syntax):
+        ```python
+        status_filter = {
+            "$or": [
+                {"status": {"$exists": False}},
+                {"status": "active"}
+            ]
+        }
+        combined = {"$and": [status_filter, user_filter]} if user_filter else status_filter
+        ```
+
+        Qdrant:
+        ```python
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+        status_filter = Filter(
+            should=[
+                FieldCondition(key="status", match=MatchValue(value="active")),
+                # No way to check field non-existence in Qdrant - requires migration
+            ]
+        )
+        ```
+
+        Pinecone:
+        ```python
+        status_filter = {"status": {"$in": ["active"]}}
+        # Pinecone requires migration to add status="active" to legacy vectors
+        ```
+
+        **Legacy Vector Handling**:
+        - If provider supports "field doesn't exist" filtering: include legacy vectors
+        - If not: requires one-time migration to backfill status="active"
         """
         pass
 
@@ -443,6 +500,44 @@ class VectorDBProvider(ABC):
             True if successful
         """
         pass
+
+    def update_status(
+        self,
+        ids: list[str],
+        namespace: str,
+        status: str,
+    ) -> int:
+        """
+        Update status field for multiple vectors (for soft delete).
+
+        Args:
+            ids: Vector IDs to update
+            namespace: Target namespace
+            status: New status value ("deleting", "purging", "purged", "active")
+
+        Returns:
+            Count of vectors updated
+
+        **Implementation Notes**:
+        - S3 Vectors: Batch update via update_vectors()
+        - Qdrant: points.update_vectors() with payload
+        - Pinecone: update() in batches
+        - PostgreSQL pgvector: UPDATE vectors SET metadata = ... WHERE id IN (...)
+
+        **Atomicity**: Best-effort batch update. Partial failures are acceptable
+        (cleanup job can retry missed vectors).
+
+        **Default Implementation**: Returns 0 and logs warning. Providers that don't
+        support status-based soft delete will have vectors remain searchable after
+        soft delete operations.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            f"{self.__class__.__name__} does not support status filtering. "
+            f"Soft-deleted vectors will remain searchable until permanently deleted."
+        )
+        return 0
 
     @abstractmethod
     def get_collection_info(self) -> dict[str, Any]:
@@ -540,6 +635,35 @@ class VectorDBProvider(ABC):
         """
         raise NotImplementedError("get_by_ids not implemented for this provider")
 
+    def get_vectors_with_embeddings(
+        self,
+        ids: list[str],
+        namespace: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Retrieve vectors by IDs with embeddings and metadata
+
+        Unlike get_by_ids which only returns metadata, this method
+        includes the full embedding vectors needed for re-writing.
+
+        Args:
+            ids: List of vector IDs to retrieve
+            namespace: Optional namespace filter (validation only)
+
+        Returns:
+            List of dicts with standardized structure:
+            {
+                "id": str,              # Vector ID
+                "vector": List[float],  # Embedding vector
+                "metadata": Dict[str, Any]  # All metadata fields
+            }
+
+            CRITICAL: Return vectors in their STORED format (normalized or unnormalized).
+            The caller (rerank middleware) will normalize S3 Vectors results and pass
+            through other providers' results unchanged. S3 Vectors is the only provider
+            that stores denormalized vectors - all others store normalized.
+        """
+        raise NotImplementedError("get_vectors_with_embeddings not implemented for this provider")
+
     def get_name(self) -> str:
         """Get provider name"""
         return self.__class__.__name__
@@ -558,6 +682,19 @@ class VectorDBProvider(ABC):
             - "export": Supports database export
         """
         return set()
+
+    @property
+    def max_batch_size(self) -> int:
+        """Maximum number of vectors that can be retrieved in a single batch
+
+        Providers with smaller batch size limits (e.g., S3 Vectors' 100-vector limit
+        for get_vectors) must override this property. Middleware that needs to fetch
+        vectors in batches (like rerank) will use this value to chunk requests.
+
+        Returns:
+            Maximum batch size (default: 1000)
+        """
+        return 1000
 
 
 class DocumentIndexProvider(ABC):
@@ -701,6 +838,46 @@ class DocumentIndexProvider(ABC):
         pass
 
     @abstractmethod
+    def update_document_metadata(
+        self,
+        doc_id: str,
+        namespace: str,
+        updates: dict[str, Any]
+    ) -> bool:
+        """
+        Update document metadata fields atomically
+
+        Supports updating:
+        - namespace: Move document to new namespace (updates GSI1PK)
+        - filename: Rename document (updates GSI2PK)
+        - metadata: Update custom metadata dict
+        - headings: Update extracted headings list
+
+        Does NOT update:
+        - doc_id: Immutable
+        - chunk_ids: Managed by system
+        - created_at: Immutable
+        - chunk_count: Derived from chunk_ids
+        - summary/summary_embedding_id: Use update_document_summary
+
+        Args:
+            doc_id: Document identifier
+            namespace: Current namespace (for lookup)
+            updates: Dict with fields to update. Keys:
+                - "namespace": str (new namespace)
+                - "filename": str (new filename)
+                - "metadata": dict (replaces existing metadata)
+                - "headings": list[str] (replaces existing headings)
+
+        Returns:
+            True if update was successful, False if document not found
+
+        Raises:
+            ValueError: If updates contains invalid fields
+        """
+        pass
+
+    @abstractmethod
     def get_chunk_ids(
         self,
         doc_id: str,
@@ -738,6 +915,333 @@ class DocumentIndexProvider(ABC):
 
         Returns:
             True if a document with this filename exists in the namespace
+        """
+        pass
+
+    def count_by_namespace(self, namespace: str) -> dict[str, int]:
+        """
+        Get document and chunk counts for a namespace
+
+        This provides an efficient way to get namespace statistics without
+        scanning the vector database. Implementations should use indexed
+        queries where possible.
+
+        Args:
+            namespace: Namespace to count documents for
+
+        Returns:
+            Dictionary with:
+            {
+                "doc_count": int,    # Number of documents
+                "chunk_count": int   # Total chunks across all documents
+            }
+
+        Note:
+            Default implementation returns zeros. Override in subclasses
+            that support efficient counting.
+        """
+        return {"doc_count": 0, "chunk_count": 0}
+
+    # ==================== Deduplication Methods ====================
+
+    @abstractmethod
+    def reserve_identifier(
+        self,
+        content_hash: str,
+        filename: str,
+        namespace: str,
+        doc_id: str,
+        source_path: str | None = None,
+        file_size: int | None = None,
+        file_modified_at: str | None = None,
+        metadata: dict[str, Any] | None = None
+    ) -> bool:
+        """
+        Atomically reserve a document identifier.
+
+        Returns True if reservation succeeded, False if identifier already exists.
+
+        **Atomicity Requirement**: MUST use provider-native atomic operations:
+        - DynamoDB: conditional put with attribute_not_exists(PK)
+        - PostgreSQL: INSERT ... ON CONFLICT DO NOTHING with UNIQUE constraint
+        - MongoDB: insertOne with unique index on identifier
+
+        **Implementation Notes**:
+        - Compute identifier using _compute_identifier() logic
+        - Store pending reservation with status="pending"
+        - On conflict, return False (identifier already reserved)
+        """
+        pass
+
+    @abstractmethod
+    def get_document_by_identifier(
+        self,
+        content_hash: str,
+        filename: str,
+        namespace: str,
+        source_path: str | None = None
+    ) -> dict[str, Any] | None:
+        """
+        Retrieve document by identifier (strongly consistent).
+
+        Returns document metadata if identifier exists and status="complete", else None.
+
+        **Consistency Requirement**: MUST use strongly consistent reads:
+        - DynamoDB: ConsistentRead=True
+        - PostgreSQL: SELECT (default serializable)
+        - MongoDB: Read concern "linearizable" or "majority"
+
+        **Returns**:
+        {
+            "doc_id": str,
+            "namespace": str,
+            "identifier_type": "source_path" | "fingerprint",
+            "content_hash": str,
+            "filename": str,
+            "source_path": str | None,
+            "file_size": int | None,
+            "file_modified_at": str | None,
+            "ingested_at": str,
+            "version": int,
+        }
+        """
+        pass
+
+    @abstractmethod
+    def complete_identifier_reservation(
+        self,
+        content_hash: str,
+        filename: str,
+        namespace: str,
+        doc_id: str,
+        chunk_count: int,
+        source_path: str | None = None
+    ) -> None:
+        """
+        Mark identifier reservation as complete after successful ingestion.
+
+        Updates reservation status from "pending" to "complete".
+        """
+        pass
+
+    @abstractmethod
+    def release_identifier(
+        self,
+        content_hash: str,
+        filename: str,
+        namespace: str,
+        source_path: str | None = None
+    ) -> None:
+        """
+        Release identifier reservation on ingestion failure (cleanup).
+
+        Deletes the pending reservation to allow retries.
+        """
+        pass
+
+    # ==================== Soft Delete / Trash Methods ====================
+
+    @abstractmethod
+    def soft_delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_by: str | None = None,
+        delete_reason: str = "user_initiated"
+    ) -> dict[str, Any]:
+        """
+        Soft delete document (move to trash).
+
+        **Atomicity Recommendation**: Update document status and create trash entry
+        in a single transaction where supported:
+        - DynamoDB: transact_write_items (2 writes: update DOC, put TRASH)
+        - PostgreSQL: BEGIN; UPDATE docs; INSERT trash; COMMIT;
+        - MongoDB: multi-document transaction with session
+
+        **If transactions not available**: Best-effort (update doc, then create trash).
+        Race conditions are acceptable - worst case is trash entry without doc update
+        (cleanup job handles orphaned trash entries).
+
+        **Returns**:
+        {
+            "doc_id": str,
+            "namespace": str,
+            "chunk_ids": list[str],
+            "filename": str,
+            "deleted_at": str (ISO8601),
+            "purge_after": str (ISO8601, deleted_at + 30 days),
+        }
+        """
+        pass
+
+    @abstractmethod
+    def restore_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_at_ms: int,  # NEW: identifies specific trash entry
+        restored_by: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Restore document from trash.
+
+        Args:
+            doc_id: Document UUID
+            namespace: Document namespace
+            deleted_at_ms: Timestamp (milliseconds) from trash entry PK
+            restored_by: User ID who restored
+
+        **Atomicity Recommendation**: Use transactions to:
+        1. Update document status from "deleting" to "active"
+        2. Delete specific trash entry (by deleted_at_ms)
+
+        **Returns**:
+        {
+            "doc_id": str,
+            "namespace": str,
+            "status": "active",
+            "restored_at": str (ISO8601),
+            "chunk_ids": list[str],  # Needed for vector status restoration
+            "chunk_count": int,
+        }
+        """
+        pass
+
+    @abstractmethod
+    def list_trash(
+        self,
+        namespace: str | None = None,
+        limit: int = 50,
+        next_key: str | None = None
+    ) -> dict[str, Any]:
+        """
+        List documents in trash.
+
+        **Optimization Notes**:
+        - DynamoDB: Use GSI on TRASH entries, query by namespace
+        - PostgreSQL: Index on (namespace, deleted_at) for fast filtering
+        - MongoDB: Compound index on {namespace: 1, deleted_at: -1}
+
+        **Returns**:
+        {
+            "documents": [
+                {
+                    "doc_id": str,
+                    "namespace": str,
+                    "filename": str,
+                    "deleted_at": str (ISO8601),
+                    "deleted_at_ms": int (for restore operation),
+                    "deleted_by": str | None,
+                    "delete_reason": str,
+                    "chunk_count": int,
+                    "days_until_purge": int,
+                    "purge_after": str (ISO8601),
+                }
+            ],
+            "next_key": str | None,
+        }
+        """
+        pass
+
+    @abstractmethod
+    def permanently_delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_at_ms: int,  # NEW: identifies specific trash entry
+        deleted_by: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Permanently delete document from trash (triggers vector cleanup).
+
+        Creates cleanup job for async worker to delete vectors.
+
+        Args:
+            doc_id: Document UUID
+            namespace: Document namespace
+            deleted_at_ms: Timestamp (milliseconds) from trash entry
+            deleted_by: User ID who initiated permanent delete
+
+        **Returns**:
+        {
+            "doc_id": str,
+            "namespace": str,
+            "chunk_ids": list[str],
+            "chunk_count": int,
+            "cleanup_job_id": str,
+        }
+        """
+        pass
+
+    @abstractmethod
+    def complete_permanent_delete(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_at_ms: int,  # NEW: identifies specific trash entry
+        filename: str,  # NEW: required for providers that use filename in trash PK
+    ) -> None:
+        """
+        Complete permanent delete after vector cleanup succeeds.
+
+        Updates document status to "purged" (tombstone) and deletes trash entry.
+
+        Args:
+            doc_id: Document UUID
+            namespace: Document namespace
+            deleted_at_ms: Deletion timestamp (for trash entry identification)
+            filename: Document filename (required for providers using filename in trash PK)
+        """
+        pass
+
+    @abstractmethod
+    def list_cleanup_jobs(self, limit: int = 10) -> list[dict[str, Any]]:
+        """
+        List pending cleanup jobs for background worker.
+
+        **Returns**:
+        [
+            {
+                "cleanup_job_id": str,
+                "doc_id": str,
+                "namespace": str,
+                "deleted_at_ms": int,
+                "chunk_ids": list[str],
+                "created_at": str (ISO8601),
+                "retry_count": int,
+                "max_retries": int,
+            }
+        ]
+        """
+        pass
+
+    @abstractmethod
+    def mark_cleanup_job_failed(
+        self,
+        cleanup_job_id: str,
+        error: str
+    ) -> None:
+        """
+        Mark cleanup job as failed (increments retry count or moves to DLQ).
+
+        If retry_count >= max_retries, move to DLQ for manual intervention.
+        """
+        pass
+
+    @abstractmethod
+    def list_expired_trash(self, limit: int = 100) -> list[dict[str, Any]]:
+        """
+        List trash entries past their purge_after date (for scheduled cleanup).
+
+        **Returns**:
+        [
+            {
+                "doc_id": str,
+                "namespace": str,
+                "deleted_at_ms": int,
+                "purge_after": str (ISO8601),
+            }
+        ]
         """
         pass
 

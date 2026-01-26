@@ -82,5 +82,8 @@ coverage.xml
 .dmypy.json
 dmypy.json
 
+# Linting
+.ruff_cache/
+
 # Jupyter
 .ipynb_checkpoints/

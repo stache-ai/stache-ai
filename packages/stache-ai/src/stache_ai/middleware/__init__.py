@@ -30,6 +30,10 @@ from .base import (
     DeleteObserver,
     DeleteTarget,
     PostIngestProcessor,
+    IngestGuard,
+    GuardResult,
+    ErrorProcessor,
+    ErrorResult,
 )
 from .chain import (
     MiddlewareChain,
@@ -48,6 +52,8 @@ __all__ = [
     "QueryProcessorResult",
     "ResultProcessorResult",
     "PostIngestResult",
+    "GuardResult",
+    "ErrorResult",
     # Base classes
     "MiddlewareBase",
     "Enricher",
@@ -58,6 +64,8 @@ __all__ = [
     "DeleteObserver",
     "DeleteTarget",
     "PostIngestProcessor",
+    "IngestGuard",
+    "ErrorProcessor",
     # Chain executor
     "MiddlewareChain",
     "MiddlewareError",

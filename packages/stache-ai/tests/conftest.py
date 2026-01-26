@@ -98,6 +98,7 @@ def mock_vectordb_provider():
     provider.delete.return_value = True
     provider.get_collection_info.return_value = {"vectors_count": 100}
     provider.get_name.return_value = "MockVectorDBProvider"
+    provider.max_batch_size = 500  # Default batch size for S3 Vectors
     return provider
 
 

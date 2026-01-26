@@ -140,6 +140,75 @@ class PineconeVectorDBProvider(VectorDBProvider):
             "namespace": ns
         }
 
+    def get_by_ids(
+        self,
+        ids: List[str],
+        namespace: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch vectors by IDs
+
+        Args:
+            ids: List of vector IDs
+            namespace: Optional namespace filter
+
+        Returns:
+            List of dictionaries with id and metadata
+        """
+        ns = namespace or self.default_namespace
+
+        # Pinecone fetch returns dict keyed by ID
+        response = self.index.fetch(ids=ids, namespace=ns)
+
+        results = []
+        for vec_id, vec_data in response.vectors.items():
+            metadata = vec_data.metadata or {}
+            results.append({
+                "id": vec_id,
+                "metadata": metadata  # Keep text in metadata
+            })
+
+        return results
+
+    def get_vectors_with_embeddings(
+        self,
+        ids: List[str],
+        namespace: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch vectors by IDs with their embeddings
+
+        Args:
+            ids: List of vector IDs
+            namespace: Optional namespace filter
+
+        Returns:
+            List of dictionaries with id, vector, and metadata
+        """
+        if not ids:
+            return []
+
+        ns = namespace or self.default_namespace
+
+        # Pinecone fetch returns dict keyed by ID
+        response = self.index.fetch(ids=ids, namespace=ns)
+
+        results = []
+        for vec_id, vec_data in response.vectors.items():
+            metadata = vec_data.metadata or {}
+            results.append({
+                "id": vec_id,
+                "vector": vec_data.values,
+                "metadata": metadata  # Include text here, don't extract it
+            })
+
+        return results
+
+    @property
+    def max_batch_size(self) -> int:
+        """Maximum batch size for operations"""
+        return 1000
+
     def get_collection_info(self) -> Dict[str, Any]:
         """Get index information"""
         stats = self.index.describe_index_stats()

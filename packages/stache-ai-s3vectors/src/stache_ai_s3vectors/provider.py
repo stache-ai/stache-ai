@@ -196,7 +196,7 @@ class S3VectorsProvider(VectorDBProvider):
         ids: Optional[List[str]] = None,
         namespace: Optional[str] = None
     ) -> List[str]:
-        """Insert vectors into S3 Vectors"""
+        """Insert vectors into S3 Vectors with active status by default"""
         if not ids:
             ids = [str(uuid.uuid4()) for _ in vectors]
 
@@ -208,6 +208,10 @@ class S3VectorsProvider(VectorDBProvider):
         for id_, vector, text, metadata in zip(ids, vectors, texts, metadatas):
             # Validate metadata against S3 Vectors limits
             self._validate_metadata(text, metadata)
+
+            # Set default status for all vectors
+            if "status" not in metadata:
+                metadata["status"] = "active"
 
             record = {
                 'key': id_,
@@ -244,7 +248,7 @@ class S3VectorsProvider(VectorDBProvider):
         namespace: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Search for similar vectors in S3 Vectors
+        Search for similar vectors in S3 Vectors with automatic soft-delete filtering
 
         Supports namespace wildcards:
         - "books/*" matches "books/fiction", "books/nonfiction", etc.
@@ -254,6 +258,14 @@ class S3VectorsProvider(VectorDBProvider):
         if top_k > 100:
             logger.warning(f"top_k={top_k} exceeds S3 Vectors limit of 100, clamping to 100")
             top_k = 100
+
+        # Status filter: exclude soft-deleted vectors
+        status_filter = {
+            "$or": [
+                {"status": {"$exists": False}},  # Legacy vectors (no status field)
+                {"status": "active"}              # Active vectors
+            ]
+        }
 
         # Build filter dict (MongoDB-style syntax)
         query_filter = {}
@@ -277,6 +289,12 @@ class S3VectorsProvider(VectorDBProvider):
         if filter:
             query_filter.update(filter)
 
+        # Combine status filter with other filters
+        if query_filter:
+            combined_filter = {"$and": [status_filter, {"$and": [{k: v} for k, v in query_filter.items()]}]}
+        else:
+            combined_filter = status_filter
+
         # Only increase limit if we need post-filtering for wildcard prefixes
         search_limit = top_k * 3 if requires_post_filtering else top_k
 
@@ -287,17 +305,9 @@ class S3VectorsProvider(VectorDBProvider):
             'queryVector': {'float32': query_vector},
             'topK': search_limit,
             'returnMetadata': True,
-            'returnDistance': True
+            'returnDistance': True,
+            'filter': combined_filter
         }
-
-        if query_filter:
-            # S3 Vectors requires $and for multiple filter conditions
-            if len(query_filter) > 1:
-                query_params['filter'] = {
-                    '$and': [{k: v} for k, v in query_filter.items()]
-                }
-            else:
-                query_params['filter'] = query_filter
 
         response = self._with_retry(self.client.query_vectors, **query_params)
 
@@ -732,7 +742,160 @@ class S3VectorsProvider(VectorDBProvider):
 
         return results
 
+    def get_vectors_with_embeddings(
+        self,
+        ids: List[str],
+        namespace: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve vectors by IDs with embeddings and metadata
+
+        Unlike get_by_ids which only returns metadata, this method
+        includes the full embedding vectors needed for re-writing.
+
+        Args:
+            ids: List of vector IDs to retrieve
+            namespace: Optional namespace filter (validation only)
+
+        Returns:
+            List of dicts with normalized structure:
+            {
+                "id": str,
+                "vector": List[float],
+                "metadata": Dict[str, Any]  # Normalized with _extract_value()
+            }
+        """
+        if not ids:
+            return []
+
+        # S3 Vectors GetVectors supports up to 100 keys per call
+        results = []
+        batch_size = 100
+
+        for i in range(0, len(ids), batch_size):
+            batch = ids[i:i + batch_size]
+            response = self._with_retry(
+                self.client.get_vectors,
+                vectorBucketName=self.bucket_name,
+                indexName=self.index_name,
+                keys=batch,
+                returnMetadata=True,
+                returnData=True  # CRITICAL: Include embeddings
+            )
+
+            for vector in response.get('vectors', []):
+                metadata = vector.get('metadata', {})
+
+                # Optional: filter by namespace
+                if namespace:
+                    vec_namespace = self._extract_string_value(metadata.get('namespace'))
+                    if vec_namespace != namespace:
+                        continue
+
+                # Extract embedding from data field
+                embedding = None
+                data = vector.get('data')
+                if data:
+                    embedding = data.get('float32')
+
+                if embedding is None:
+                    logger.warning(f"Vector {vector.get('key')} missing embedding data")
+                    continue
+
+                # Normalize metadata using _extract_value()
+                normalized_metadata = {
+                    k: self._extract_value(v)
+                    for k, v in metadata.items()
+                }
+
+                results.append({
+                    "id": vector.get('key'),  # Map S3's 'key' to standard 'id'
+                    "vector": embedding,
+                    "metadata": normalized_metadata
+                })
+
+        return results
+
+    def update_status(
+        self,
+        ids: List[str],
+        namespace: str,
+        status: str,
+    ) -> int:
+        """Update status field for soft delete (S3 Vectors batch update).
+
+        Args:
+            ids: List of vector IDs to update
+            namespace: Namespace (for validation)
+            status: New status value (e.g., "deleting", "active")
+
+        Returns:
+            Number of vectors successfully updated
+        """
+        if not ids:
+            return 0
+
+        updated_count = 0
+        batch_size = 500  # S3 Vectors max batch size
+
+        # Process in batches of 500
+        for i in range(0, len(ids), batch_size):
+            batch_ids = ids[i:i + batch_size]
+
+            try:
+                # Batch GET all vectors
+                response = self._with_retry(
+                    self.client.get_vectors,
+                    vectorBucketName=self.bucket_name,
+                    indexName=self.index_name,
+                    keys=batch_ids,
+                    returnMetadata=True
+                )
+
+                vectors = response.get('vectors', [])
+                if not vectors:
+                    logger.warning(f"No vectors found in batch {i}-{i+len(batch_ids)}")
+                    continue
+
+                # Update metadata for all vectors
+                updated_vectors = []
+                for vector in vectors:
+                    metadata = vector.get('metadata', {})
+                    metadata['status'] = status
+
+                    updated_vectors.append({
+                        'key': vector['key'],
+                        'data': vector.get('data', {}),
+                        'metadata': metadata
+                    })
+
+                # Batch PUT all updated vectors
+                if updated_vectors:
+                    self._with_retry(
+                        self.client.put_vectors,
+                        vectorBucketName=self.bucket_name,
+                        indexName=self.index_name,
+                        vectors=updated_vectors
+                    )
+                    updated_count += len(updated_vectors)
+
+                logger.info(f"Batch updated {len(updated_vectors)}/{len(batch_ids)} vectors to status={status}")
+
+            except Exception as e:
+                logger.error(f"Failed to update batch {i}-{i+len(batch_ids)}: {e}")
+                # Continue with next batch rather than failing entirely
+
+        logger.info(f"Total updated {updated_count}/{len(ids)} vectors to status={status}")
+        return updated_count
+
     @property
     def capabilities(self) -> set:
         """S3 Vectors has limited capabilities - no metadata scanning or export"""
         return set()  # No advanced capabilities yet
+
+    @property
+    def max_batch_size(self) -> int:
+        """Maximum batch size for PutVectors operations
+
+        S3 Vectors supports up to 500 vectors per PutVectors call.
+        """
+        return 500

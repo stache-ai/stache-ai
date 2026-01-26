@@ -97,58 +97,34 @@ class NamespaceUpdate(BaseModel):
 
 # ===== Helper Functions =====
 
-def get_namespace_doc_count(namespace_id: str) -> int:
-    """Get document count for a namespace using document summaries (fast)
+def get_namespace_stats(namespace_id: str) -> dict[str, int]:
+    """Get document and chunk counts for a namespace
 
-    Uses the provider-agnostic count_by_filter method which works with
-    both Qdrant and S3 Vectors backends.
+    Uses the document index provider (DynamoDB) for efficient counting
+    instead of scanning the vector database.
     """
     try:
         pipeline = get_pipeline()
-        vectordb = pipeline.vectordb_provider
+        doc_index = pipeline.document_index_provider
 
-        # Count document summaries - each doc has exactly one summary
-        return vectordb.count_by_filter({
-            "namespace": namespace_id,
-            "_type": "document_summary"
-        })
+        if doc_index:
+            return doc_index.count_by_namespace(namespace_id)
+
+        # Fallback to zeros if no document index provider
+        return {"doc_count": 0, "chunk_count": 0}
     except Exception as e:
-        logger.warning(f"Could not get doc count for namespace {namespace_id}: {e}")
-        return 0
-
-
-def get_namespace_chunk_count(namespace_id: str) -> int:
-    """Get chunk count for a namespace from vector DB
-
-    Note: This counts ALL vectors in the namespace including document summaries.
-    For accurate chunk count, subtract doc_count from total.
-    """
-    try:
-        pipeline = get_pipeline()
-        vectordb = pipeline.vectordb_provider
-
-        # Count all vectors in namespace
-        total = vectordb.count_by_filter({"namespace": namespace_id})
-
-        # Subtract document summaries to get just chunks
-        doc_summaries = vectordb.count_by_filter({
-            "namespace": namespace_id,
-            "_type": "document_summary"
-        })
-
-        return total - doc_summaries
-    except Exception as e:
-        logger.warning(f"Could not get chunk count for namespace {namespace_id}: {e}")
-        return 0
+        logger.warning(f"Could not get stats for namespace {namespace_id}: {e}")
+        return {"doc_count": 0, "chunk_count": 0}
 
 
 def enrich_namespace_with_stats(namespace: dict[str, Any]) -> dict[str, Any]:
     """Add document and chunk counts to namespace"""
     namespace_id = namespace["id"]
+    stats = get_namespace_stats(namespace_id)
     return {
         **namespace,
-        "doc_count": get_namespace_doc_count(namespace_id),
-        "chunk_count": get_namespace_chunk_count(namespace_id)
+        "doc_count": stats["doc_count"],
+        "chunk_count": stats["chunk_count"]
     }
 
 
@@ -229,8 +205,9 @@ async def get_namespace_tree(
             # Recursively add stats to tree
             def add_stats_recursive(nodes: list[dict]) -> list[dict]:
                 for node in nodes:
-                    node["doc_count"] = get_namespace_doc_count(node["id"])
-                    node["chunk_count"] = get_namespace_chunk_count(node["id"])
+                    stats = get_namespace_stats(node["id"])
+                    node["doc_count"] = stats["doc_count"]
+                    node["chunk_count"] = stats["chunk_count"]
                     if node.get("children"):
                         add_stats_recursive(node["children"])
                 return nodes

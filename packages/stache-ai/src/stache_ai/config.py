@@ -258,6 +258,32 @@ class Settings(BaseSettings):
     middleware_log_level: str = "INFO"
     middleware_emit_metrics: bool = True
 
+    # ===== Deduplication & Trash Settings =====
+    dedup_enabled: bool = Field(
+        default=True,
+        description="Enable hash-based document deduplication"
+    )
+
+    soft_delete_enabled: bool = Field(
+        default=True,
+        description="Enable soft delete (trash/restore)"
+    )
+
+    trash_retention_days: int = Field(
+        default=30,
+        description="Days to retain documents in trash before auto-purge"
+    )
+
+    cleanup_job_enabled: bool = Field(
+        default=True,
+        description="Enable background cleanup worker"
+    )
+
+    trash_purge_enabled: bool = Field(
+        default=True,
+        description="Enable scheduled trash purge job"
+    )
+
     # ===== Application Settings =====
     log_level: str = "info"
     upload_dir: str = "uploads"

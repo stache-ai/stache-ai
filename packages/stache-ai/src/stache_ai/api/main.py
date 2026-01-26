@@ -19,6 +19,7 @@ from stache_ai.api.routes import (
     namespaces,
     pending,
     query,
+    trash,
     upload,
 )
 from stache_ai.config import settings
@@ -59,6 +60,7 @@ app.include_router(pending.router, prefix="/api", tags=["pending"])
 app.include_router(namespaces.router, prefix="/api", tags=["namespaces"])
 app.include_router(models.router, prefix="/api", tags=["models"])
 app.include_router(insights.router, prefix="/api", tags=["insights"])
+app.include_router(trash.router, prefix="/api/trash", tags=["trash"])
 
 # Discover and mount route plugins (e.g., enterprise concepts API)
 for ep in entry_points(group="stache.routes"):

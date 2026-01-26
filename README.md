@@ -11,9 +11,12 @@
 
 - **Capture thoughts** - Quick note-taking, instantly searchable
 - **Import documents** - PDF, EPUB, Markdown, DOCX, PPTX, VTT/SRT transcripts
+- **Smart deduplication** - Automatic detection of duplicate uploads, intelligent updates for changed files
+- **Trash & restore** - 30-day retention with one-click restore, prevents accidental data loss
+- **Manage documents** - Browse, edit metadata, rename, migrate namespaces, delete
 - **Semantic search** - Find things by meaning, not just keywords
 - **AI answers** - Ask questions, get synthesized answers from your documents
-- **Namespaces** - Organize into nested categories
+- **Namespaces** - Organize into nested categories with hierarchical structure
 - **One command** - `docker-compose up` and you're running
 
 ### Extensible Provider Architecture
@@ -39,18 +42,19 @@ See [docs/plugins.md](docs/plugins.md) for details.
 
 Stache supports multiple vector database providers. Here's what works on each:
 
-| Feature | Qdrant | S3 Vectors |
-|---------|--------|------------|
-| Semantic search | ✅ Fast | ✅ Fast |
-| Document ingestion | ✅ | ✅ |
-| Question answering | ✅ | ✅ |
-| Document discovery | ✅ | ✅ |
-| List documents (summaries) | ✅ | ✅ |
-| Delete by doc_id | ✅ | ✅ (slower) |
-| Get document by ID | ✅ | ✅ (via DynamoDB) |
-| Legacy document listing | ✅ | ✅ (via DynamoDB) |
-| Database export | ✅ | ⚠️ Limited |
-| Orphaned chunk cleanup | ✅ | N/A (no orphans) |
+| Feature | Qdrant | S3 Vectors | Pinecone | MongoDB |
+|---------|--------|------------|----------|---------|
+| Semantic search | ✅ Fast | ✅ Fast | ✅ Fast | ✅ |
+| Document ingestion | ✅ | ✅ | ✅ | ✅ |
+| Question answering | ✅ | ✅ | ✅ | ✅ |
+| Document discovery | ✅ | ✅ | ✅ | ✅ |
+| List documents | ✅ | ✅ (DynamoDB) | ✅ | ✅ |
+| Update document metadata | ✅ | ✅ | ✅ | ✅ |
+| Namespace migration | ✅ | ✅ | ✅ | ✅ |
+| Delete by doc_id | ✅ | ✅ | ✅ | ✅ |
+| Get document by ID | ✅ | ✅ (DynamoDB) | ✅ | ✅ |
+| Database export | ✅ | ⚠️ Limited | ⚠️ Limited | ✅ |
+| Orphaned chunk cleanup | ✅ | N/A | ✅ | ✅ |
 
 **S3 Vectors** - Good for:
 - All core RAG features (search, ingest, answer)

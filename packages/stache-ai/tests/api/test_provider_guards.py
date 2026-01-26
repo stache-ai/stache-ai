@@ -438,7 +438,7 @@ def test_migrate_summaries_works_on_qdrant(test_client_with_mock, mock_pipeline)
 
 
 def test_delete_document_by_id_provider_agnostic(test_client_with_mock, mock_pipeline):
-    """delete_document_by_id should be provider-agnostic"""
+    """delete_document_by_id should be provider-agnostic (permanent delete)"""
     # Mock document index provider to return chunk IDs
     mock_pipeline.document_index_provider.get_chunk_ids.return_value = ["chunk-1", "chunk-2"]
     mock_pipeline.document_index_provider.delete_document.return_value = True
@@ -446,11 +446,12 @@ def test_delete_document_by_id_provider_agnostic(test_client_with_mock, mock_pip
     # Mock vectordb delete
     mock_pipeline.vectordb_provider.delete.return_value = None
 
-    response = test_client_with_mock.delete("/api/documents/id/doc-123")
+    # Use permanent=true to test permanent delete (default is now soft delete)
+    response = test_client_with_mock.delete("/api/documents/id/doc-123?permanent=true")
 
     assert response.status_code == 200
     data = response.json()
-    assert data["success"] is True
+    assert data["status"] == "deleted"
     assert data["chunks_deleted"] == 2
 
 

@@ -619,6 +619,88 @@ class TestGetName:
         assert instance.get_name() == "dynamodb-document-index"
 
 
+class TestCountByNamespace:
+    """Tests for count_by_namespace method"""
+
+    def test_count_by_namespace_returns_counts(self, document_index):
+        """Should return doc_count and chunk_count from paginated query"""
+        instance, _, client = document_index
+
+        # Mock paginator that returns documents with chunk_count
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.return_value = [
+            {
+                'Items': [
+                    {'chunk_count': {'N': '10'}},
+                    {'chunk_count': {'N': '25'}},
+                    {'chunk_count': {'N': '15'}},
+                ]
+            }
+        ]
+        client.get_paginator.return_value = mock_paginator
+
+        result = instance.count_by_namespace("test-namespace")
+
+        assert result == {"doc_count": 3, "chunk_count": 50}
+        client.get_paginator.assert_called_once_with('query')
+
+    def test_count_by_namespace_handles_pagination(self, document_index):
+        """Should paginate through all results"""
+        instance, _, client = document_index
+
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.return_value = [
+            {'Items': [{'chunk_count': {'N': '10'}}]},
+            {'Items': [{'chunk_count': {'N': '20'}}]},
+        ]
+        client.get_paginator.return_value = mock_paginator
+
+        result = instance.count_by_namespace("test-namespace")
+
+        assert result == {"doc_count": 2, "chunk_count": 30}
+
+    def test_count_by_namespace_empty_namespace(self, document_index):
+        """Should return zeros for empty namespace"""
+        instance, _, client = document_index
+
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.return_value = [{'Items': []}]
+        client.get_paginator.return_value = mock_paginator
+
+        result = instance.count_by_namespace("empty-namespace")
+
+        assert result == {"doc_count": 0, "chunk_count": 0}
+
+    def test_count_by_namespace_handles_error(self, document_index):
+        """Should return zeros on DynamoDB error"""
+        instance, _, client = document_index
+
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.side_effect = ClientError(
+            {'Error': {'Code': 'InternalError', 'Message': 'Test error'}},
+            'Query'
+        )
+        client.get_paginator.return_value = mock_paginator
+
+        result = instance.count_by_namespace("test-namespace")
+
+        assert result == {"doc_count": 0, "chunk_count": 0}
+
+    def test_count_by_namespace_handles_missing_chunk_count(self, document_index):
+        """Should handle documents without chunk_count field"""
+        instance, _, client = document_index
+
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.return_value = [
+            {'Items': [{'chunk_count': {'N': '10'}}, {}]}  # Second item has no chunk_count
+        ]
+        client.get_paginator.return_value = mock_paginator
+
+        result = instance.count_by_namespace("test-namespace")
+
+        assert result == {"doc_count": 2, "chunk_count": 10}
+
+
 class TestEnsureTable:
     """Tests for _ensure_table validation method"""
 

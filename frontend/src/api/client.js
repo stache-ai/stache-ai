@@ -255,4 +255,55 @@ export const getNamespaceDocuments = async (id, limit = 100, offset = 0) => {
   return response.data
 }
 
+// Document management API functions
+export const listDocuments = async (params = {}) => {
+  const response = await getClient().get('/api/documents', { params })
+  return response.data
+}
+
+export const getDocumentById = async (docId, namespace = 'default') => {
+  const response = await getClient().get(`/api/documents/id/${docId}`, {
+    params: { namespace }
+  })
+  return response.data
+}
+
+export const updateDocumentMetadata = async (docId, currentNamespace, updates) => {
+  const response = await getClient().patch(`/api/documents/${docId}`, updates, {
+    params: { current_namespace: currentNamespace }
+  })
+  return response.data
+}
+
+export const deleteDocumentById = async (docId, namespace = 'default') => {
+  const response = await getClient().delete(`/api/documents/id/${docId}`, {
+    params: { namespace }
+  })
+  return response.data
+}
+
+// Trash management API functions
+export const listTrash = async (params = {}) => {
+  const response = await getClient().get('/api/trash/', { params })
+  return response.data
+}
+
+export const restoreFromTrash = async ({ doc_id, namespace, deleted_at_ms }) => {
+  const response = await getClient().post('/api/trash/restore', {
+    doc_id,
+    namespace,
+    deleted_at_ms,
+  })
+  return response.data
+}
+
+export const permanentlyDeleteFromTrash = async ({ doc_id, namespace, deleted_at_ms }) => {
+  const response = await getClient().post('/api/trash/permanent', {
+    doc_id,
+    namespace,
+    deleted_at_ms,
+  })
+  return response.data
+}
+
 export default client

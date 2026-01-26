@@ -4,8 +4,10 @@ import App from './App.vue'
 import Home from './pages/Home.vue'
 import Capture from './pages/Capture.vue'
 import Query from './pages/Query.vue'
+import Documents from './pages/Documents.vue'
 import Namespaces from './pages/Namespaces.vue'
 import PendingQueue from './pages/PendingQueue.vue'
+import Trash from './pages/Trash.vue'
 import { loadConfig } from './config.js'
 import { initAuth, getAuthProvider, handleCallback, isAuthenticated, login } from './api/auth.js'
 
@@ -13,8 +15,10 @@ const routes = [
   { path: '/', component: Home },
   { path: '/capture', component: Capture },
   { path: '/query', component: Query },
+  { path: '/documents', component: Documents },
   { path: '/namespaces', component: Namespaces },
   { path: '/pending', component: PendingQueue },
+  { path: '/trash', component: Trash },
 ]
 
 const router = createRouter({

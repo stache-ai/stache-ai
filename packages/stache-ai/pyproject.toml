@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai"
-version = "0.1.7"
+version = "0.1.8"
 readme = "README.md"
 description = "Personal AI-powered knowledge base with RAG"
 license = {text = "MIT"}
@@ -111,6 +111,12 @@ hierarchical = "stache_ai.chunking.hierarchical:HierarchicalChunkingStrategy"
 
 [project.entry-points."stache.postingest_processor"]
 heuristic_summary = "stache_ai.middleware.postingest.summary:HeuristicSummaryGenerator"
+
+[project.entry-points."stache.ingest_guard"]
+deduplication = "stache_ai.middleware.guards.deduplication:DeduplicationGuard"
+
+[project.entry-points."stache.error_processor"]
+reingest_recovery = "stache_ai.middleware.error_processors.reingest_recovery:ReingestRecoveryProcessor"
 
 
 [project.urls]

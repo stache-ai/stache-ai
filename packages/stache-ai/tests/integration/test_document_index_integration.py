@@ -278,8 +278,8 @@ def test_delete_document_removes_from_both(test_client_with_index, mock_pipeline
     doc_index = pipeline.document_index_provider
     vectordb = pipeline.vectordb_provider
 
-    # Delete document by ID
-    response = client.delete("/api/documents/id/doc-001?namespace=test")
+    # Delete document by ID (permanent delete to test atomic deletion)
+    response = client.delete("/api/documents/id/doc-001?namespace=test&permanent=true")
 
     # Verify response
     assert response.status_code == 200, f"Delete failed: {response.text}"

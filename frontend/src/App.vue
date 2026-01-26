@@ -19,8 +19,7 @@
           <router-link to="/" class="nav-link">Home</router-link>
           <router-link to="/capture" class="nav-link">Capture</router-link>
           <router-link to="/query" class="nav-link">Query</router-link>
-          <router-link to="/pending" class="nav-link">Pending</router-link>
-          <router-link to="/namespaces" class="nav-link">Namespaces</router-link>
+          <DocManagementDropdown />
         </div>
 
         <div class="nav-right desktop-nav">
@@ -38,8 +37,7 @@
           <router-link to="/" class="mobile-nav-link" @click="mobileMenuOpen = false">Home</router-link>
           <router-link to="/capture" class="mobile-nav-link" @click="mobileMenuOpen = false">Capture</router-link>
           <router-link to="/query" class="mobile-nav-link" @click="mobileMenuOpen = false">Query</router-link>
-          <router-link to="/pending" class="mobile-nav-link" @click="mobileMenuOpen = false">Pending</router-link>
-          <router-link to="/namespaces" class="mobile-nav-link" @click="mobileMenuOpen = false">Namespaces</router-link>
+          <DocManagementDropdown />
           <div class="mobile-health-status" :class="healthStatus">
             <span class="status-dot"></span>
             {{ healthStatus === 'healthy' ? 'Connected' : 'Disconnected' }}
@@ -66,6 +64,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { checkHealth } from './api/client.js'
 import { isAuthenticated, authProvider } from './api/auth.js'
 import AuthStatus from './components/AuthStatus.vue'
+import DocManagementDropdown from './components/DocManagementDropdown.vue'
 
 const healthStatus = ref('unknown')
 const llmProvider = ref('LLM')
