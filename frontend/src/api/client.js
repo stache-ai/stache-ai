@@ -297,11 +297,12 @@ export const restoreFromTrash = async ({ doc_id, namespace, deleted_at_ms }) => 
   return response.data
 }
 
-export const permanentlyDeleteFromTrash = async ({ doc_id, namespace, deleted_at_ms }) => {
+export const permanentlyDeleteFromTrash = async ({ doc_id, namespace, deleted_at_ms, filename }) => {
   const response = await getClient().post('/api/trash/permanent', {
     doc_id,
     namespace,
     deleted_at_ms,
+    filename,  // Pass trash entry filename to ensure correct trash PK
   })
   return response.data
 }

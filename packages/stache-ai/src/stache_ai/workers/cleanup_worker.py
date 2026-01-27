@@ -32,6 +32,11 @@ async def process_cleanup_jobs(
         try:
             await _process_cleanup_job(pipeline, job)
             stats["succeeded"] += 1
+
+            # Delete completed job
+            pipeline.document_index_provider.delete_cleanup_job(
+                cleanup_job_id=job["cleanup_job_id"]
+            )
         except Exception as e:
             stats["failed"] += 1
             logger.error(f"Cleanup failed: {job['cleanup_job_id']}", exc_info=True)
@@ -61,10 +66,11 @@ async def _process_cleanup_job(pipeline, job):
     )
 
     # Delete vectors
-    deleted_count = await pipeline.documents_provider.delete_by_ids(
-        ids=chunk_ids,
-        namespace=namespace,
+    deleted_count = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: pipeline.documents_provider.delete(chunk_ids, namespace)
     )
+    deleted_count = len(chunk_ids) if deleted_count else 0
 
     if deleted_count != len(chunk_ids):
         logger.warning(
@@ -95,7 +101,7 @@ def lambda_handler(event, context):
     stats = asyncio.run(process_cleanup_jobs(
         pipeline=pipeline,
         batch_size=10,
-        max_runtime_seconds=context.remaining_time_in_millis() / 1000 - 10,
+        max_runtime_seconds=context.get_remaining_time_in_millis() / 1000 - 10,
     ))
 
     return {"statusCode": 200, "body": stats}

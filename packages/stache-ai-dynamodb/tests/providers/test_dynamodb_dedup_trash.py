@@ -690,6 +690,46 @@ class TestPermanentDelete:
                 deleted_at_ms=1234567890000
             )
 
+    def test_permanently_delete_already_purging(self, mock_dynamodb):
+        """Test permanent delete can retry on document already in purging status"""
+        provider, mock_client, mock_table = mock_dynamodb
+        doc_id = str(uuid.uuid4())
+
+        # Document already in purging status (previous attempt failed)
+        mock_table.get_item.return_value = {
+            'Item': {
+                'doc_id': doc_id,
+                'filename': 'stuck-document.pdf',
+                'namespace': 'docs',
+                'status': DOC_STATUS_PURGING,
+                'chunk_ids': ['chunk1', 'chunk2'],
+                'purge_started_at': '2026-01-26T01:00:00Z'
+            }
+        }
+
+        mock_client.transact_write_items.return_value = {}
+
+        result = provider.permanently_delete_document(
+            doc_id=doc_id,
+            namespace='docs',
+            deleted_at_ms=1234567890000
+        )
+
+        # Should succeed and create cleanup job
+        assert result['doc_id'] == doc_id
+        assert result['chunk_count'] == 2
+        assert 'cleanup_job_id' in result
+
+        # Verify transaction allowed purging status
+        mock_client.transact_write_items.assert_called_once()
+        call_args = mock_client.transact_write_items.call_args[1]
+        items = call_args['TransactItems']
+        update_item = items[0]['Update']
+
+        # Condition should allow purging status
+        assert 'ConditionExpression' in update_item
+        assert 'purging' in str(update_item['ExpressionAttributeValues'])
+
     def test_complete_permanent_delete(self, mock_dynamodb):
         """Test completing permanent deletion after cleanup"""
         provider, mock_client, _ = mock_dynamodb

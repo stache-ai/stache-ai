@@ -1007,6 +1007,47 @@ class DocumentIndexProvider(ABC):
         """
         pass
 
+    def get_document_by_source_path(
+        self,
+        namespace: str,
+        source_path: str | None = None,
+        filename: str | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Find active document by source_path or filename.
+
+        Used for deduplication: checks if document already exists at this path.
+        Uses GSI2 index in DynamoDB for efficient lookup.
+
+        Default implementation falls back to get_document_by_identifier for
+        backward compatibility with providers that haven't implemented this yet.
+
+        Args:
+            namespace: Namespace to search in
+            source_path: Source path from CLI ingestion (preferred identifier)
+            filename: Fallback filename for web uploads
+
+        Returns:
+            Document metadata if found and active, None otherwise:
+            {
+                "doc_id": str,
+                "namespace": str,
+                "filename": str | None,
+                "source_path": str | None,
+                "content_hash": str | None,
+                "chunk_ids": list[str],
+                "created_at": str,
+            }
+        """
+        # Default: fall back to identifier lookup for backward compatibility
+        # Subclasses should override for GSI2-based lookup
+        return self.get_document_by_identifier(
+            content_hash="",  # Not used in GSI2 lookup
+            filename=filename or "",
+            namespace=namespace,
+            source_path=source_path,
+        )
+
     @abstractmethod
     def complete_identifier_reservation(
         self,
@@ -1149,7 +1190,8 @@ class DocumentIndexProvider(ABC):
         doc_id: str,
         namespace: str,
         deleted_at_ms: int,  # NEW: identifies specific trash entry
-        deleted_by: str | None = None
+        deleted_by: str | None = None,
+        filename: str | None = None,  # Filename from trash entry (ensures correct trash PK)
     ) -> dict[str, Any]:
         """
         Permanently delete document from trash (triggers vector cleanup).
@@ -1161,6 +1203,7 @@ class DocumentIndexProvider(ABC):
             namespace: Document namespace
             deleted_at_ms: Timestamp (milliseconds) from trash entry
             deleted_by: User ID who initiated permanent delete
+            filename: Filename from trash entry (uses doc metadata if not provided)
 
         **Returns**:
         {
@@ -1212,6 +1255,16 @@ class DocumentIndexProvider(ABC):
                 "max_retries": int,
             }
         ]
+        """
+        pass
+
+    @abstractmethod
+    def delete_cleanup_job(self, cleanup_job_id: str) -> None:
+        """
+        Delete completed cleanup job.
+
+        Args:
+            cleanup_job_id: Cleanup job ID to delete
         """
         pass
 

@@ -835,9 +835,9 @@ class S3VectorsProvider(VectorDBProvider):
             return 0
 
         updated_count = 0
-        batch_size = 500  # S3 Vectors max batch size
+        batch_size = 100  # S3 Vectors GetVectors max batch size (PutVectors supports 500)
 
-        # Process in batches of 500
+        # Process in batches of 100
         for i in range(0, len(ids), batch_size):
             batch_ids = ids[i:i + batch_size]
 

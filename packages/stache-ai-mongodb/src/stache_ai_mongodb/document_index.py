@@ -579,7 +579,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         namespace: str,
         deleted_at_ms: int,
-        deleted_by: str | None = None
+        deleted_by: str | None = None,
+        filename: str | None = None,
     ) -> dict[str, Any]:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(
@@ -601,6 +602,13 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         )
 
     def list_cleanup_jobs(self, limit: int = 10) -> list[dict[str, Any]]:
+        """MongoDB provider does not support trash/restore features"""
+        raise NotImplementedError(
+            "MongoDB provider does not support soft delete and trash features. "
+            "Use DynamoDB provider for trash/restore functionality."
+        )
+
+    def delete_cleanup_job(self, cleanup_job_id: str) -> None:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(
             "MongoDB provider does not support soft delete and trash features. "

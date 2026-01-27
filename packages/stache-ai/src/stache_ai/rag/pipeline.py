@@ -5,6 +5,7 @@ Extensible RAG pipeline using the factory pattern.
 Allows swapping providers via configuration without code changes.
 """
 
+import asyncio
 import logging
 import threading
 import uuid
@@ -741,6 +742,8 @@ class RAGPipeline:
                         file_type="text",
                         file_size=file_size,
                         chunk_count=len(chunk_ids),
+                        source_path=metadata.get("source_path"),
+                        content_hash=content_hash,
                     )
                     logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
                 except Exception as e:
@@ -840,9 +843,9 @@ class RAGPipeline:
             # Attempt vector cleanup if partially inserted
             if vectors_inserted and chunk_ids:
                 try:
-                    await self.documents_provider.delete_by_ids(
-                        ids=chunk_ids,
-                        namespace=ns
+                    await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self.documents_provider.delete(chunk_ids, ns)
                     )
                     logger.info(f"Cleaned up {len(chunk_ids)} orphaned vectors after error")
                 except Exception as cleanup_error:
@@ -1125,7 +1128,9 @@ class RAGPipeline:
                     headings=headings,
                     metadata=metadata,
                     file_type=file_extension,
-                    file_size=file_size
+                    file_size=file_size,
+                    source_path=metadata.get("source_path") if metadata else None,
+                    content_hash=metadata.get("content_hash") if metadata else None,
                 )
                 logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
             except Exception as e:

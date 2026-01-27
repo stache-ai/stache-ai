@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai"
-version = "0.1.8"
+version = "0.1.9"
 readme = "README.md"
 description = "Personal AI-powered knowledge base with RAG"
 license = {text = "MIT"}

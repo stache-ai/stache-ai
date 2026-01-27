@@ -18,6 +18,7 @@ class PermanentDeleteRequest(BaseModel):
     doc_id: str
     namespace: str = "default"
     deleted_at_ms: int = Field(..., description="Timestamp from trash entry")
+    filename: str | None = Field(None, description="Filename from trash entry (for correct trash PK)")
 
 
 @router.get("/", response_model=dict[str, Any])
@@ -93,6 +94,7 @@ async def permanently_delete_document(
             namespace=request.namespace,
             deleted_at_ms=request.deleted_at_ms,
             deleted_by="api",
+            filename=request.filename,  # Use trash entry filename for correct PK
         )
 
         return {

@@ -73,7 +73,7 @@ def lambda_handler(event, context):
     stats = asyncio.run(purge_expired_trash(
         pipeline=pipeline,
         batch_size=100,
-        max_runtime_seconds=context.remaining_time_in_millis() / 1000 - 10,
+        max_runtime_seconds=context.get_remaining_time_in_millis() / 1000 - 10,
     ))
 
     return {"statusCode": 200, "body": stats}

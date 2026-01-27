@@ -256,6 +256,7 @@ async function permanentDelete() {
       doc_id: doc.doc_id,
       namespace: doc.namespace,
       deleted_at_ms: doc.deleted_at_ms,
+      filename: doc.filename,  // Pass trash entry filename for correct PK
     })
     documents.value = documents.value.filter(
       d => !(d.doc_id === doc.doc_id && d.deleted_at_ms === doc.deleted_at_ms)
@@ -323,6 +324,7 @@ async function emptyTrash() {
         doc_id: doc.doc_id,
         namespace: doc.namespace,
         deleted_at_ms: doc.deleted_at_ms,
+        filename: doc.filename,  // Pass trash entry filename for correct PK
       })
       documents.value = documents.value.filter(
         d => !(d.doc_id === doc.doc_id && d.deleted_at_ms === doc.deleted_at_ms)

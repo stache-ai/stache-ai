@@ -115,17 +115,22 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         """
         return f"CREATED#{timestamp}"
 
-    def _make_gsi2pk(self, namespace: str, filename: str) -> str:
-        """Create GSI2 partition key for filename lookups
+    def _make_gsi2pk(self, namespace: str, filename: str, source_path: str | None = None) -> str:
+        """Create GSI2 partition key for source path/filename lookups
+
+        Uses source_path for uniqueness when available (CLI ingestion),
+        falls back to filename for web uploads.
 
         Args:
             namespace: Document namespace
-            filename: Document filename
+            filename: Document filename (display name)
+            source_path: Optional source path from CLI ingestion
 
         Returns:
-            GSI2 partition key in format: FILENAME#{namespace}#{filename}
+            GSI2 partition key in format: FILENAME#{namespace}#{source_path_or_filename}
         """
-        return f"FILENAME#{namespace}#{filename}"
+        identifier = source_path if source_path else filename
+        return f"FILENAME#{namespace}#{identifier}"
 
     def create_document(
         self,
@@ -138,13 +143,16 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         headings: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         file_type: Optional[str] = None,
-        file_size: Optional[int] = None
+        file_size: Optional[int] = None,
+        source_path: Optional[str] = None,
+        content_hash: Optional[str] = None,
+        chunk_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Create document index entry with active status by default
 
         Args:
             doc_id: Unique document identifier (typically UUID)
-            filename: Original filename of the document
+            filename: Original filename of the document (display name)
             namespace: Namespace/partition for the document
             chunk_ids: List of chunk IDs from vector database
             summary: Optional AI-generated summary of document
@@ -153,6 +161,9 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             metadata: Optional custom metadata dictionary
             file_type: Optional file type (pdf, epub, txt, md, etc.)
             file_size: Optional original file size in bytes
+            source_path: Optional source path for deduplication (CLI ingestion)
+            content_hash: Optional SHA-256 hash of content for deduplication
+            chunk_count: Optional explicit chunk count (defaults to len(chunk_ids))
 
         Returns:
             Dictionary containing the created document record
@@ -161,22 +172,29 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             ClientError: If DynamoDB operation fails
         """
         created_at = datetime.now(timezone.utc).isoformat()
+        actual_chunk_count = chunk_count if chunk_count is not None else len(chunk_ids)
 
         item = {
             "PK": self._make_pk(namespace, doc_id),
             "SK": "METADATA",
             "GSI1PK": self._make_gsi1pk(namespace),
             "GSI1SK": self._make_gsi1sk(created_at),
-            "GSI2PK": self._make_gsi2pk(namespace, filename),
+            "GSI2PK": self._make_gsi2pk(namespace, filename, source_path),
             "GSI2SK": self._make_gsi1sk(created_at),
             "doc_id": doc_id,
             "filename": filename,
             "namespace": namespace,
-            "chunk_count": len(chunk_ids),
+            "chunk_count": actual_chunk_count,
             "created_at": created_at,
             "chunk_ids": chunk_ids,
             "status": DOC_STATUS_ACTIVE,
         }
+
+        # Deduplication fields - store for future lookups
+        if source_path:
+            item["source_path"] = source_path
+        if content_hash:
+            item["content_hash"] = content_hash
 
         # Optional fields - only include if provided
         if summary:
@@ -591,7 +609,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         """
         try:
             response = self.table.query(
-                IndexName="GSI2-FilenameCreated",
+                IndexName="GSI2",
                 KeyConditionExpression="GSI2PK = :pk",
                 ExpressionAttributeValues={
                     ":pk": self._make_gsi2pk(namespace, filename)
@@ -602,6 +620,61 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         except ClientError as e:
             logger.error(f"Failed to check document existence for {filename}: {e}")
             return False
+
+    def get_document_by_source_path(
+        self,
+        namespace: str,
+        source_path: str | None = None,
+        filename: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Find active document by source_path or filename using GSI2.
+
+        Used for deduplication: checks if document already exists at this path.
+        Returns full document metadata including content_hash for version comparison.
+
+        Args:
+            namespace: Namespace to search in
+            source_path: Source path from CLI ingestion (preferred identifier)
+            filename: Fallback filename for web uploads
+
+        Returns:
+            Document metadata if found and active, None otherwise
+        """
+        identifier = source_path if source_path else filename
+        if not identifier:
+            return None
+
+        try:
+            response = self.table.query(
+                IndexName="GSI2",
+                KeyConditionExpression="GSI2PK = :pk",
+                FilterExpression="#status = :active",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":pk": self._make_gsi2pk(namespace, filename or "", source_path),
+                    ":active": DOC_STATUS_ACTIVE,
+                },
+                Limit=1
+            )
+
+            items = response.get('Items', [])
+            if not items:
+                return None
+
+            item = items[0]
+            return {
+                "doc_id": item["doc_id"],
+                "namespace": item["namespace"],
+                "filename": item.get("filename"),
+                "source_path": item.get("source_path"),
+                "content_hash": item.get("content_hash"),
+                "chunk_ids": item.get("chunk_ids", []),
+                "created_at": item.get("created_at"),
+            }
+
+        except ClientError as e:
+            logger.error(f"Failed to lookup document by source_path {identifier}: {e}")
+            return None
 
     def count_by_namespace(self, namespace: str) -> dict[str, int]:
         """Get document and chunk counts for a namespace
@@ -882,6 +955,9 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
 
         if item.get("status") == DOC_STATUS_DELETING:
             raise ValueError(f"Document already in trash: {doc_id}")
+
+        if item.get("status") == DOC_STATUS_PURGING:
+            raise ValueError(f"Document being permanently deleted: {doc_id}")
 
         if item.get("status") == DOC_STATUS_PURGED:
             raise ValueError(f"Document permanently deleted: {doc_id}")
@@ -1191,6 +1267,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 "days_until_purge": self._calculate_days_until_purge(item.get("purge_after")),
             }
             for item in items
+            # Note: Trash entries are deleted immediately when permanent delete starts,
+            # so only "deleting" status documents should appear here
         ]
 
         result = {"documents": documents}
@@ -1224,7 +1302,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         namespace: str,
         deleted_at_ms: int,
-        deleted_by: Optional[str] = None
+        deleted_by: Optional[str] = None,
+        filename: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create cleanup job for permanent deletion.
 
@@ -1233,6 +1312,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             namespace: Document namespace
             deleted_at_ms: Deletion timestamp (for trash PK)
             deleted_by: Optional user ID who initiated permanent deletion
+            filename: Filename from trash entry (uses doc metadata if not provided)
 
         Returns:
             Dictionary with cleanup job metadata
@@ -1252,33 +1332,61 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         if not item:
             raise ValueError(f"Document not found: {doc_id}")
 
-        if item.get("status") != DOC_STATUS_DELETING:
+        current_status = item.get("status")
+        if current_status not in (DOC_STATUS_DELETING, DOC_STATUS_PURGING):
             raise ValueError(
-                f"Document not in trash (status: {item.get('status')}). "
+                f"Document not in trash (status: {current_status}). "
                 "Must soft delete first."
             )
 
         chunk_ids = item.get("chunk_ids", [])
-        filename = item.get("filename", "unknown")
+        # Use provided filename (from trash entry) or fall back to doc metadata
+        # This ensures we construct the correct trash PK even if filename changed
+        trash_filename = filename if filename else item.get("filename", "unknown")
 
-        # Mark as purging and create cleanup job in transaction
+        # Check if already in purging state (retry scenario)
+        already_purging = current_status == DOC_STATUS_PURGING
+        existing_cleanup_job_id = item.get("cleanup_job_id")
+
+        # If already purging and has cleanup job, don't create duplicate
+        if already_purging and existing_cleanup_job_id:
+            logger.info(
+                "Document already being purged",
+                extra={
+                    "doc_id": doc_id,
+                    "namespace": namespace,
+                    "cleanup_job_id": existing_cleanup_job_id,
+                }
+            )
+            return {
+                "doc_id": doc_id,
+                "namespace": namespace,
+                "chunk_ids": chunk_ids,
+                "chunk_count": len(chunk_ids),
+                "cleanup_job_id": existing_cleanup_job_id,
+                "status": "already_purging",
+            }
+
+        # Mark as purging, create cleanup job, and remove from trash view in transaction
+        # Allow both deleting and purging status (for retries)
         self.client.transact_write_items(
             TransactItems=[
                 {
-                    # Mark doc as purging
+                    # Mark doc as purging (or keep it purging if already)
                     "Update": {
                         "TableName": self.table.name,
                         "Key": {
                             "PK": {"S": f"DOC#{namespace}#{doc_id}"},
                             "SK": {"S": "METADATA"}
                         },
-                        "UpdateExpression": "SET #status = :purging, purge_started_at = :now",
-                        "ConditionExpression": "#status = :deleting",
+                        "UpdateExpression": "SET #status = :purging, purge_started_at = :now, cleanup_job_id = :job_id",
+                        "ConditionExpression": "#status IN (:deleting, :purging)",
                         "ExpressionAttributeNames": {"#status": "status"},
                         "ExpressionAttributeValues": {
                             ":purging": {"S": DOC_STATUS_PURGING},
                             ":deleting": {"S": DOC_STATUS_DELETING},
                             ":now": {"S": now.isoformat()},
+                            ":job_id": {"S": cleanup_job_id},
                         }
                     }
                 },
@@ -1292,7 +1400,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                             "cleanup_job_id": {"S": cleanup_job_id},
                             "doc_id": {"S": doc_id},
                             "namespace": {"S": namespace},
-                            "filename": {"S": filename},  # Needed for trash PK
+                            "filename": {"S": trash_filename},  # Use trash filename for PK
                             "deleted_at_ms": {"N": str(deleted_at_ms)},
                             "chunk_ids": {"L": [{"S": cid} for cid in chunk_ids]},
                             "created_at": {"S": now.isoformat()},
@@ -1300,6 +1408,16 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                             "status": {"S": "pending"},
                             "retry_count": {"N": "0"},
                             "max_retries": {"N": "10"},
+                        }
+                    }
+                },
+                {
+                    # Delete trash entry immediately (removes from trash UI)
+                    "Delete": {
+                        "TableName": self.table.name,
+                        "Key": {
+                            "PK": {"S": f"TRASH#{namespace}#{trash_filename}#{deleted_at_ms}"},
+                            "SK": {"S": "ENTRY"}
                         }
                     }
                 }
@@ -1313,6 +1431,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 "namespace": namespace,
                 "cleanup_job_id": cleanup_job_id,
                 "chunk_count": len(chunk_ids),
+                "retry": already_purging,
             }
         )
 
@@ -1342,39 +1461,48 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         now = datetime.now(timezone.utc)
 
         # Mark doc as purged and delete trash entry
-        self.client.transact_write_items(
-            TransactItems=[
-                {
-                    "Update": {
-                        "TableName": self.table.name,
-                        "Key": {
-                            "PK": {"S": f"DOC#{namespace}#{doc_id}"},
-                            "SK": {"S": "METADATA"}
-                        },
-                        "UpdateExpression": (
-                            "SET #status = :purged, purge_completed_at = :now "
-                            "REMOVE chunk_ids"
-                        ),
-                        "ExpressionAttributeNames": {"#status": "status"},
-                        "ExpressionAttributeValues": {
-                            ":purged": {"S": DOC_STATUS_PURGED},
-                            ":now": {"S": now.isoformat()},
+        # Use condition to make this idempotent (only update if still purging)
+        try:
+            self.client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Update": {
+                            "TableName": self.table.name,
+                            "Key": {
+                                "PK": {"S": f"DOC#{namespace}#{doc_id}"},
+                                "SK": {"S": "METADATA"}
+                            },
+                            "UpdateExpression": (
+                                "SET #status = :purged, purge_completed_at = :now "
+                                "REMOVE chunk_ids, cleanup_job_id"
+                            ),
+                            "ConditionExpression": "#status = :purging",
+                            "ExpressionAttributeNames": {"#status": "status"},
+                            "ExpressionAttributeValues": {
+                                ":purged": {"S": DOC_STATUS_PURGED},
+                                ":purging": {"S": DOC_STATUS_PURGING},
+                                ":now": {"S": now.isoformat()},
+                            }
+                        }
+                    },
+                    {
+                        "Delete": {
+                            "TableName": self.table.name,
+                            "Key": {
+                                "PK": {"S": f"TRASH#{namespace}#{filename}#{deleted_at_ms}"},
+                                "SK": {"S": "ENTRY"}
+                            }
                         }
                     }
-                },
-                {
-                    "Delete": {
-                        "TableName": self.table.name,
-                        "Key": {
-                            "PK": {"S": f"TRASH#{namespace}#{filename}#{deleted_at_ms}"},
-                            "SK": {"S": "ENTRY"}
-                        }
-                    }
-                }
-            ]
-        )
-
-        logger.info("Document permanently deleted", extra={"doc_id": doc_id, "namespace": namespace})
+                ]
+            )
+            logger.info("Document permanently deleted", extra={"doc_id": doc_id, "namespace": namespace})
+        except self.client.exceptions.TransactionCanceledException:
+            # Already purged by another job (duplicate cleanup jobs)
+            logger.info(
+                "Document already purged (duplicate cleanup job)",
+                extra={"doc_id": doc_id, "namespace": namespace}
+            )
 
     def list_cleanup_jobs(self, limit: int = 10) -> List[Dict[str, Any]]:
         """List pending cleanup jobs.
@@ -1409,6 +1537,20 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             }
             for item in response.get("Items", [])
         ]
+
+    def delete_cleanup_job(self, cleanup_job_id: str) -> None:
+        """Delete completed cleanup job.
+
+        Args:
+            cleanup_job_id: Cleanup job ID
+        """
+        self.table.delete_item(
+            Key={
+                "PK": f"CLEANUP#{cleanup_job_id}",
+                "SK": "JOB"
+            }
+        )
+        logger.debug(f"Deleted cleanup job: {cleanup_job_id}")
 
     def mark_cleanup_job_failed(self, cleanup_job_id: str, error: str) -> None:
         """Increment retry count or move to DLQ.

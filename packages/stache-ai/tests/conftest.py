@@ -114,6 +114,8 @@ def mock_document_index_provider():
     provider.get_chunk_ids.return_value = []
     provider.document_exists.return_value = False
     provider.get_name.return_value = "MockDocumentIndexProvider"
+    # Deduplication guard uses this method - return None for no duplicate
+    provider.get_document_by_source_path.return_value = None
     return provider
 
 

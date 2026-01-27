@@ -570,7 +570,7 @@ class TestDocumentExists:
         assert result is True
         table.query.assert_called_once()
         call_args = table.query.call_args
-        assert call_args[1]["IndexName"] == "GSI2-FilenameCreated"
+        assert call_args[1]["IndexName"] == "GSI2"
 
     def test_document_exists_false(self, document_index):
         """Should return False when document doesn't exist"""
@@ -604,7 +604,7 @@ class TestDocumentExists:
         instance.document_exists("document.pdf", "test-ns")
 
         call_args = table.query.call_args
-        assert call_args[1]["IndexName"] == "GSI2-FilenameCreated"
+        assert call_args[1]["IndexName"] == "GSI2"
         assert call_args[1]["KeyConditionExpression"] == "GSI2PK = :pk"
         assert call_args[1]["ExpressionAttributeValues"][":pk"] == "FILENAME#test-ns#document.pdf"
         assert call_args[1]["Limit"] == 1

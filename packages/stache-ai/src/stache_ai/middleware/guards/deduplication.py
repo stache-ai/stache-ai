@@ -51,15 +51,14 @@ class DeduplicationGuard(IngestGuard):
         content_hash = await compute_hash_async(content)
         hash_time = time.perf_counter() - start_time
 
-        # Step 2: Check for existing document
+        # Step 2: Check for existing document using GSI2 (source_path or filename)
         filename = metadata.get("filename", "text")
         source_path = metadata.get("source_path")
 
-        existing = document_index.get_document_by_identifier(
-            content_hash=content_hash,
-            filename=filename,
+        existing = document_index.get_document_by_source_path(
             namespace=context.namespace,
-            source_path=source_path
+            source_path=source_path,
+            filename=filename,
         )
 
         lookup_time = time.perf_counter() - start_time - hash_time

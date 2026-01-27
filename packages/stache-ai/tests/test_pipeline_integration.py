@@ -29,9 +29,9 @@ def mock_document_index():
     """Create mock document index provider."""
     mock = Mock()
     mock.get_name.return_value = "mock_dynamodb"
-    mock.reserve_identifier = Mock(return_value=True)
-    mock.complete_identifier_reservation = Mock()
-    mock.release_identifier = Mock()
+    mock.get_document_by_source_path = Mock(return_value=None)
+    mock.soft_delete_document = Mock()
+    mock.restore_document = Mock()
     mock.create_document = Mock()
     return mock
 
@@ -104,7 +104,7 @@ async def test_pipeline_runs_guards_before_enrichers(pipeline, mock_document_ind
     content = "Test content"
     content_hash = await compute_hash_async(content)
 
-    mock_document_index.get_document_by_identifier.return_value = {
+    mock_document_index.get_document_by_source_path.return_value = {
         "doc_id": "existing-123",
         "content_hash": content_hash,
     }
@@ -135,7 +135,7 @@ async def test_pipeline_executes_error_processors_on_exception(pipeline, mock_do
     # Setup: REINGEST_VERSION scenario
     old_hash = await compute_hash_async("Old content")
 
-    mock_document_index.get_document_by_identifier.return_value = {
+    mock_document_index.get_document_by_source_path.return_value = {
         "doc_id": "old-123",
         "content_hash": old_hash,
         "chunk_ids": ["chunk-1"],
@@ -186,7 +186,7 @@ async def test_pipeline_strips_internal_metadata_flags(pipeline, mock_document_i
     content = "Test content"
 
     # Setup: no duplicate
-    mock_document_index.get_document_by_identifier.return_value = None
+    mock_document_index.get_document_by_source_path.return_value = None
 
     # Manually add guard
     pipeline._ingest_guards = [DeduplicationGuard()]
@@ -212,35 +212,8 @@ async def test_pipeline_strips_internal_metadata_flags(pipeline, mock_document_i
 
 
 @pytest.mark.asyncio
-async def test_pipeline_reserves_identifier_atomically(pipeline, mock_document_index, mock_chunking_strategy):
-    """Test pipeline reserves identifier before ingestion."""
-    from stache_ai.middleware.guards.deduplication import DeduplicationGuard
-
-    content = "Test content"
-
-    # Setup: no duplicate
-    mock_document_index.get_document_by_identifier.return_value = None
-
-    # Manually add guard
-    pipeline._ingest_guards = [DeduplicationGuard()]
-
-    with patch('stache_ai.chunking.ChunkingStrategyFactory.create', return_value=mock_chunking_strategy):
-        await pipeline.ingest_text(
-            text=content,
-            metadata={"filename": "test.txt"},
-            namespace="test-ns"
-        )
-
-    # Verify reserve was called
-    assert mock_document_index.reserve_identifier.call_count == 1
-
-    # Verify complete was called
-    assert mock_document_index.complete_identifier_reservation.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_pipeline_skips_reservation_for_reingest(pipeline, mock_document_index, mock_vectordb, mock_chunking_strategy):
-    """Test pipeline skips identifier reservation for REINGEST_VERSION."""
+async def test_pipeline_allows_reingest_version(pipeline, mock_document_index, mock_vectordb, mock_chunking_strategy):
+    """Test pipeline allows REINGEST_VERSION when hash differs at same path."""
     from stache_ai.utils.hashing import compute_hash_async
     from stache_ai.middleware.guards.deduplication import DeduplicationGuard
 
@@ -249,7 +222,7 @@ async def test_pipeline_skips_reservation_for_reingest(pipeline, mock_document_i
     # Setup: REINGEST_VERSION scenario
     old_hash = await compute_hash_async("Old content")
 
-    mock_document_index.get_document_by_identifier.return_value = {
+    mock_document_index.get_document_by_source_path.return_value = {
         "doc_id": "old-123",
         "content_hash": old_hash,
         "chunk_ids": ["chunk-1"],
@@ -271,58 +244,11 @@ async def test_pipeline_skips_reservation_for_reingest(pipeline, mock_document_i
             namespace="test-ns"
         )
 
-    # Should NOT call reserve (REINGEST_VERSION uses existing identifier)
-    mock_document_index.reserve_identifier.assert_not_called()
+    # Soft delete should be called for old version
+    mock_document_index.soft_delete_document.assert_called_once()
 
-    # Should NOT call complete (no new reservation)
-    mock_document_index.complete_identifier_reservation.assert_not_called()
-
-    # Should successfully ingest
+    # Should successfully ingest as new version
     assert result["action"] == IngestionAction.REINGEST_VERSION.value
-
-
-@pytest.mark.asyncio
-async def test_pipeline_handles_reservation_race_condition(pipeline, mock_document_index):
-    """Test pipeline handles concurrent reservation failure."""
-    content = "Test content"
-
-    from stache_ai.utils.hashing import compute_hash_async
-    content_hash = await compute_hash_async(content)
-
-    # Setup: no duplicate initially
-    mock_document_index.get_document_by_identifier.return_value = None
-
-    # Reservation fails (another request won)
-    mock_document_index.reserve_identifier.return_value = False
-
-    # After reservation fails, lookup returns existing doc
-    def side_effect_lookup(*args, **kwargs):
-        return {
-            "doc_id": "concurrent-123",
-            "content_hash": content_hash,
-        }
-
-    mock_document_index.get_document_by_identifier.side_effect = [
-        None,  # First call in guard
-        side_effect_lookup(),  # Second call after failed reservation
-    ]
-
-    # Force guards to load
-    pipeline._ingest_guards = None
-
-    with patch('stache_ai.providers.plugin_loader.get_providers') as mock_get:
-        from stache_ai.middleware.guards.deduplication import DeduplicationGuard
-        mock_get.return_value = {'deduplication': DeduplicationGuard}
-
-        result = await pipeline.ingest_text(
-            text=content,
-            metadata={"filename": "test.txt"},
-            namespace="test-ns"
-        )
-
-    # Should return SKIP (concurrent ingestion won)
-    assert result["action"] == IngestionAction.SKIP.value
-    assert result["doc_id"] == "concurrent-123"
 
 
 @pytest.mark.asyncio
@@ -333,7 +259,7 @@ async def test_pipeline_cleans_up_vectors_on_failure(pipeline, mock_document_ind
     content = "Test content"
 
     # Setup: no duplicate
-    mock_document_index.get_document_by_identifier.return_value = None
+    mock_document_index.get_document_by_source_path.return_value = None
 
     # Manually add guard
     pipeline._ingest_guards = [DeduplicationGuard()]
@@ -399,7 +325,7 @@ async def test_end_to_end_reingest_version_flow(pipeline, mock_document_index, m
     old_hash = await compute_hash_async(old_content)
 
     # Setup: existing document
-    mock_document_index.get_document_by_identifier.return_value = {
+    mock_document_index.get_document_by_source_path.return_value = {
         "doc_id": "doc-v1",
         "content_hash": old_hash,
         "chunk_ids": ["old-chunk-1", "old-chunk-2"],

@@ -49,7 +49,7 @@ def context(mock_config, mock_document_index, mock_vectordb):
 async def test_guard_allows_new_document(context, mock_document_index):
     """Test guard allows new document (no existing match)."""
     # Setup: no existing document
-    mock_document_index.get_document_by_identifier.return_value = None
+    mock_document_index.get_document_by_source_path.return_value = None
 
     guard = DeduplicationGuard()
     result = await guard.validate(
@@ -68,20 +68,17 @@ async def test_guard_rejects_duplicate_content(context, mock_document_index):
     """Test guard rejects duplicate content (same hash)."""
     content = "This is duplicate content"
 
-    # Setup: existing document with same hash
-    mock_document_index.get_document_by_identifier.return_value = {
-        "doc_id": "existing-123",
-        "content_hash": "abc123...",  # Will be overridden by actual hash
-    }
-
-    guard = DeduplicationGuard()
-
     # First, compute the actual hash
     from stache_ai.utils.hashing import compute_hash_async
     actual_hash = await compute_hash_async(content)
 
-    # Update mock to return same hash
-    mock_document_index.get_document_by_identifier.return_value["content_hash"] = actual_hash
+    # Setup: existing document with same hash
+    mock_document_index.get_document_by_source_path.return_value = {
+        "doc_id": "existing-123",
+        "content_hash": actual_hash,
+    }
+
+    guard = DeduplicationGuard()
 
     result = await guard.validate(
         content=content,
@@ -106,7 +103,7 @@ async def test_guard_allows_reingest_version(context, mock_document_index, mock_
     new_hash = await compute_hash_async(new_content)
 
     # Setup: existing document with different hash
-    mock_document_index.get_document_by_identifier.return_value = {
+    mock_document_index.get_document_by_source_path.return_value = {
         "doc_id": "old-doc-123",
         "content_hash": old_hash,
         "chunk_ids": ["chunk-1", "chunk-2"],
@@ -157,7 +154,7 @@ async def test_guard_continues_on_soft_delete_failure(context, mock_document_ind
     old_hash = await compute_hash_async(old_content)
 
     # Setup: existing document with different hash
-    mock_document_index.get_document_by_identifier.return_value = {
+    mock_document_index.get_document_by_source_path.return_value = {
         "doc_id": "old-doc-123",
         "content_hash": old_hash,
     }
@@ -219,7 +216,7 @@ async def test_guard_handles_fingerprint_identifier(context, mock_document_index
     content_hash = await compute_hash_async(content)
 
     # Setup: no existing document (new fingerprint)
-    mock_document_index.get_document_by_identifier.return_value = None
+    mock_document_index.get_document_by_source_path.return_value = None
 
     guard = DeduplicationGuard()
     result = await guard.validate(
@@ -232,11 +229,10 @@ async def test_guard_handles_fingerprint_identifier(context, mock_document_index
     assert result.metadata["content_hash"] == content_hash
 
     # Verify lookup was called without source_path
-    mock_document_index.get_document_by_identifier.assert_called_once_with(
-        content_hash=content_hash,
-        filename="text",
+    mock_document_index.get_document_by_source_path.assert_called_once_with(
         namespace="test-ns",
-        source_path=None
+        source_path=None,
+        filename="text"
     )
 
 
@@ -260,7 +256,7 @@ async def test_guard_logs_timing_metrics(context, mock_document_index, caplog):
     import logging
     caplog.set_level(logging.INFO)
 
-    mock_document_index.get_document_by_identifier.return_value = None
+    mock_document_index.get_document_by_source_path.return_value = None
 
     guard = DeduplicationGuard()
     await guard.validate(
@@ -283,7 +279,7 @@ async def test_reingest_version_only_for_source_identifiers(context, mock_docume
     old_hash = await compute_hash_async(old_content)
 
     # Existing document WITHOUT source_path (fingerprint-based)
-    mock_document_index.get_document_by_identifier.return_value = {
+    mock_document_index.get_document_by_source_path.return_value = {
         "doc_id": "old-doc-123",
         "content_hash": old_hash,
     }
@@ -304,7 +300,7 @@ async def test_reingest_version_only_for_source_identifiers(context, mock_docume
 @pytest.mark.asyncio
 async def test_guard_handles_empty_content(context, mock_document_index):
     """Test guard handles empty content gracefully."""
-    mock_document_index.get_document_by_identifier.return_value = None
+    mock_document_index.get_document_by_source_path.return_value = None
 
     guard = DeduplicationGuard()
     result = await guard.validate(
@@ -325,7 +321,7 @@ async def test_guard_handles_large_content(context, mock_document_index):
     # Create content >1MB to trigger async thread pool
     large_content = "x" * (1_000_001)
 
-    mock_document_index.get_document_by_identifier.return_value = None
+    mock_document_index.get_document_by_source_path.return_value = None
 
     guard = DeduplicationGuard()
     result = await guard.validate(
@@ -341,7 +337,7 @@ async def test_guard_handles_large_content(context, mock_document_index):
 @pytest.mark.asyncio
 async def test_guard_metadata_merge(context, mock_document_index):
     """Test guard metadata is properly merged."""
-    mock_document_index.get_document_by_identifier.return_value = None
+    mock_document_index.get_document_by_source_path.return_value = None
 
     guard = DeduplicationGuard()
     result = await guard.validate(

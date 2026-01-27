@@ -159,7 +159,8 @@ class TestMiddlewareIntegration:
         assert result["success"]
         assert len(enricher.calls) == 1
         assert enricher.calls[0]["content"] == "Test content"
-        assert enricher.calls[0]["metadata"] == {"source": "test"}
+        # Original metadata should be present (guards may add content_hash)
+        assert enricher.calls[0]["metadata"]["source"] == "test"
 
     async def test_enricher_transform(self, mock_pipeline):
         """Test enricher that transforms content"""
@@ -179,8 +180,8 @@ class TestMiddlewareIntegration:
         # Verify the enricher was called with original content
         assert len(enricher.calls) == 1
         assert enricher.calls[0]["content"] == "Original content"
-        # Verify the transformed metadata was applied
-        assert enricher.calls[0]["metadata"] == {"source": "test"}
+        # Original metadata should be present (guards may add content_hash)
+        assert enricher.calls[0]["metadata"]["source"] == "test"
         # Verify documents were stored (embed was called either directly or via wrapper)
         assert mock_pipeline._documents_provider.insert.called
 

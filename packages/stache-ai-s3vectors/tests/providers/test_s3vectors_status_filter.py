@@ -363,11 +363,11 @@ class TestUpdateStatus:
             assert vector['metadata']['status'] == 'deleting'
 
     def test_update_status_large_batch(self, mock_s3vectors_provider):
-        """Test updating status for >500 vectors (multiple batches)"""
+        """Test updating status for >100 vectors (multiple batches)"""
         provider, mock_client = mock_s3vectors_provider
 
-        # Create 750 vector IDs (will need 2 batches: 500 + 250)
-        vector_ids = [f'id{i}' for i in range(750)]
+        # Create 250 vector IDs (will need 3 batches: 100 + 100 + 50)
+        vector_ids = [f'id{i}' for i in range(250)]
 
         # Mock get_vectors to return vectors for each batch
         def get_vectors_side_effect(**kwargs):
@@ -388,27 +388,35 @@ class TestUpdateStatus:
 
         updated = provider.update_status(vector_ids, 'docs', 'deleting')
 
-        assert updated == 750
-        # Should make 2 GET calls (500 + 250) and 2 PUT calls (500 + 250)
-        assert mock_client.get_vectors.call_count == 2
-        assert mock_client.put_vectors.call_count == 2
+        assert updated == 250
+        # Should make 3 GET calls (100 + 100 + 50) and 3 PUT calls (100 + 100 + 50)
+        assert mock_client.get_vectors.call_count == 3
+        assert mock_client.put_vectors.call_count == 3
 
-        # Verify first batch had 500 vectors
+        # Verify first batch had 100 vectors
         first_get_call = mock_client.get_vectors.call_args_list[0][1]
-        assert len(first_get_call['keys']) == 500
+        assert len(first_get_call['keys']) == 100
 
-        # Verify second batch had 250 vectors
+        # Verify second batch had 100 vectors
         second_get_call = mock_client.get_vectors.call_args_list[1][1]
-        assert len(second_get_call['keys']) == 250
+        assert len(second_get_call['keys']) == 100
 
-        # Verify status updated in both batches
+        # Verify third batch had 50 vectors
+        third_get_call = mock_client.get_vectors.call_args_list[2][1]
+        assert len(third_get_call['keys']) == 50
+
+        # Verify status updated in all batches
         first_put_call = mock_client.put_vectors.call_args_list[0][1]
-        assert len(first_put_call['vectors']) == 500
+        assert len(first_put_call['vectors']) == 100
         assert all(v['metadata']['status'] == 'deleting' for v in first_put_call['vectors'])
 
         second_put_call = mock_client.put_vectors.call_args_list[1][1]
-        assert len(second_put_call['vectors']) == 250
+        assert len(second_put_call['vectors']) == 100
         assert all(v['metadata']['status'] == 'deleting' for v in second_put_call['vectors'])
+
+        third_put_call = mock_client.put_vectors.call_args_list[2][1]
+        assert len(third_put_call['vectors']) == 50
+        assert all(v['metadata']['status'] == 'deleting' for v in third_put_call['vectors'])
 
     def test_update_status_vector_not_found(self, mock_s3vectors_provider):
         """Test update when vector is not found"""
@@ -459,21 +467,24 @@ class TestUpdateStatus:
         """Test that update_status handles batch errors gracefully"""
         provider, mock_client = mock_s3vectors_provider
 
-        # Create 750 IDs to test error handling across batches
-        # First batch succeeds, second batch fails
-        vector_ids = [f'id{i}' for i in range(750)]
+        # Create 250 IDs to test error handling across batches
+        # First batch succeeds, second and third batches fail
+        vector_ids = [f'id{i}' for i in range(250)]
+
+        call_count = [0]
 
         def get_vectors_side_effect(**kwargs):
+            call_count[0] += 1
             requested_keys = kwargs['keys']
-            # First batch (500 vectors) succeeds
-            if len(requested_keys) == 500:
+            # First batch (100 vectors) succeeds
+            if call_count[0] == 1:
                 return {
                     'vectors': [
                         {'key': key, 'data': {'float32': [0.1]}, 'metadata': {'status': 'active'}}
                         for key in requested_keys
                     ]
                 }
-            # Second batch (250 vectors) fails
+            # Subsequent batches fail
             else:
                 raise Exception("Network error")
 
@@ -482,8 +493,8 @@ class TestUpdateStatus:
 
         updated = provider.update_status(vector_ids, 'docs', 'deleting')
 
-        # Should have updated first batch (500) successfully, second batch (250) failed
-        assert updated == 500
+        # Should have updated first batch (100) successfully, subsequent batches (100+50) failed
+        assert updated == 100
 
 
 class TestStatusFilterIntegration:
