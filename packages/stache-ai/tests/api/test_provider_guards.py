@@ -27,7 +27,7 @@ Phase 2 Changes:
 - Legacy operations (orphaned chunks, migrations) properly isolated to Qdrant
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,6 +37,9 @@ from fastapi.testclient import TestClient
 def mock_pipeline():
     """Create a mock pipeline for API tests"""
     pipeline = MagicMock()
+
+    # Permanent delete fires delete observers via this async method
+    pipeline.notify_document_deleted = AsyncMock()
 
     # Mock vectordb provider
     vectordb_provider = MagicMock()
@@ -346,12 +349,10 @@ def test_list_orphaned_chunks_returns_501_on_s3vectors(test_client_with_mock, mo
 
     response = test_client_with_mock.get("/api/documents?orphaned=true")
 
-    # The outer exception handler wraps the 501 HTTPException as 500,
-    # but the error message contains "501: <message>" showing the provider guard worked
-    assert response.status_code == 500
+    assert response.status_code == 501
     data = response.json()
     assert "detail" in data
-    assert "501" in data["detail"] and "orphaned chunks" in data["detail"].lower()
+    assert "orphaned chunks" in data["detail"].lower()
 
 
 def test_list_orphaned_chunks_works_on_qdrant(test_client_with_mock, mock_pipeline):
@@ -389,12 +390,10 @@ def test_delete_orphaned_chunks_returns_501_on_s3vectors(test_client_with_mock, 
 
     response = test_client_with_mock.delete("/api/documents/orphaned?all_orphaned=true")
 
-    # The outer exception handler wraps the 501 HTTPException as 500,
-    # but the error message contains "501: <message>" showing the provider guard worked
-    assert response.status_code == 500
+    assert response.status_code == 501
     data = response.json()
     assert "detail" in data
-    assert "501" in data["detail"] and "Qdrant" in data["detail"]
+    assert "Qdrant" in data["detail"]
 
 
 def test_migrate_summaries_returns_501_on_s3vectors(test_client_with_mock, mock_pipeline):
@@ -404,12 +403,10 @@ def test_migrate_summaries_returns_501_on_s3vectors(test_client_with_mock, mock_
 
     response = test_client_with_mock.post("/api/documents/migrate-summaries")
 
-    # The outer exception handler wraps the 501 HTTPException as 500,
-    # but the error message contains "501: <message>" showing the provider guard worked
-    assert response.status_code == 500
+    assert response.status_code == 501
     data = response.json()
     assert "detail" in data
-    assert "501" in data["detail"] and ("Qdrant" in data["detail"] or "automatic" in data["detail"].lower())
+    assert "Qdrant" in data["detail"] or "automatic" in data["detail"].lower()
 
 
 def test_migrate_summaries_works_on_qdrant(test_client_with_mock, mock_pipeline):
@@ -457,20 +454,13 @@ def test_delete_document_by_id_provider_agnostic(test_client_with_mock, mock_pip
 
 def test_delete_document_by_filename_uses_document_index_with_namespace(test_client_with_mock, mock_pipeline):
     """delete_document_by_filename should use document index when namespace provided"""
-    # Mock document index provider
-    mock_pipeline.document_index_provider.document_exists.return_value = True
-    mock_pipeline.document_index_provider.list_documents.return_value = {
-        "documents": [
-            {
-                "doc_id": "doc-123",
-                "filename": "test.txt",
-                "namespace": "default",
-                "chunk_ids": ["chunk-1", "chunk-2", "chunk-3"],
-                "chunk_count": 3,
-                "created_at": "2024-01-01T00:00:00Z"
-            }
-        ],
-        "next_key": None
+    # Mock document index provider (direct GSI2 lookup)
+    mock_pipeline.document_index_provider.get_document_by_source_path.return_value = {
+        "doc_id": "doc-123",
+        "filename": "test.txt",
+        "namespace": "default",
+        "chunk_ids": ["chunk-1", "chunk-2", "chunk-3"],
+        "created_at": "2024-01-01T00:00:00Z"
     }
     mock_pipeline.vectordb_provider.delete.return_value = None
 
@@ -482,30 +472,25 @@ def test_delete_document_by_filename_uses_document_index_with_namespace(test_cli
     assert data["chunks_deleted"] == 3
     assert data["filename"] == "test.txt"
 
-    # Verify document_exists was called
-    mock_pipeline.document_index_provider.document_exists.assert_called_with("test.txt", "default")
+    # Verify the direct lookup was used
+    mock_pipeline.document_index_provider.get_document_by_source_path.assert_called_with(
+        namespace="default", filename="test.txt"
+    )
 
 
-def test_delete_document_by_filename_fallback_without_namespace(test_client_with_mock, mock_pipeline):
-    """delete_document_by_filename should fallback to delete_by_metadata without namespace"""
-    # Mock the delete_by_metadata method on documents_provider
-    mock_pipeline.documents_provider.delete_by_metadata.return_value = {"deleted": 3}
-
+def test_delete_document_by_filename_requires_namespace(test_client_with_mock, mock_pipeline):
+    """delete_document_by_filename without namespace must be rejected (422),
+    never falling through to a cross-namespace delete"""
     response = test_client_with_mock.delete("/api/documents?filename=test.txt")
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["success"] is True
-    assert data["chunks_deleted"] == 3
-
-    # Verify delete_by_metadata was called on documents_provider
-    mock_pipeline.documents_provider.delete_by_metadata.assert_called()
+    assert response.status_code == 422
+    mock_pipeline.documents_provider.delete_by_metadata.assert_not_called()
 
 
 def test_delete_document_by_filename_returns_404_when_not_found(test_client_with_mock, mock_pipeline):
     """delete_document_by_filename should return 404 when document not found"""
     # Mock document index to return document not found
-    mock_pipeline.document_index_provider.document_exists.return_value = False
+    mock_pipeline.document_index_provider.get_document_by_source_path.return_value = None
 
     response = test_client_with_mock.delete("/api/documents?filename=nonexistent.txt&namespace=default")
 

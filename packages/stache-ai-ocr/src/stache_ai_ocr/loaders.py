@@ -203,7 +203,7 @@ class OcrPdfLoader(DocumentLoader):
 
             # This can raise TimeoutExpired or FileNotFoundError
             result = subprocess.run(
-                ['ocrmypdf', '--skip-text', '--quiet', file_path, tmp_path],
+                ['ocrmypdf', '--skip-text', '--quiet', '--', file_path, tmp_path],
                 capture_output=True,
                 text=True,
                 timeout=self.timeout

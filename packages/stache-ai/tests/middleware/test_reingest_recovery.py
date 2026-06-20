@@ -17,7 +17,7 @@ def mock_document_index():
 def mock_vectordb():
     """Create mock vectordb provider."""
     mock = Mock()
-    mock.update_status = AsyncMock()
+    mock.update_status = Mock(return_value=1)  # sync, like VectorDBProvider.update_status
     return mock
 
 

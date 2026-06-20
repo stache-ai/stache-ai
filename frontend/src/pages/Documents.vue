@@ -14,7 +14,6 @@
             type="text"
             placeholder="Search documents by filename..."
             class="search-input"
-            @input="debouncedSearch"
           />
         </div>
 
@@ -30,7 +29,7 @@
             />
           </div>
 
-          <button @click="loadDocuments" class="btn-secondary" :disabled="loading">
+          <button @click="() => loadDocuments()" class="btn-secondary" :disabled="loading">
             🔄 Refresh
           </button>
         </div>
@@ -43,7 +42,7 @@
 
       <div v-else-if="error" class="error-state">
         <p class="error-message">{{ error }}</p>
-        <button @click="loadDocuments" class="btn-primary">Retry</button>
+        <button @click="() => loadDocuments()" class="btn-primary">Retry</button>
       </div>
 
       <div v-else-if="documents.length === 0" class="empty-state">
@@ -204,7 +203,7 @@
             Namespace: {{ deletingDoc.namespace || 'default' }}<br />
             Chunks: {{ deletingDoc.chunk_count || 0 }}
           </p>
-          <p class="warning">This action cannot be undone.</p>
+          <p class="warning">The document will be moved to trash and can be restored within 30 days.</p>
         </div>
 
         <div class="modal-footer">
@@ -280,6 +279,9 @@ const bulkDeleteConfirm = ref({
 
 // Load documents
 const loadDocuments = async (append = false) => {
+  // Guard against being used as a raw event handler: a PointerEvent is
+  // truthy and would silently turn a refresh into an append
+  append = append === true
   loading.value = true
   error.value = null
 
@@ -336,6 +338,7 @@ const loadNamespaces = async () => {
     namespaceTree.value = treeResponse.tree || []
   } catch (err) {
     console.error('Error loading namespaces:', err)
+    error.value = 'Failed to load namespaces: ' + (err.response?.data?.detail || err.message)
   }
 }
 
@@ -351,15 +354,6 @@ const filteredDocuments = computed(() => {
     return filename.includes(query)
   })
 })
-
-// Debounced search (client-side for now)
-let searchTimeout = null
-const debouncedSearch = () => {
-  clearTimeout(searchTimeout)
-  searchTimeout = setTimeout(() => {
-    // Could implement server-side search here
-  }, 300)
-}
 
 // Edit document
 const editDocument = async (doc) => {
@@ -377,13 +371,17 @@ const editDocument = async (doc) => {
   // Fetch full details including summary
   try {
     const details = await getDocumentById(doc.doc_id, doc.namespace || 'default')
+    // Bail if the modal was closed or reopened for another doc while we waited
+    if (editingDoc.value?.doc_id !== doc.doc_id) return
     // Check summary at top-level first, then fall back to metadata.ai_summary
     editForm.value.summary = details.summary || details.metadata?.ai_summary || null
     editForm.value.headings = details.headings || []
   } catch (err) {
     console.error('Error fetching document details:', err)
   } finally {
-    editForm.value.loadingSummary = false
+    if (editingDoc.value?.doc_id === doc.doc_id) {
+      editForm.value.loadingSummary = false
+    }
   }
 }
 

@@ -1,6 +1,7 @@
 """Deduplication guard for hash-based duplicate detection."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, TYPE_CHECKING
 
@@ -116,7 +117,9 @@ class DeduplicationGuard(IngestGuard):
 
                     # Update vector status to deleting (best-effort)
                     if old_doc.get("chunk_ids"):
-                        await vectordb.update_status(
+                        # update_status is synchronous; run off the event loop
+                        await asyncio.to_thread(
+                            vectordb.update_status,
                             ids=old_doc["chunk_ids"],
                             namespace=context.namespace,
                             status="deleting",

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getAuthHeader, getAuthProvider } from './auth.js'
+import { getAuthHeader, getAuthProvider, login } from './auth.js'
 import { getConfig } from '../config.js'
 
 // API URL from runtime config or build-time env var
@@ -8,6 +8,9 @@ const getApiUrl = () => getConfig('API_URL', '')
 
 // Create axios instance lazily to pick up runtime config
 let clientInstance = null
+
+// Only kick off one login redirect even if several requests 401 at once
+let redirectingToLogin = false
 
 function getClient() {
   if (!clientInstance) {
@@ -30,10 +33,14 @@ function getClient() {
     clientInstance.interceptors.response.use(
       (response) => response,
       (error) => {
-        // Handle 401 Unauthorized - redirect to login if using auth
+        // Handle 401 Unauthorized - the token expired mid-session; without
+        // this redirect every action fails silently until the next navigation
         if (error.response?.status === 401 && getAuthProvider() !== 'none') {
-          console.warn('Unauthorized - token may be expired')
-          // Could trigger re-login here if desired
+          console.warn('Unauthorized - token expired, redirecting to login')
+          if (!redirectingToLogin) {
+            redirectingToLogin = true
+            login()
+          }
         }
 
         // Enhance error with more context
@@ -128,6 +135,7 @@ export const batchUploadDocuments = async (files, options = {}) => {
   const {
     chunkingStrategy = 'recursive',
     namespace = null,
+    metadata = null,
     prependMetadata = null,
     skipErrors = true,
     onProgress = null
@@ -145,6 +153,10 @@ export const batchUploadDocuments = async (files, options = {}) => {
 
   if (namespace) {
     formData.append('namespace', namespace)
+  }
+  // Backend expects metadata as a JSON string applied to all files
+  if (metadata && Object.keys(metadata).length > 0) {
+    formData.append('metadata', JSON.stringify(metadata))
   }
   if (prependMetadata) {
     formData.append('prepend_metadata', prependMetadata)

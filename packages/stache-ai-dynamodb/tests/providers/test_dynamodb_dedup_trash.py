@@ -599,7 +599,7 @@ class TestListTrash:
         """Test listing trash across all namespaces"""
         provider, _, mock_table = mock_dynamodb
 
-        mock_table.scan.return_value = {
+        mock_table.query.return_value = {
             'Items': [
                 {
                     'doc_id': 'doc1',
@@ -615,7 +615,13 @@ class TestListTrash:
         result = provider.list_trash(namespace=None)
 
         assert 'documents' in result
-        mock_table.scan.assert_called_once()
+        assert len(result['documents']) == 1
+        mock_table.query.assert_called_once()
+        call_kwargs = mock_table.query.call_args.kwargs
+        assert call_kwargs['IndexName'] == 'GSI1'
+        assert call_kwargs['ExpressionAttributeValues'][':pk'] == 'TRASH'
+        # No namespace filter when listing all namespaces
+        assert 'FilterExpression' not in call_kwargs
 
     def test_list_trash_with_pagination(self, mock_dynamodb):
         """Test pagination of trash listing"""
@@ -804,7 +810,7 @@ class TestPermanentDelete:
         """Test listing trash entries past purge_after date"""
         provider, _, mock_table = mock_dynamodb
 
-        mock_table.scan.return_value = {
+        mock_table.query.return_value = {
             'Items': [
                 {
                     'doc_id': 'doc1',
@@ -819,4 +825,48 @@ class TestPermanentDelete:
 
         assert len(result) == 1
         assert result[0]['doc_id'] == 'doc1'
+        mock_table.query.assert_called_once()
+        call_kwargs = mock_table.query.call_args.kwargs
+        assert call_kwargs['IndexName'] == 'GSI1'
+        assert call_kwargs['ExpressionAttributeValues'][':pk'] == 'TRASH'
+        assert call_kwargs['ScanIndexForward'] is True
+
+    def test_list_expired_trash_paginates_until_limit(self, mock_dynamodb):
+        """Paginates past filtered-out pages and stops at the limit"""
+        provider, _, mock_table = mock_dynamodb
+
+        item = {
+            'doc_id': 'doc1',
+            'namespace': 'docs',
+            'deleted_at_ms': 1000000000000,
+            'purge_after': '2024-01-01T00:00:00Z'
+        }
+        mock_table.query.side_effect = [
+            {'Items': [], 'LastEvaluatedKey': {'PK': 'p1'}},
+            {'Items': [item], 'LastEvaluatedKey': {'PK': 'p2'}},
+            {'Items': [item]},
+        ]
+
+        result = provider.list_expired_trash(limit=1)
+
+        assert len(result) == 1
+        # Stops once the limit is satisfied; never requests the third page
+        assert mock_table.query.call_count == 2
+        second_call = mock_table.query.call_args_list[1].kwargs
+        assert second_call['ExclusiveStartKey'] == {'PK': 'p1'}
+
+    def test_list_expired_trash_bounded_when_key_never_clears(self, mock_dynamodb):
+        """Never loops unbounded even if LastEvaluatedKey is always present"""
+        provider, _, mock_table = mock_dynamodb
+
+        mock_table.query.return_value = {
+            'Items': [],
+            'LastEvaluatedKey': {'PK': 'stuck'}
+        }
+
+        result = provider.list_expired_trash(limit=100)
+
+        assert result == []
+        from stache_ai_dynamodb.document_index import MAX_LIST_PAGES
+        assert mock_table.query.call_count == MAX_LIST_PAGES
 

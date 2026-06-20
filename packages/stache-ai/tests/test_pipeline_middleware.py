@@ -352,6 +352,44 @@ class TestMiddlewareIntegration:
         assert len(observer.calls) == 1
         assert len(observer.complete_calls) == 0  # Should not call complete on rejection
 
+    async def test_notify_document_deleted_fires_observers(self, mock_pipeline):
+        """notify_document_deleted runs observers without touching vectors/index"""
+        observer = MockDeleteObserver(action="allow")
+        mock_pipeline._delete_observers = [observer]
+        mock_pipeline._concept_index = None
+        mock_pipeline._document_index_provider.delete_document = MagicMock()
+        mock_pipeline._documents_provider.delete = MagicMock()
+
+        await mock_pipeline.notify_document_deleted("doc-1", "ns-1")
+
+        assert len(observer.calls) == 1
+        assert len(observer.complete_calls) == 1
+        target = observer.calls[0]["target"]
+        assert target.doc_id == "doc-1"
+        assert target.namespace == "ns-1"
+        # This method must not perform deletion itself (caller already did)
+        mock_pipeline._document_index_provider.delete_document.assert_not_called()
+        mock_pipeline._documents_provider.delete.assert_not_called()
+
+    async def test_notify_document_deleted_noop_without_observers(self, mock_pipeline):
+        """No observers installed (non-enterprise) -> cheap no-op, no error"""
+        mock_pipeline._delete_observers = []
+        # Should not even touch concept_index when there are no observers
+        await mock_pipeline.notify_document_deleted("doc-1", "ns-1")
+
+    async def test_notify_document_deleted_swallows_observer_errors(self, mock_pipeline):
+        """A failing observer must not propagate: the doc is already gone"""
+        class BoomObserver(MockDeleteObserver):
+            async def on_delete(self, target, context):
+                raise RuntimeError("cleanup boom")
+
+        observer = BoomObserver(action="allow")
+        mock_pipeline._delete_observers = [observer]
+        mock_pipeline._concept_index = None
+
+        # Must not raise
+        await mock_pipeline.notify_document_deleted("doc-1", "ns-1")
+
     async def test_multiple_enrichers_chain(self, mock_pipeline):
         """Test multiple enrichers execute in order"""
         enricher1 = MockEnricher(action="transform", content="Step 1", metadata={"step": 1})

@@ -11,6 +11,8 @@ def mock_pipeline():
     """Mock pipeline with document index provider."""
     pipeline = MagicMock()
     pipeline.document_index_provider = MagicMock()
+    # Purge fires delete observers via this async method (no-op without enterprise)
+    pipeline.notify_document_deleted = AsyncMock()
     return pipeline
 
 

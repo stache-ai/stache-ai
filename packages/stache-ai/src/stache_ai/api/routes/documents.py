@@ -156,9 +156,11 @@ async def list_documents(
         # Legacy scan-based listing (fallback, uses document index for all providers)
         return await _list_documents_legacy(pipeline, namespace, extension)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list documents: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 async def _list_orphaned_chunks(vectordb, namespace: str | None):
@@ -265,7 +267,7 @@ async def _list_documents_legacy(pipeline, namespace: str | None, extension: str
 
     except Exception as e:
         logger.error(f"Legacy document listing failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/documents/discover")
@@ -322,7 +324,7 @@ async def discover_documents(
 
     except Exception as e:
         logger.error(f"Failed to discover documents: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # NOTE: Static routes must come before parameterized routes
@@ -370,7 +372,7 @@ async def get_chunks_by_ids(
         }
     except Exception as e:
         logger.error(f"Failed to get chunks by IDs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/documents/orphaned")
@@ -450,9 +452,11 @@ async def delete_orphaned_chunks(
             "chunks_deleted": len(orphan_ids),
             "filename": filename
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete orphaned chunks: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/documents/id/{doc_id}")
@@ -502,7 +506,7 @@ async def get_document(
         raise
     except Exception as e:
         logger.error(f"Failed to get document: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/documents/id/{doc_id}")
@@ -536,6 +540,10 @@ async def delete_document_by_id(
 
             # Delete from document index
             pipeline.document_index_provider.delete_document(doc_id, namespace)
+
+            # Fire delete observers now that the doc is permanently gone
+            # (e.g. concept-link cleanup). No-op without enterprise plugins.
+            await pipeline.notify_document_deleted(doc_id, namespace)
 
             logger.info(f"Permanently deleted document {doc_id} ({len(chunk_ids)} chunks) from {namespace}")
 
@@ -580,16 +588,16 @@ async def delete_document_by_id(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to delete document: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/documents")
 async def delete_document_by_filename(
     filename: str = Query(..., description="Filename to delete"),
-    namespace: str | None = Query(None, description="Optional namespace filter")
+    namespace: str = Query(..., description="Namespace containing the document")
 ):
     """
-    Delete all chunks associated with a filename.
+    Delete all chunks associated with a filename in a namespace.
 
     This allows re-ingesting a file without duplicates.
     Uses document index to find document by filename, then deletes vectors
@@ -599,24 +607,12 @@ async def delete_document_by_filename(
         pipeline = get_pipeline()
 
         # Use document index if available (preferred method)
-        if pipeline.document_index_provider and namespace:
-            # Check if document exists by filename in the namespace
-            doc_exists = pipeline.document_index_provider.document_exists(filename, namespace)
-
-            if not doc_exists:
-                raise HTTPException(status_code=404, detail=f"Document not found: {filename}")
-
-            # Query document index by filename using GSI2
-            # We need to get the document first to find its doc_id
-            result = pipeline.document_index_provider.list_documents(namespace=namespace, limit=1000)
-            docs = result.get('documents', [])
-
-            # Find the document with matching filename
-            target_doc = None
-            for doc in docs:
-                if doc.get('filename') == filename:
-                    target_doc = doc
-                    break
+        if pipeline.document_index_provider:
+            # Direct GSI2 lookup by filename in the namespace
+            target_doc = pipeline.document_index_provider.get_document_by_source_path(
+                namespace=namespace,
+                filename=filename,
+            )
 
             if not target_doc:
                 raise HTTPException(status_code=404, detail=f"Document not found: {filename}")
@@ -667,7 +663,7 @@ async def delete_document_by_filename(
         )
     except Exception as e:
         logger.error(f"Failed to delete document: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 class DocumentUpdateRequest(BaseModel):
@@ -751,7 +747,7 @@ async def update_document_metadata(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to update document {doc_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/documents/migrate-summaries")
@@ -942,6 +938,8 @@ async def migrate_document_summaries(
             "errors": errors[:10] if errors else []
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Migration failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

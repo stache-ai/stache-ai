@@ -392,8 +392,9 @@ class RAGPipeline:
 
         logger.info(f"Ingesting text (length: {len(text)}, strategy: {chunking_strategy}, namespace: {namespace})")
 
-        # Prepare metadata and namespace
-        metadata = metadata or {}
+        # Prepare metadata and namespace (copy: guards and dedup state
+        # mutate this dict, which must not leak into the caller's object)
+        metadata = dict(metadata) if metadata else {}
         doc_id = str(uuid.uuid4())
         ns = namespace or self.config.default_namespace
 
@@ -1762,6 +1763,59 @@ class RAGPipeline:
             "doc_id": doc_id,
             "namespace": namespace
         }
+
+    async def notify_document_deleted(
+        self,
+        doc_id: str,
+        namespace: str,
+        context: "RequestContext | None" = None
+    ) -> None:
+        """Run delete observers for a document that has ALREADY been permanently
+        removed (permanent-delete route, trash purge).
+
+        Unlike delete_document(), this does not touch vectors or the index — it
+        only fires observer-side cleanup (e.g. concept-link removal). It is a
+        no-op when no delete observers are installed, so it costs nothing on
+        deployments without enterprise plugins. Errors never propagate: the
+        document is already gone and cleanup is best-effort.
+
+        Do NOT call this on soft-delete (trash) — observers permanently drop
+        derived data (concept links) that a restore cannot rebuild.
+        """
+        observers = self.delete_observers
+        if not observers:
+            return
+
+        if context is None:
+            from datetime import datetime, timezone
+            from uuid import uuid4
+            from stache_ai.middleware.context import RequestContext
+            context = RequestContext(
+                request_id=str(uuid4()),
+                timestamp=datetime.now(timezone.utc),
+                namespace=namespace,
+                source="api"
+            )
+
+        from stache_ai.middleware.base import DeleteTarget
+        target = DeleteTarget(
+            target_type="document",
+            doc_id=doc_id,
+            namespace=namespace
+        )
+        context.custom["config"] = self.config
+        context.custom["concept_index"] = self.concept_index
+
+        for observer in observers:
+            try:
+                await observer.on_delete(target, context)
+            except Exception as e:
+                logger.error(f"Delete observer {observer.__class__.__name__} on_delete failed: {e}")
+        for observer in observers:
+            try:
+                await observer.on_delete_complete(target, context)
+            except Exception as e:
+                logger.error(f"Delete observer {observer.__class__.__name__} on_delete_complete failed: {e}")
 
 
 # Global pipeline instance with thread-safe initialization

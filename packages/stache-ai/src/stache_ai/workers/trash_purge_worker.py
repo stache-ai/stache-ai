@@ -43,6 +43,12 @@ async def purge_expired_trash(
                 deleted_at_ms=entry["deleted_at_ms"],
                 deleted_by="system_auto_purge"
             )
+            # Fire delete observers now that the doc is permanently gone
+            # (e.g. concept-link cleanup). No-op without enterprise plugins.
+            await pipeline.notify_document_deleted(
+                doc_id=entry["doc_id"],
+                namespace=entry["namespace"],
+            )
             stats["purged"] += 1
 
             logger.info(

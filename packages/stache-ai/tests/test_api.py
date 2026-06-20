@@ -153,7 +153,9 @@ class TestQueryEndpoint:
         )
 
         assert response.status_code == 500
-        assert "Database connection error" in response.json()["detail"]
+        # Internal error text must not leak to clients
+        assert response.json()["detail"] == "Internal server error"
+        assert "Database connection error" not in response.json()["detail"]
 
 
 class TestCaptureEndpoint:

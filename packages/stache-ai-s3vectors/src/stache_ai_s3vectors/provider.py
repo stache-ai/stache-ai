@@ -848,6 +848,7 @@ class S3VectorsProvider(VectorDBProvider):
                     vectorBucketName=self.bucket_name,
                     indexName=self.index_name,
                     keys=batch_ids,
+                    returnData=True,
                     returnMetadata=True
                 )
 
@@ -859,12 +860,19 @@ class S3VectorsProvider(VectorDBProvider):
                 # Update metadata for all vectors
                 updated_vectors = []
                 for vector in vectors:
+                    data = vector.get('data')
+                    if not data:
+                        # PutVectors rejects vectors without embedding data;
+                        # never overwrite a vector with an empty payload
+                        logger.warning(f"Vector {vector.get('key')} returned no data, skipping status update")
+                        continue
+
                     metadata = vector.get('metadata', {})
                     metadata['status'] = status
 
                     updated_vectors.append({
                         'key': vector['key'],
-                        'data': vector.get('data', {}),
+                        'data': data,
                         'metadata': metadata
                     })
 

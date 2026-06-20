@@ -66,4 +66,4 @@ async def capture_thought(request: CaptureRequest):
         }
     except Exception as e:
         logger.error(f"Capture failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

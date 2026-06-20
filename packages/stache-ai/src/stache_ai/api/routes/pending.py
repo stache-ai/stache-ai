@@ -121,13 +121,19 @@ async def approve_pending(item_id: str, request: ApproveRequest):
     if not json_path.exists() or not pdf_path.exists():
         raise HTTPException(status_code=404, detail="Pending item not found")
 
+    # Strip any directory components so the filename can't escape
+    # the processed dir (e.g. '../../etc' or an absolute path)
+    filename = Path(request.filename).name.strip()
+    if not filename or filename in (".", ".."):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     try:
         # Load the PDF document
-        text = load_document(str(pdf_path), f"{request.filename}.pdf")
+        text = load_document(str(pdf_path), f"{filename}.pdf")
 
         # Prepare metadata
         metadata = request.metadata or {}
-        metadata["filename"] = f"{request.filename}.pdf"
+        metadata["filename"] = f"{filename}.pdf"
 
         # Ingest into pipeline
         pipeline = get_pipeline()
@@ -139,14 +145,14 @@ async def approve_pending(item_id: str, request: ApproveRequest):
             prepend_metadata=request.prepend_metadata
         )
 
-        logger.info(f"Approved and ingested: {request.filename} -> {request.namespace}")
+        logger.info(f"Approved and ingested: {filename} -> {request.namespace}")
 
         # Move PDF to processed directory (optional - for archiving)
         processed_dir = Path(settings.queue_dir).parent / "processed" / request.namespace.replace("/", "_")
         processed_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        archive_name = f"{request.filename}_{timestamp}.pdf"
+        archive_name = f"{filename}_{timestamp}.pdf"
         shutil.move(str(pdf_path), str(processed_dir / archive_name))
 
         # Clean up queue files
@@ -156,14 +162,16 @@ async def approve_pending(item_id: str, request: ApproveRequest):
 
         return {
             "success": True,
-            "filename": request.filename,
+            "filename": filename,
             "namespace": request.namespace,
             **result
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to approve {item_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to approve pending item")
 
 
 @router.delete("/pending/{item_id}")

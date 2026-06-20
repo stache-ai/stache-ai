@@ -1,6 +1,6 @@
 """Test updated delete route (soft delete by default)."""
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
 from stache_ai.api.main import app
@@ -17,6 +17,8 @@ def mock_pipeline():
     """Mock pipeline with document index provider."""
     pipeline = MagicMock()
     pipeline.document_index_provider = MagicMock()
+    # Permanent delete fires delete observers via this async method
+    pipeline.notify_document_deleted = AsyncMock()
     return pipeline
 
 

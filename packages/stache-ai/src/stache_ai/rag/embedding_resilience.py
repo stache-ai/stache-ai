@@ -96,6 +96,7 @@ See tests/rag/test_embedding_resilience.py for comprehensive examples.
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -285,7 +286,9 @@ class AutoSplitEmbeddingWrapper:
         provider,  # EmbeddingProvider (avoid circular import)
         max_split_depth: int = 4,
         error_classifier: ErrorClassifier | None = None,
-        enabled: bool = True
+        enabled: bool = True,
+        batch_size: int = 96,
+        max_workers: int = 10
     ):
         """
         Initialize auto-split wrapper.
@@ -295,11 +298,15 @@ class AutoSplitEmbeddingWrapper:
             max_split_depth: Maximum recursion depth (4 = up to 16 sub-chunks)
             error_classifier: Strategy for detecting context errors (default: DefaultErrorClassifier)
             enabled: Whether auto-split is enabled (disable for testing)
+            batch_size: Texts per batch for parallel embedding (default 96, Cohere's limit)
+            max_workers: Max concurrent batch requests (default 10)
         """
         self.provider = provider
         self.max_split_depth = max_split_depth
         self.error_classifier = error_classifier or DefaultErrorClassifier()
         self.enabled = enabled
+        self.batch_size = batch_size
+        self.max_workers = max_workers
         self._splitter = TextSplitter()
 
     def _embed_single_with_auto_split(
@@ -402,7 +409,11 @@ class AutoSplitEmbeddingWrapper:
         """
         Embed batch of texts with automatic splitting.
 
-        This is the main entry point for pipeline integration.
+        This is the main entry point for pipeline integration. Texts are split
+        into batches and embedded in parallel via the provider's embed_batch().
+        If a batch fails with a context-length error, that batch falls back to
+        individual embed() calls with auto-split — only the failing batch pays
+        the sequential cost.
 
         Args:
             texts: List of text chunks to embed
@@ -417,21 +428,76 @@ class AutoSplitEmbeddingWrapper:
             >>> print(f"Created {len(results)} embeddings from {len(texts)} inputs")
             >>> print(f"{split_count} chunks were auto-split")
         """
+        if not texts:
+            return [], 0
+
+        # Build indexed batches: (batch_index, start_offset, batch_texts)
+        batches = [
+            (i, start, texts[start:start + self.batch_size])
+            for i, start in enumerate(range(0, len(texts), self.batch_size))
+        ]
+
+        batch_results: list[tuple[list[EmbeddingResult], int] | None] = [None] * len(batches)
+
+        def _process_batch(batch_idx: int, start_offset: int, batch_texts: list[str]):
+            """Try embed_batch; on context-length error, fall back to individual."""
+            try:
+                embeddings = self.provider.embed_batch(batch_texts)
+                results = [
+                    EmbeddingResult(
+                        text=text,
+                        embedding=emb,
+                        was_split=False,
+                        parent_index=start_offset + j
+                    )
+                    for j, (text, emb) in enumerate(zip(batch_texts, embeddings))
+                ]
+                return batch_idx, results, 0
+
+            except Exception as e:
+                if not self.enabled or not self.error_classifier.is_context_length_error(e):
+                    raise
+
+                # Context-length error — fall back to individual with auto-split
+                logger.info(
+                    f"Batch {batch_idx} ({len(batch_texts)} texts) failed with "
+                    f"context-length error, falling back to individual embedding"
+                )
+                results = []
+                splits = 0
+                for j, text in enumerate(batch_texts):
+                    chunk_results = self._embed_single_with_auto_split(
+                        text, original_index=start_offset + j
+                    )
+                    if len(chunk_results) > 1:
+                        splits += 1
+                    results.extend(chunk_results)
+                return batch_idx, results, splits
+
+        # Single batch — no threading overhead needed
+        if len(batches) == 1:
+            idx, results, splits = _process_batch(*batches[0])
+            batch_results[idx] = (results, splits)
+        else:
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {
+                    executor.submit(_process_batch, idx, start, batch): idx
+                    for idx, start, batch in batches
+                }
+                for future in as_completed(futures):
+                    idx, results, splits = future.result()
+                    batch_results[idx] = (results, splits)
+
+        # Flatten in order
         all_results = []
         split_count = 0
-
-        for i, text in enumerate(texts):
-            results = self._embed_single_with_auto_split(text, original_index=i)
-
-            # Track how many original chunks were split
-            if len(results) > 1:
-                split_count += 1
-
+        for results, splits in batch_results:
             all_results.extend(results)
+            split_count += splits
 
         logger.info(
             f"Embedded {len(texts)} chunks → {len(all_results)} results "
-            f"({split_count} splits)"
+            f"({split_count} splits, {len(batches)} batches)"
         )
 
         return all_results, split_count

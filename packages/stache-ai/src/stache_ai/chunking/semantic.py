@@ -57,7 +57,7 @@ class SemanticChunkingStrategy(ChunkingStrategy):
                 if chunk_overlap > 0 and current_chunk:
                     # Keep last unit for overlap
                     current_chunk = [current_chunk[-1], unit]
-                    current_length = len(current_chunk[-1]['text']) + unit_length
+                    current_length = len(current_chunk[0]['text']) + unit_length
                 else:
                     current_chunk = [unit]
                     current_length = unit_length

@@ -700,6 +700,40 @@ class TestCountByNamespace:
 
         assert result == {"doc_count": 2, "chunk_count": 10}
 
+    def test_count_by_namespace_filters_active_only(self, document_index):
+        """Should count documents with status=active or no status (legacy docs)"""
+        instance, _, client = document_index
+
+        # Mock paginator that simulates DynamoDB FilterExpression behavior
+        # In reality, DynamoDB would filter out non-active docs, so mock returns only active
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.return_value = [
+            {
+                'Items': [
+                    {'chunk_count': {'N': '10'}, 'status': {'S': 'active'}},
+                    {'chunk_count': {'N': '20'}, 'status': {'S': 'active'}},
+                    {'chunk_count': {'N': '5'}},  # Legacy doc without status field
+                    # Deleted docs (status='deleting') wouldn't be returned due to FilterExpression
+                ]
+            }
+        ]
+        client.get_paginator.return_value = mock_paginator
+
+        result = instance.count_by_namespace("test-namespace")
+
+        # Verify the query params include status filter with legacy support
+        call_args = mock_paginator.paginate.call_args
+        query_params = call_args[1]
+        assert query_params.get("FilterExpression") == "attribute_not_exists(#status) OR #status = :active"
+        assert query_params.get("ExpressionAttributeNames") == {"#status": "status"}
+        assert query_params.get("ExpressionAttributeValues") == {
+            ":pk": {"S": "NAMESPACE#test-namespace"},
+            ":active": {"S": "active"}
+        }
+
+        # Should count active docs AND legacy docs without status
+        assert result == {"doc_count": 3, "chunk_count": 35}
+
 
 class TestEnsureTable:
     """Tests for _ensure_table validation method"""

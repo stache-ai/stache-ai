@@ -51,7 +51,9 @@ class CharacterChunkingStrategy(ChunkingStrategy):
                 )
                 chunk_index += 1
 
-            # Move start position (with overlap)
-            start = end - chunk_overlap if end < len(text) else end
+            # Move start position (with overlap), always making forward
+            # progress: when a word boundary pulls `end` close to `start`,
+            # `end - chunk_overlap` could move backward and loop forever
+            start = max(end - chunk_overlap, start + 1) if end < len(text) else end
 
         return chunks

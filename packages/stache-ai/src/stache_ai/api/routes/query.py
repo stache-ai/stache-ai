@@ -51,4 +51,4 @@ async def query_knowledge(request: QueryRequest):
         return result
     except Exception as e:
         logger.error(f"Query failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

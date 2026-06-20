@@ -154,7 +154,7 @@ async def create_namespace(data: NamespaceCreate):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create namespace: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/namespaces")
@@ -184,7 +184,7 @@ async def list_namespaces(
         }
     except Exception as e:
         logger.error(f"Failed to list namespaces: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/namespaces/tree")
@@ -219,7 +219,7 @@ async def get_namespace_tree(
         }
     except Exception as e:
         logger.error(f"Failed to get namespace tree: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/namespaces/{namespace_id:path}")
@@ -248,7 +248,7 @@ async def get_namespace(
         raise
     except Exception as e:
         logger.error(f"Failed to get namespace: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/namespaces/{namespace_id:path}")
@@ -289,7 +289,7 @@ async def update_namespace(
         raise
     except Exception as e:
         logger.error(f"Failed to update namespace: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/namespaces/{namespace_id:path}")
@@ -367,7 +367,7 @@ async def delete_namespace(
         raise
     except Exception as e:
         logger.error(f"Failed to delete namespace: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/namespaces/{namespace_id:path}/documents")
@@ -433,4 +433,4 @@ async def list_namespace_documents(
         raise
     except Exception as e:
         logger.error(f"Failed to list namespace documents: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

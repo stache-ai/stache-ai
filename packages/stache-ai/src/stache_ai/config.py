@@ -125,6 +125,16 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     cohere_api_key: str | None = None
 
+    # ===== OpenAI Configuration =====
+    openai_base_url: str | None = Field(
+        default=None,
+        description="OpenAI API base URL. Set to http://localhost:11434/v1 for Ollama."
+    )
+    openai_llm_model: str | None = Field(
+        default=None,
+        description="OpenAI LLM model name (e.g., gpt-4o, llama3.2 for Ollama)"
+    )
+
     # ===== Qdrant Configuration =====
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None

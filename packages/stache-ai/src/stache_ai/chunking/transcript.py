@@ -70,7 +70,7 @@ class TranscriptChunkingStrategy(ChunkingStrategy):
                 # Start new chunk with overlap (last cue for context)
                 if chunk_overlap > 0 and current_chunk:
                     current_chunk = [current_chunk[-1], cue]
-                    current_length = len(current_chunk[-1]['text']) + cue_length
+                    current_length = len(current_chunk[0]['text']) + cue_length
                 else:
                     current_chunk = [cue]
                     current_length = cue_length
@@ -254,7 +254,7 @@ class TranscriptChunkingStrategy(ChunkingStrategy):
                 # Overlap
                 if chunk_overlap > 0:
                     current_chunk = [current_chunk[-1], line]
-                    current_length = len(current_chunk[-1]) + line_length
+                    current_length = len(current_chunk[0]) + line_length
                 else:
                     current_chunk = [line]
                     current_length = line_length

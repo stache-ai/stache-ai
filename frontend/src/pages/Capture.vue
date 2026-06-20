@@ -156,41 +156,44 @@ const handleSubmit = async () => {
   result.value = null
 
   const ns = namespace.value.trim() || null
+  const hasText = !!text.value.trim()
+  const hasFiles = files.value.length > 0
 
   try {
-    let response
+    // Process files and text independently so neither is silently dropped
+    // when both are present. metadata is forwarded on every path.
+    const summaries = []
+    let anyFailed = false
 
     if (files.value.length > 1) {
       // Batch upload multiple files
-      response = await batchUploadDocuments(files.value, {
+      const response = await batchUploadDocuments(files.value, {
         chunkingStrategy: chunkingStrategy.value,
         namespace: ns,
+        metadata: metadata.value,
         skipErrors: true,
         onProgress: (percent) => {
           uploadProgress.value = percent
         }
       })
-      result.value = {
-        type: response.success ? 'success' : 'warning',
-        message: response.message,
-        details: `${response.successful} succeeded, ${response.failed} failed, ${response.total_chunks} total chunks`
-      }
+      if (response.failed > 0) anyFailed = true
+      summaries.push(`${response.successful}/${response.total_files} files ingested, ${response.total_chunks} chunks`)
     } else if (files.value.length === 1) {
       // Single file upload
-      response = await uploadDocument(files.value[0], chunkingStrategy.value, metadata.value, ns)
-      result.value = {
-        type: 'success',
-        message: 'File uploaded successfully!',
-        details: `Created ${response.chunks_created} chunk(s) from ${files.value[0].name}`
-      }
-    } else {
-      // Capture text
-      response = await captureThought(text.value, metadata.value, ns)
-      result.value = {
-        type: 'success',
-        message: 'Captured successfully!',
-        details: `Created ${response.chunks_created} chunk(s)`
-      }
+      const response = await uploadDocument(files.value[0], chunkingStrategy.value, metadata.value, ns)
+      summaries.push(`${files.value[0].name}: ${response.chunks_created} chunk(s)`)
+    }
+
+    if (hasText) {
+      // Capture typed text as its own document
+      const response = await captureThought(text.value, metadata.value, ns)
+      summaries.push(`Text note: ${response.chunks_created} chunk(s)`)
+    }
+
+    result.value = {
+      type: anyFailed ? 'warning' : 'success',
+      message: hasFiles && hasText ? 'Saved files and text note' : 'Saved successfully!',
+      details: summaries.join(' · ')
     }
 
     // Clear form after success

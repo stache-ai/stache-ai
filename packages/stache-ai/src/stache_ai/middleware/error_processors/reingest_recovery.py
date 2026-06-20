@@ -1,6 +1,7 @@
 """Error recovery for REINGEST_VERSION failures."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, TYPE_CHECKING
 
@@ -78,7 +79,9 @@ class ReingestRecoveryProcessor(ErrorProcessor):
 
             if vectordb and chunk_ids:
                 try:
-                    await vectordb.update_status(
+                    # update_status is synchronous; run off the event loop
+                    await asyncio.to_thread(
+                        vectordb.update_status,
                         ids=chunk_ids,
                         namespace=context.namespace,
                         status="active",

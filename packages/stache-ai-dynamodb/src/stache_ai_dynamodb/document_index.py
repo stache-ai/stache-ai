@@ -20,6 +20,10 @@ DOC_STATUS_DELETING = "deleting"
 DOC_STATUS_PURGING = "purging"
 DOC_STATUS_PURGED = "purged"
 
+# Upper bound on Scan/Query pages per listing call (~1MB read each).
+# Bounds worker runtime when filters skip many pages.
+MAX_LIST_PAGES = 100
+
 
 class DynamoDBDocumentIndex(DocumentIndexProvider):
     """DynamoDB-backed document index
@@ -278,10 +282,11 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         """
         if namespace:
             # Query by namespace using GSI1 - most recent first
+            # Include legacy documents without status field (backward compatibility)
             query_params = {
                 "IndexName": "GSI1",
                 "KeyConditionExpression": "GSI1PK = :pk",
-                "FilterExpression": "#status = :active",
+                "FilterExpression": "attribute_not_exists(#status) OR #status = :active",
                 "ExpressionAttributeNames": {"#status": "status"},
                 "ExpressionAttributeValues": {
                     ":pk": self._make_gsi1pk(namespace),
@@ -305,8 +310,9 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 raise
         else:
             # Scan all documents (expensive operation, use sparingly)
+            # Include legacy documents without status field (backward compatibility)
             scan_params = {
-                "FilterExpression": "#status = :active",
+                "FilterExpression": "attribute_not_exists(#status) OR #status = :active",
                 "ExpressionAttributeNames": {"#status": "status"},
                 "ExpressionAttributeValues": {":active": DOC_STATUS_ACTIVE},
                 "Limit": limit
@@ -693,23 +699,32 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             chunk_count = 0
 
             # Query GSI1 by namespace - paginate through all documents
+            # Include legacy documents without status field (backward compatibility)
             query_params = {
                 "IndexName": "GSI1",
                 "KeyConditionExpression": "GSI1PK = :pk",
+                "FilterExpression": "attribute_not_exists(#status) OR #status = :active",
+                "ExpressionAttributeNames": {"#status": "status"},
                 "ExpressionAttributeValues": {
-                    ":pk": self._make_gsi1pk(namespace)
+                    ":pk": self._make_gsi1pk(namespace),
+                    ":active": DOC_STATUS_ACTIVE
                 },
-                "ProjectionExpression": "chunk_count"  # Only fetch what we need
+                "ProjectionExpression": "chunk_count, #status"  # Need status for filtering
             }
 
             paginator = self.client.get_paginator('query')
+            # Low-level client requires typed AttributeValues
+            query_params["ExpressionAttributeValues"] = {
+                ":pk": {"S": self._make_gsi1pk(namespace)},
+                ":active": {"S": DOC_STATUS_ACTIVE}
+            }
             for page in paginator.paginate(
                 TableName=self.table_name,
                 **query_params
             ):
                 for item in page.get('Items', []):
                     doc_count += 1
-                    # DynamoDB returns chunk_count as {'N': '123'}
+                    # DynamoDB low-level client returns chunk_count as {'N': '123'}
                     count_value = item.get('chunk_count', {}).get('N', '0')
                     chunk_count += int(count_value)
 
@@ -1513,15 +1528,27 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         Returns:
             List of cleanup job dictionaries
         """
-        response = self.table.scan(
-            FilterExpression="begins_with(PK, :prefix) AND #status = :pending",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={
+        # Scan Limit applies before the filter, so paginate until we have
+        # enough matches or the table is exhausted
+        scan_params = {
+            "FilterExpression": "begins_with(PK, :prefix) AND #status = :pending",
+            "ExpressionAttributeNames": {"#status": "status"},
+            "ExpressionAttributeValues": {
                 ":prefix": "CLEANUP#",
                 ":pending": "pending",
             },
-            Limit=limit,
-        )
+        }
+
+        items = []
+        for _ in range(MAX_LIST_PAGES):
+            if len(items) >= limit:
+                break
+            response = self.table.scan(**scan_params)
+            items.extend(response.get("Items", []))
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            scan_params["ExclusiveStartKey"] = last_key
 
         return [
             {
@@ -1535,7 +1562,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 "retry_count": int(item.get("retry_count", 0)),
                 "max_retries": int(item.get("max_retries", 10)),
             }
-            for item in response.get("Items", [])
+            for item in items[:limit]
         ]
 
     def delete_cleanup_job(self, cleanup_job_id: str) -> None:
@@ -1607,14 +1634,30 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         """
         now = datetime.now(timezone.utc).isoformat()
 
-        response = self.table.scan(
-            FilterExpression="begins_with(PK, :prefix) AND purge_after < :now",
-            ExpressionAttributeValues={
-                ":prefix": "TRASH#",
+        # Query the TRASH partition on GSI1 (oldest first) instead of a
+        # full-table scan; Limit applies before the filter, so paginate
+        # until we have enough matches or the partition is exhausted
+        query_params = {
+            "IndexName": "GSI1",
+            "KeyConditionExpression": "GSI1PK = :pk",
+            "FilterExpression": "purge_after < :now",
+            "ExpressionAttributeValues": {
+                ":pk": "TRASH",
                 ":now": now,
             },
-            Limit=limit,
-        )
+            "ScanIndexForward": True,  # Oldest deletions first
+        }
+
+        items = []
+        for _ in range(MAX_LIST_PAGES):
+            if len(items) >= limit:
+                break
+            response = self.table.query(**query_params)
+            items.extend(response.get("Items", []))
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            query_params["ExclusiveStartKey"] = last_key
 
         return [
             {
@@ -1623,5 +1666,5 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 "deleted_at_ms": int(item.get("deleted_at_ms", 0)),
                 "purge_after": item.get("purge_after"),
             }
-            for item in response.get("Items", [])
+            for item in items[:limit]
         ]

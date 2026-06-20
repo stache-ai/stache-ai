@@ -9,7 +9,7 @@
       </div>
 
       <!-- Filter Controls -->
-      <div class="filters-bar" v-if="!loading && documents.length > 0">
+      <div class="filters-bar" v-if="!loading && (documents.length > 0 || selectedNamespace)">
         <div class="namespace-filter-wrapper">
           <label for="namespace-filter">Filter by Namespace:</label>
           <select v-model="selectedNamespace" id="namespace-filter" class="namespace-select" @change="loadTrash">
@@ -44,7 +44,8 @@
 
       <!-- Empty State -->
       <div v-else-if="documents.length === 0" class="empty-state">
-        <p>Trash is empty</p>
+        <p v-if="selectedNamespace">No trashed documents in "{{ selectedNamespace }}"</p>
+        <p v-else>Trash is empty</p>
         <p class="hint">Deleted documents appear here and are automatically purged after 30 days</p>
       </div>
 
