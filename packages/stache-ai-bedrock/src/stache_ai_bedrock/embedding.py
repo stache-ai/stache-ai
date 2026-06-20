@@ -180,37 +180,72 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
 
         return results
 
-    def _embed_batch_cohere(self, texts: List[str], input_type: str = "search_document") -> List[List[float]]:
-        """Batch embedding using Cohere on Bedrock
+    def _embed_batch_cohere(
+        self,
+        texts: List[str],
+        input_type: str = "search_document",
+        max_workers: int = 10
+    ) -> List[List[float]]:
+        """Parallel batch embedding using Cohere on Bedrock
+
+        Cohere supports up to 96 texts per API call. For larger sets,
+        batches are sent in parallel using ThreadPoolExecutor.
 
         Args:
             texts: List of texts to embed
             input_type: "search_document" for documents, "search_query" for queries
+            max_workers: Max concurrent batch requests (default 10)
         """
-        # Cohere has a batch limit, process in chunks
         batch_size = 96
-        all_embeddings = []
 
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
+        # Single batch - no parallelism needed
+        if len(texts) <= batch_size:
+            return self._invoke_cohere_batch(texts, input_type)
 
-            body = {
-                "texts": batch,
-                "input_type": input_type,
-                "truncate": "END"
+        # Split into batches and process in parallel
+        batches = [
+            (i, texts[start:start + batch_size])
+            for i, start in enumerate(range(0, len(texts), batch_size))
+        ]
+
+        results = [None] * len(batches)
+
+        def embed_batch_with_index(idx: int, batch: List[str]) -> tuple:
+            return idx, self._invoke_cohere_batch(batch, input_type)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(embed_batch_with_index, idx, batch): idx
+                for idx, batch in batches
             }
 
-            response = self.client.invoke_model(
-                modelId=self.model_id,
-                body=json.dumps(body),
-                contentType='application/json',
-                accept='application/json'
-            )
+            for future in as_completed(futures):
+                idx, embeddings = future.result()
+                results[idx] = embeddings
 
-            response_body = json.loads(response['body'].read())
-            all_embeddings.extend(response_body['embeddings'])
-
+        # Flatten ordered batch results
+        all_embeddings = []
+        for batch_result in results:
+            all_embeddings.extend(batch_result)
         return all_embeddings
+
+    def _invoke_cohere_batch(self, texts: List[str], input_type: str) -> List[List[float]]:
+        """Invoke Cohere embedding API for a single batch (up to 96 texts)"""
+        body = {
+            "texts": texts,
+            "input_type": input_type,
+            "truncate": "END"
+        }
+
+        response = self.client.invoke_model(
+            modelId=self.model_id,
+            body=json.dumps(body),
+            contentType='application/json',
+            accept='application/json'
+        )
+
+        response_body = json.loads(response['body'].read())
+        return response_body['embeddings']
 
     def get_dimensions(self) -> int:
         """Get the dimension size of embeddings"""
