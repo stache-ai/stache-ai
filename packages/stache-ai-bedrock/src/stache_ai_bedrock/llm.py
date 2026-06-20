@@ -12,6 +12,9 @@ import boto3
 from botocore.exceptions import ClientError
 
 from stache_ai.providers.base import LLMProvider, ModelInfo
+from stache_ai.providers.tool_types import (
+    ToolSpec, ToolCall, ToolUseResult, Message, ToolResponse
+)
 from stache_ai.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -403,3 +406,166 @@ Answer:"""
             else:
                 logger.error(f"Bedrock error ({error_code}): {e}")
                 raise RuntimeError(f"Bedrock API error: {error_msg}") from e
+
+    def generate_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec],
+        system_prompt: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        **kwargs
+    ) -> ToolUseResult:
+        """Generate with native Bedrock Converse API tool use."""
+        if not messages:
+            raise ValueError("messages list cannot be empty")
+
+        if not tools:
+            raise ValueError("tools list cannot be empty for tool use")
+
+        model_id = kwargs.get("model_id", self.model_id)
+
+        # Convert messages to Bedrock format
+        bedrock_messages = self._convert_messages(messages)
+
+        # Convert tools to Bedrock format
+        tool_config = {
+            "tools": [self._convert_tool_to_bedrock(tool) for tool in tools]
+        }
+
+        # Build request
+        request = {
+            "modelId": model_id,
+            "messages": bedrock_messages,
+            "toolConfig": tool_config,
+            "inferenceConfig": {
+                "maxTokens": max_tokens,
+                "temperature": temperature
+            }
+        }
+
+        if system_prompt:
+            request["system"] = [{"text": system_prompt}]
+
+        try:
+            response = self.client.converse(**request)
+            return self._parse_tool_response(response)
+
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_msg = e.response['Error'].get('Message', str(e))
+
+            if error_code == 'AccessDeniedException':
+                raise RuntimeError(
+                    f"Access denied to Bedrock model '{model_id}'. "
+                    "Ensure model is enabled and IAM permissions configured."
+                ) from e
+            elif error_code == 'ThrottlingException':
+                raise RuntimeError(
+                    f"Bedrock request throttled. Implement backoff."
+                ) from e
+            elif error_code == 'ValidationException':
+                raise ValueError(
+                    f"Invalid request to Bedrock: {error_msg}"
+                ) from e
+            else:
+                logger.error(f"Bedrock error ({error_code}): {e}")
+                raise RuntimeError(f"Bedrock API error: {error_msg}") from e
+
+    def _convert_tool_to_bedrock(self, tool: ToolSpec) -> dict:
+        """Convert ToolSpec to Bedrock Converse API format."""
+        return {
+            "toolSpec": {
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": {"json": tool.input_schema}
+            }
+        }
+
+    def _convert_messages(self, messages: list[Message]) -> list[dict]:
+        """Convert Message objects to Bedrock Converse format."""
+        bedrock_messages = []
+
+        for msg in messages:
+            content = []
+
+            # Add text content
+            if msg.content:
+                content.append({"text": msg.content})
+
+            # Add tool use blocks (assistant messages)
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    content.append({
+                        "toolUse": {
+                            "toolUseId": tc.id,
+                            "name": tc.name,
+                            "input": tc.input
+                        }
+                    })
+
+            # Add tool results (user messages)
+            if msg.tool_responses:
+                for tr in msg.tool_responses:
+                    content.append({
+                        "toolResult": {
+                            "toolUseId": tr.id,
+                            "content": [{"text": tr.content}],
+                            "status": "error" if tr.is_error else "success"
+                        }
+                    })
+
+            if not content:
+                raise ValueError(
+                    f"Message with role '{msg.role}' has no content. "
+                    "Each message must have content, tool_calls, or tool_responses."
+                )
+
+            bedrock_messages.append({
+                "role": msg.role,
+                "content": content
+            })
+
+        return bedrock_messages
+
+    def _parse_tool_response(self, response: dict) -> ToolUseResult:
+        """Parse Bedrock Converse response into ToolUseResult."""
+        output = response.get("output", {}).get("message", {})
+        bedrock_stop_reason = response.get("stopReason", "end_turn")
+
+        logger.debug(f"Bedrock response stopReason: {bedrock_stop_reason}")
+
+        text_parts = []
+        tool_calls = []
+
+        for block in output.get("content", []):
+            if "text" in block:
+                text_parts.append(block["text"])
+            elif "toolUse" in block:
+                tu = block["toolUse"]
+                tool_calls.append(ToolCall(
+                    id=tu["toolUseId"],
+                    name=tu["name"],
+                    input=tu.get("input", {})
+                ))
+
+        # Map Bedrock stopReason to normalized values
+        stop_reason_map = {
+            "end_turn": "end_turn",
+            "tool_use": "tool_use",
+            "max_tokens": "max_tokens",
+            "stop_sequence": "end_turn",
+            "guardrail_intervened": "end_turn",
+            "content_filtered": "end_turn",
+            "malformed_model_output": "end_turn",
+            "malformed_tool_use": "end_turn",
+            "model_context_window_exceeded": "max_tokens",
+        }
+
+        normalized_reason = stop_reason_map.get(bedrock_stop_reason, "end_turn")
+
+        return ToolUseResult(
+            stop_reason=normalized_reason,
+            text="".join(text_parts) if text_parts else None,
+            tool_calls=tool_calls
+        )

@@ -29,6 +29,13 @@ from .factories import (
     S3VectorsProviderFactory,
     VectorDBProviderFactory,
 )
+from .tool_types import (
+    Message,
+    ToolCall,
+    ToolResponse,
+    ToolSpec,
+    ToolUseResult,
+)
 
 # Pre-loading providers removed to avoid circular imports
 # Providers are loaded lazily on first access via get_providers()
@@ -51,6 +58,12 @@ __all__ = [
     'NamespaceProviderFactory',
     'RerankerProviderFactory',
     'DocumentIndexProviderFactory',
+    # Tool types
+    'Message',
+    'ToolCall',
+    'ToolResponse',
+    'ToolSpec',
+    'ToolUseResult',
     # Plugin loader (for advanced usage)
     'plugin_loader',
 ]

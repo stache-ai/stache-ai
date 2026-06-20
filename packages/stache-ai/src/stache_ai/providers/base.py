@@ -4,6 +4,8 @@ import builtins
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
+from stache_ai.providers.tool_types import ToolSpec, ToolCall, ToolUseResult, Message
+
 
 class EmbeddingProvider(ABC):
     """Abstract base class for embedding providers"""
@@ -230,6 +232,41 @@ class LLMProvider(ABC):
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support structured output. "
             "Override generate_structured() in subclass."
+        )
+
+    def generate_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[ToolSpec],
+        system_prompt: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        **kwargs
+    ) -> ToolUseResult:
+        """Generate response with tool use capability (synchronous).
+
+        Call via asyncio.to_thread() from async code.
+
+        Args:
+            messages: Conversation history
+            tools: Available tools the LLM can call
+            system_prompt: Optional system instructions
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            **kwargs: Provider-specific parameters
+
+        Returns:
+            ToolUseResult with either:
+            - stop_reason="end_turn", text=response (task complete)
+            - stop_reason="tool_use", tool_calls=[...] (tools to execute)
+
+        Raises:
+            NotImplementedError: If provider doesn't support tool use
+            RuntimeError: On API errors
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support tool use. "
+            "Override generate_with_tools() in subclass."
         )
 
     @property
