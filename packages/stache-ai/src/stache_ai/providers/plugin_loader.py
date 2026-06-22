@@ -78,6 +78,11 @@ PROVIDER_GROUPS = {
     'postingest_processor': 'stache.postingest_processor',
     'ingest_guard': 'stache.ingest_guard',  # NEW
     'error_processor': 'stache.error_processor',  # NEW
+    'ingest_queue': 'stache.ingest_queue',
+    'ingest_jobstore': 'stache.ingest_jobstore',
+    'ingest_blob': 'stache.ingest_blob',
+    'ingest_intake': 'stache.ingest_intake',
+    'ingest_notifier': 'stache.ingest_notifier',
     'loader': 'stache.loader',
     'chunking': 'stache.chunking',
 }

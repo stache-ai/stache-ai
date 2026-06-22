@@ -1,6 +1,6 @@
 """Tests for API routes"""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 def mock_pipeline():
     """Create a mock pipeline for API tests"""
     pipeline = MagicMock()
-    pipeline.query.return_value = {
+    # query is awaited by the route -> AsyncMock.
+    pipeline.query = AsyncMock(return_value={
         "question": "Test question",
         "answer": "Test answer",
         "sources": [
@@ -21,14 +22,20 @@ def mock_pipeline():
             }
         ],
         "namespace": None
-    }
-    pipeline.ingest_text.return_value = {
+    })
+    # ingest_text/ingest_file are awaited by the ingestion worker -> AsyncMock.
+    pipeline.ingest_text = AsyncMock(return_value={
         "success": True,
         "chunks_created": 3,
         "ids": ["id1", "id2", "id3"],
         "doc_id": "doc-123",
+        "action": "ingested_new",
         "namespace": None
-    }
+    })
+    pipeline.ingest_file = AsyncMock(return_value={
+        "chunks_created": 3,
+        "doc_id": "doc-123",
+    })
     pipeline.get_providers_info.return_value = {
         "embedding": "MockEmbeddingProvider",
         "llm": "MockLLMProvider",
@@ -40,12 +47,18 @@ def mock_pipeline():
 @pytest.fixture
 def test_client(mock_pipeline):
     """Create test client with mocked pipeline"""
-    with patch('stache_ai.api.routes.query.get_pipeline', return_value=mock_pipeline):
-        with patch('stache_ai.api.routes.capture.get_pipeline', return_value=mock_pipeline):
-            with patch('stache_ai.api.routes.health.get_pipeline', return_value=mock_pipeline):
-                from stache_ai.api.main import app
-                client = TestClient(app)
-                yield client
+    # Capture/ingest routes go through the IngestionService (sync tier), which
+    # wraps the same mock pipeline.
+    from stache_ai.config import Settings
+    from stache_ai.ingestion.factory import IngestionServiceFactory
+    service = IngestionServiceFactory.build(Settings(), mock_pipeline)
+    with patch('stache_ai.api.routes.query.get_pipeline', return_value=mock_pipeline), \
+         patch('stache_ai.api.routes.capture.get_ingestion_service', return_value=service), \
+         patch('stache_ai.api.routes.ingest.get_ingestion_service', return_value=service), \
+         patch('stache_ai.api.routes.health.get_pipeline', return_value=mock_pipeline):
+        from stache_ai.api.main import app
+        client = TestClient(app)
+        yield client
 
 
 class TestQueryEndpoint:

@@ -14,6 +14,7 @@ from stache_ai.api.routes import (
     capture,
     documents,
     health,
+    ingest,
     insights,
     models,
     namespaces,
@@ -53,6 +54,7 @@ app.add_middleware(
 app.include_router(health.router, tags=["health"])  # /health for local dev
 app.include_router(health.router, prefix="/api", tags=["health"])  # /api/health for Lambda
 app.include_router(capture.router, prefix="/api", tags=["capture"])
+app.include_router(ingest.router, prefix="/api", tags=["ingest"])
 app.include_router(query.router, prefix="/api", tags=["query"])
 app.include_router(upload.router, prefix="/api", tags=["upload"])
 app.include_router(documents.router, prefix="/api", tags=["documents"])

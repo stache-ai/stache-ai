@@ -1,11 +1,19 @@
-"""Capture endpoint for quick note-taking"""
+"""Capture endpoint for quick note-taking.
+
+Thin shim over the unified IngestionService so /api/capture and /api/ingest
+share one ingestion code path (down-payment on collapsing the sync paths).
+The legacy response shape is preserved for the existing frontend.
+"""
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from stache_ai.rag.pipeline import get_pipeline
+from stache_ai.api import auth
+from stache_ai.config import settings
+from stache_ai.ingestion import JobStatus
+from stache_ai.ingestion.factory import get_ingestion_service
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +38,7 @@ class CaptureRequest(BaseModel):
 
 
 @router.post("/capture")
-async def capture_thought(request: CaptureRequest):
+async def capture_thought(request: CaptureRequest, http_request: Request):
     """
     Capture a quick thought or note
 
@@ -42,28 +50,49 @@ async def capture_thought(request: CaptureRequest):
     - Optional AI-powered organization suggestions
     """
     try:
-        pipeline = get_pipeline()
-
-        # Prepare metadata with organization flags if requested
-        metadata = request.metadata or {}
+        # Carry organization flags + prepend list as metadata for the pipeline.
+        metadata = dict(request.metadata or {})
         if request.suggest_organization:
             metadata["_suggest_organization"] = True
         if request.apply_suggestions:
             metadata["_apply_suggestions"] = True
+        if request.prepend_metadata:
+            metadata["_prepend_metadata"] = request.prepend_metadata
 
-        result = await pipeline.ingest_text(
-            text=request.text,
+        principal = auth.principal(http_request)
+        namespace = request.namespace or settings.default_namespace
+        auth.assert_can_write(principal, namespace)
+
+        service = get_ingestion_service()
+        job = await service.submit(
+            namespace=namespace,
+            content_type="text",
+            requested_by=principal,
+            source="web",
             metadata=metadata,
+            text=request.text,
             chunking_strategy=request.chunking_strategy,
-            namespace=request.namespace,
-            prepend_metadata=request.prepend_metadata
+            wait=True,
+            wait_timeout=settings.ingest_wait_default_timeout,
         )
 
+        if job.status == JobStatus.FAILED:
+            logger.error(f"Capture failed: {job.error_detail}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+        action = "skipped" if job.status == JobStatus.SKIPPED else "ingested_new"
         return {
             "success": True,
             "message": "Thought captured successfully",
-            **result
+            "doc_id": job.doc_id,
+            "chunks_created": job.chunks_created,
+            "namespace": job.namespace,
+            "action": action,
+            "job_id": job.job_id,
+            "status": job.status.value,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Capture failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
