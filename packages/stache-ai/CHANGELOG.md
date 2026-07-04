@@ -5,6 +5,28 @@ All notable changes to stache-ai will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-04
+
+### Added
+
+- **Caller identity seam**: New `Principal` dataclass (`user_id` + opaque `claims`) in `stache_ai.identity`, returned by `api.auth.principal()`. Core attaches no meaning to claims — deployment-specific extensions read them.
+- **Pluggable principal extraction**: `stache.principal_extractor` entry point group plus `PRINCIPAL_EXTRACTOR` config. Default `ApiGatewayClaimsExtractor` preserves the existing single-user posture. Identity middleware wires the extractor into every request; `AuthenticationError` maps to a 401. A configured-but-unloadable extractor aborts startup instead of silently degrading to anonymous.
+- **Pluggable authorization**: `stache.authorizer` entry point group plus `AUTHORIZATION_PROVIDER` config, `AuthorizationProvider` ABC, and the default `AllowAllAuthorizer` (no enforcement, matching current behavior). `ForbiddenError` maps to a 403. Every API route now calls through the authorization seam with a neutral operation string (e.g. `ingest`, `read_pending`). A configured-but-unloadable authorizer aborts startup rather than falling back to allow-all.
+- **`context=` on provider data methods**: `VectorDBProvider`, `DocumentIndexProvider`, `NamespaceProvider`, and `RerankerProvider` methods all gained a keyword-only `context: RequestContext | None = None` parameter, threaded from routes and the pipeline through to every provider call. First-party providers accept and ignore it unless they have a reason to act on it.
+- **`scan_by_metadata`**: New capability-gated `VectorDBProvider` method (advertise via the `"metadata_scan"` capability) for full-collection metadata scans, replacing routes that previously reached into a provider's raw client directly.
+- **`principal=` on ingestion seams**: `JobStore.create`/`JobStore.list` and `IntakeProvider.begin` accept an optional `principal` kwarg. `BlobStore.make_key(job_id, filename, *, principal=None)` is now overridable so deployment-specific stores can vary key layout by caller.
+- **Producer-drop gate**: `INGEST_PRODUCER_DROPS_ENABLED` config flag controls whether raw drops into the originals bucket (no pre-created job) are accepted.
+
+### Changed
+
+- **Fail-closed plugin/provider loading**: a configured route plugin, principal extractor, or authorization/provider entry point that is installed but fails to load now aborts startup with a `RuntimeError` instead of logging a warning and continuing without it. Entry points backed by an optional dependency that simply isn't installed still skip normally.
+- **Metadata sanitization**: caller-supplied `_`-prefixed metadata keys and `content_hash` are now stripped at API boundaries before routes/guards write their own internal-control values, closing a path where a caller could forge dedup/error-recovery state.
+- **Pipeline ops layer**: document, trash, and namespace routes now go through the pipeline instead of calling providers directly, and delete is unified behind one code path.
+
+### Removed
+
+- The unused `tenant_id` placeholder fields on `RequestContext` and `QueryContext` have been removed — they were dormant and read by nothing in core. Deployment-specific scoping belongs in `RequestContext.custom`.
+
 ## [0.1.9] - 2026-01-26
 
 ### Changed
