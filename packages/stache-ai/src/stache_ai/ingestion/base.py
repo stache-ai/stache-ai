@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Optional
 
+from stache_ai.identity import Principal
+
 
 class JobStatus(str, Enum):
     QUEUED = "queued"
@@ -82,6 +84,15 @@ class JobEvent:
 
 
 class BlobStore(ABC):
+    def make_key(self, job_id: str, filename: str, *,
+                 principal: Optional[Principal] = None) -> str:
+        """Compose the storage key for a job's original blob.
+
+        Overridable seam: deployment-specific stores may prefix keys (e.g. for
+        per-prefix IAM policies or retention rules) using the opaque principal.
+        """
+        return f"{job_id}/{filename}"
+
     @abstractmethod
     def put(self, key: str, data: bytes, metadata: dict) -> str: ...
 
@@ -98,7 +109,10 @@ class BlobStore(ABC):
 
 class JobStore(ABC):
     @abstractmethod
-    def create(self, job: Job) -> None: ...
+    def create(self, job: Job, *, principal: Optional[Principal] = None) -> None:
+        """Persist a new job. ``principal`` is the opaque caller identity; the
+        OSS stores ignore it, deployment-specific stores may scope storage
+        keys/attributes from it."""
 
     @abstractmethod
     def update(self, job_id: str, **fields) -> Job: ...
@@ -109,7 +123,8 @@ class JobStore(ABC):
     @abstractmethod
     def list(self, *, requested_by: Optional[str] = None,
              status: Optional[JobStatus] = None, limit: int = 50,
-             cursor: Optional[str] = None) -> tuple[list[Job], Optional[str]]: ...
+             cursor: Optional[str] = None,
+             principal: Optional[Principal] = None) -> tuple[list[Job], Optional[str]]: ...
 
     def claim(self, job_id: str, *, from_statuses: "set[JobStatus]",
               to_status: "JobStatus" = None) -> bool:
@@ -153,4 +168,5 @@ class IntakeProvider(ABC):
     @abstractmethod
     def begin(self, *, job_id: str, filename: str, namespace: str,
               content_type: str, size: int, requested_by: str,
-              metadata: dict) -> IntakeTicket: ...
+              metadata: dict,
+              principal: Optional[Principal] = None) -> IntakeTicket: ...

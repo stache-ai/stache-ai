@@ -20,6 +20,8 @@ from typing import Optional
 
 from ..config import settings as global_settings
 from ..providers import plugin_loader
+from stache_ai.identity import Principal
+
 from .base import TERMINAL, IntakeTicket, Job, JobStatus
 from .providers.inline import (
     EphemeralJobStore,
@@ -101,7 +103,7 @@ class IngestionService:
         *,
         namespace: str,
         content_type: str,
-        requested_by: str,
+        requested_by: "Principal | str",
         filename: Optional[str] = None,
         source: str = "api",
         metadata: Optional[dict] = None,
@@ -115,6 +117,7 @@ class IngestionService:
         if text is None and data is None:
             raise ValueError("submit requires either text or data")
 
+        principal = Principal.of(requested_by)
         job_id = str(uuid.uuid4())
         md = dict(metadata or {})
         size = 0
@@ -126,8 +129,9 @@ class IngestionService:
             namespace=namespace,
             content_type=content_type,
             size=len(data) if data is not None else len(text or ""),
-            requested_by=requested_by,
+            requested_by=principal.user_id,
             metadata=md,
+            principal=principal,
         )
 
         if text is not None:
@@ -135,7 +139,8 @@ class IngestionService:
             md["_chunking"] = chunking_strategy
             size = len(text.encode("utf-8"))
         else:
-            blob_key = f"{job_id}/{filename or 'upload.bin'}"
+            blob_key = self.blobstore.make_key(
+                job_id, filename or "upload.bin", principal=principal)
             size = len(data)
 
         now = self._now()
@@ -146,7 +151,7 @@ class IngestionService:
             source=source,
             filename=filename or "text",
             content_type=content_type,
-            requested_by=requested_by,
+            requested_by=principal.user_id,
             size_bytes=size,
             blob_key=blob_key,
             metadata=md,
@@ -159,7 +164,7 @@ class IngestionService:
         # skips it, instead of racing the write and spawning a duplicate
         # "producer" job for the same object. The direct enqueue below is the
         # authoritative trigger for this path.
-        self.jobstore.create(job)
+        self.jobstore.create(job, principal=principal)
         if data is not None:
             self.blobstore.put(blob_key, data, {"filename": filename, "namespace": namespace})
         await self.queue.enqueue(job_id)   # inline tier: awaits the worker now
@@ -188,7 +193,7 @@ class IngestionService:
         *,
         namespace: str,
         content_type: str,
-        requested_by: str,
+        requested_by: "Principal | str",
         filename: str,
         source: str = "api",
         metadata: Optional[dict] = None,
@@ -199,6 +204,7 @@ class IngestionService:
         worker recovers ``job_id`` from the S3 key, so ``blob_key`` MUST match
         the intake key convention ``f"{job_id}/{basename}"``.
         """
+        principal = Principal.of(requested_by)
         job_id = str(uuid.uuid4())
         md = dict(metadata or {})
         ticket = self.intake.begin(
@@ -207,8 +213,9 @@ class IngestionService:
             namespace=namespace,
             content_type=content_type,
             size=0,
-            requested_by=requested_by,
+            requested_by=principal.user_id,
             metadata=md,
+            principal=principal,
         )
         if not ticket.upload_url:
             raise ValueError("intake provider does not support presigned upload")
@@ -223,13 +230,13 @@ class IngestionService:
             source=source,
             filename=filename,
             content_type=content_type,
-            requested_by=requested_by,
+            requested_by=principal.user_id,
             blob_key=f"{job_id}/{safe_name}",
             metadata=md,
             created_at=now,
             updated_at=now,
         )
-        self.jobstore.create(job)
+        self.jobstore.create(job, principal=principal)
         return job, ticket
 
     def get_job(self, job_id: str) -> Optional[Job]:
@@ -242,9 +249,11 @@ class IngestionService:
         status: Optional[JobStatus] = None,
         limit: int = 50,
         cursor: Optional[str] = None,
+        principal: Optional[Principal] = None,
     ) -> tuple[list[Job], Optional[str]]:
         return self.jobstore.list(
-            requested_by=requested_by, status=status, limit=limit, cursor=cursor
+            requested_by=requested_by, status=status, limit=limit, cursor=cursor,
+            principal=principal,
         )
 
 

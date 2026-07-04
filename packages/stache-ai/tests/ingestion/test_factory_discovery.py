@@ -29,7 +29,7 @@ class DummyJobStore(JobStore):
         self.config = config
         self._jobs = {}
 
-    def create(self, job):
+    def create(self, job, *, principal=None):
         self._jobs[job.job_id] = job
 
     def update(self, job_id, **fields):
@@ -41,7 +41,7 @@ class DummyJobStore(JobStore):
     def get(self, job_id):
         return self._jobs.get(job_id)
 
-    def list(self, *, requested_by=None, status=None, limit=50, cursor=None):
+    def list(self, *, requested_by=None, status=None, limit=50, cursor=None, principal=None):
         return list(self._jobs.values())[:limit], None
 
 

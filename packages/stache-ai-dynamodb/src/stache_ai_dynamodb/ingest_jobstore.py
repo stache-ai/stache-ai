@@ -60,7 +60,7 @@ class DynamoJobStore(JobStore):
         self._ddb = boto3.resource("dynamodb", region_name=config.aws_region)
         self._table = self._ddb.Table(self._table_name)
 
-    def create(self, job: Job) -> None:
+    def create(self, job: Job, *, principal=None) -> None:
         # Strip None / empty-string values: DynamoDB rejects empty strings and
         # there is no reason to persist absent optional fields.
         item = _todecimal(
@@ -120,7 +120,8 @@ class DynamoJobStore(JobStore):
         # Stored item carries extra GSI* keys; Job.from_dict ignores unknowns.
         return Job.from_dict(_undecimal(item)) if item else None
 
-    def list(self, *, requested_by=None, status=None, limit=50, cursor=None):
+    def list(self, *, requested_by=None, status=None, limit=50, cursor=None,
+             principal=None):
         kwargs = {"Limit": limit, "ScanIndexForward": False}
         if cursor:
             kwargs["ExclusiveStartKey"] = json.loads(base64.b64decode(cursor))

@@ -74,7 +74,7 @@ class EphemeralJobStore(JobStore):
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
 
-    def create(self, job):
+    def create(self, job, *, principal=None):
         with self._lock:
             self._jobs[job.job_id] = job
 
@@ -89,7 +89,8 @@ class EphemeralJobStore(JobStore):
         with self._lock:
             return self._jobs.get(job_id)
 
-    def list(self, *, requested_by=None, status=None, limit=50, cursor=None):
+    def list(self, *, requested_by=None, status=None, limit=50, cursor=None,
+             principal=None):
         with self._lock:
             jobs = [
                 j for j in self._jobs.values()
@@ -142,7 +143,7 @@ class SqliteJobStore(JobStore):
     def _row_to_job(row: sqlite3.Row) -> Job:
         return Job.from_dict(json.loads(row["payload"]))
 
-    def create(self, job):
+    def create(self, job, *, principal=None):
         with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO jobs (job_id, status, requested_by, created_at, updated_at, payload) "
@@ -186,7 +187,8 @@ class SqliteJobStore(JobStore):
             row = cur.fetchone()
         return self._row_to_job(row) if row else None
 
-    def list(self, *, requested_by=None, status=None, limit=50, cursor=None):
+    def list(self, *, requested_by=None, status=None, limit=50, cursor=None,
+             principal=None):
         clauses, params = [], []
         if requested_by is not None:
             clauses.append("requested_by = ?")

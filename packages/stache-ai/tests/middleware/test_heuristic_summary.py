@@ -26,7 +26,6 @@ class TestHeuristicSummaryGenerator:
             timestamp=datetime.now(timezone.utc),
             namespace="test-namespace",
             user_id="test-user",
-            tenant_id="test-tenant"
         )
         context.custom = {
             "config": mock_config,

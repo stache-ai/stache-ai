@@ -776,7 +776,6 @@ class TestContextAndConfiguration:
             timestamp=datetime.now(timezone.utc),
             namespace="test-ns",
             user_id="user-456",
-            tenant_id="tenant-789",
             roles=["admin", "editor"],
             source="api"
         )
@@ -797,7 +796,6 @@ class TestContextAndConfiguration:
         assert query_context.request_id == "req-123"
         assert query_context.namespace == "test-ns"
         assert query_context.user_id == "user-456"
-        assert query_context.tenant_id == "tenant-789"
         assert query_context.roles == ["admin", "editor"]
         assert query_context.source == "api"
 

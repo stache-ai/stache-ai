@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal, Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
 if TYPE_CHECKING:
@@ -27,13 +27,12 @@ class RequestContext:
     timestamp: datetime
     namespace: str
 
-    # Identity
+    # Identity (OSS populates user_id only; extensions read Principal.claims)
     user_id: str | None = None
-    tenant_id: str | None = None
     roles: list[str] = field(default_factory=list)
 
     # Request metadata
-    source: Literal["api", "mcp", "cli"] = "api"
+    source: str = "api"   # api | mcp | cli | worker | ...
     trace_id: str | None = None
     ip_address: str | None = None
 
@@ -48,7 +47,6 @@ class RequestContext:
             timestamp=datetime.now(timezone.utc),
             namespace=namespace,
             user_id=getattr(request.state, "user_id", None),
-            tenant_id=getattr(request.state, "tenant_id", None),
             roles=getattr(request.state, "roles", []),
             source="api",
             trace_id=request.headers.get("x-trace-id"),
@@ -81,10 +79,6 @@ class QueryContext:
         return self.context.user_id
 
     @property
-    def tenant_id(self) -> str | None:
-        return self.context.tenant_id
-
-    @property
     def roles(self) -> list[str]:
         return self.context.roles
 
@@ -93,7 +87,7 @@ class QueryContext:
         return self.context.timestamp
 
     @property
-    def source(self) -> Literal["api", "mcp", "cli"]:
+    def source(self) -> str:
         return self.context.source
 
     @property

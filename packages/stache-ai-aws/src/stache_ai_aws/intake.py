@@ -14,7 +14,7 @@ class S3PresignIntake(IntakeProvider):
 
     def begin(self, *, job_id: str, filename: str, namespace: str,
               content_type: str, size: int, requested_by: str,
-              metadata: dict) -> IntakeTicket:
+              metadata: dict, principal=None) -> IntakeTicket:
         key = f"{job_id}/{filename}"
         # Pin metadata + content type into the presign signature so the client
         # cannot alter them on upload.

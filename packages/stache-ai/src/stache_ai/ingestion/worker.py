@@ -13,6 +13,9 @@ import tempfile
 import traceback
 from datetime import datetime, timezone
 
+from stache_ai.identity import Principal, assert_can_write
+from stache_ai.middleware.context import RequestContext
+
 from .base import JobEvent, JobStatus
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,20 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
             return
         notifier.publish(JobEvent(job_id, JobStatus.PROCESSING, job.requested_by, job.namespace))
         try:
+            # Defense-in-depth re-check (S1): the worker consumes from a queue
+            # anything can write to; do not trust that intake already checked.
+            assert_can_write(Principal(user_id=job.requested_by), job.namespace)
+            # Identity + job travel with the pipeline call so middleware and
+            # providers see who this work belongs to (context.custom is the
+            # opaque extension surface; the core attaches no meaning to it).
+            context = RequestContext(
+                request_id=job.job_id,
+                timestamp=datetime.now(timezone.utc),
+                namespace=job.namespace,
+                user_id=job.requested_by,
+                source="worker",
+                custom={"ingest_job": job},
+            )
             # Strip transport-only keys before they reach enrichers / vector store.
             md = {k: v for k, v in job.metadata.items() if k not in _TRANSPORT_KEYS}
             prepend = job.metadata.get("_prepend_metadata")
@@ -52,6 +69,7 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                     metadata=md,
                     chunking_strategy=job.metadata.get("_chunking", "recursive"),
                     prepend_metadata=prepend,
+                    context=context,
                 )
             else:
                 data, _ = blobstore.get(job.blob_key)            # bytes from BlobStore
@@ -70,6 +88,7 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                         # only fall back to file-type auto-selection when unset.
                         chunking_strategy=job.metadata.get("_chunking", "auto"),
                         prepend_metadata=prepend,
+                        context=context,
                     )
 
             # Result keys: `doc_id` and (for text) `action` ("skipped" == dedup hit).

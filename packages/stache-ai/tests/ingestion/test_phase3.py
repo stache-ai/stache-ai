@@ -53,7 +53,7 @@ class _DictJobStore:
     def __init__(self):
         self.jobs = {}
 
-    def create(self, job):
+    def create(self, job, *, principal=None):
         self.jobs[job.job_id] = job
 
     def update(self, job_id, **fields):
@@ -72,7 +72,7 @@ class _DictJobStore:
         job.status = to_status or JobStatus.PROCESSING
         return True
 
-    def list(self, *, requested_by=None, status=None, limit=50, cursor=None):
+    def list(self, *, requested_by=None, status=None, limit=50, cursor=None, principal=None):
         items = list(self.jobs.values())
         return items, None
 
