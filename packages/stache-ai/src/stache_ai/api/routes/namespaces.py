@@ -256,8 +256,8 @@ async def get_namespace(
 
         # Enrich with stats and path info
         result = enrich_namespace_with_stats(namespace, context=context)
-        result["path"] = provider.get_path(namespace_id)
-        result["ancestors"] = provider.get_ancestors(namespace_id)
+        result["path"] = provider.get_path(namespace_id, context=context)
+        result["ancestors"] = provider.get_ancestors(namespace_id, context=context)
 
         return result
     except HTTPException:

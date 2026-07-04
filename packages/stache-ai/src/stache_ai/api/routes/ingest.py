@@ -114,9 +114,10 @@ async def get_job(job_id: str, http_request: Request):
     principal = auth.principal(http_request)
     auth.authorize(http_request, "read_job")
     service = get_ingestion_service()
-    job = service.get_job(job_id)
-    # Scope to the requester; 404 (not 403) on mismatch so we don't leak existence.
-    if job is None or job.requested_by != principal.user_id:
+    # Visibility is the jobstore's call (default: the requester themselves);
+    # an invisible job 404s identically to a missing one - no existence leak.
+    job = service.get_job(job_id, principal=principal)
+    if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job.to_dict()
 

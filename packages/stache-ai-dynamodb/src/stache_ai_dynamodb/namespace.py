@@ -317,28 +317,5 @@ class DynamoDBNamespaceProvider(NamespaceProvider):
         except ClientError:
             return False
 
-    def get_ancestors(self, id: str) -> List[Dict[str, Any]]:
-        """Get all ancestor namespaces (parent, grandparent, etc.)"""
-        ancestors = []
-        current = self.get(id)
-
-        while current and current['parent_id']:
-            parent = self.get(current['parent_id'])
-            if parent:
-                ancestors.append(parent)
-                current = parent
-            else:
-                break
-
-        return list(reversed(ancestors))  # Root first
-
-    def get_path(self, id: str) -> str:
-        """Get the full path of a namespace (e.g., 'MBA > Finance > Corporate Finance')"""
-        ancestors = self.get_ancestors(id)
-        current = self.get(id)
-
-        if not current:
-            return ""
-
-        names = [a['name'] for a in ancestors] + [current['name']]
-        return " > ".join(names)
+    # get_ancestors / get_path come from the NamespaceProvider base class
+    # (context-aware parent walk over ``get``).

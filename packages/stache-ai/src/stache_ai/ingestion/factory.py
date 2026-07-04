@@ -239,8 +239,15 @@ class IngestionService:
         self.jobstore.create(job, principal=principal)
         return job, ticket
 
-    def get_job(self, job_id: str) -> Optional[Job]:
-        return self.jobstore.get(job_id)
+    def get_job(self, job_id: str, *,
+                principal: Optional[Principal] = None) -> Optional[Job]:
+        """Fetch a job. When ``principal`` is given, an invisible job is
+        indistinguishable from a missing one (no existence leak)."""
+        job = self.jobstore.get(job_id)
+        if principal is not None and job is not None \
+                and not self.jobstore.visible_to(job, principal):
+            return None
+        return job
 
     def list_jobs(
         self,

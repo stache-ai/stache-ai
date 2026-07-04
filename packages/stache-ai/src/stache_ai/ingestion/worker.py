@@ -13,7 +13,7 @@ import tempfile
 import traceback
 from datetime import datetime, timezone
 
-from stache_ai.identity import Principal, assert_can_write
+from stache_ai.identity import assert_can_write
 from stache_ai.middleware.context import RequestContext
 
 from .base import JobEvent, JobStatus
@@ -47,7 +47,11 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
         try:
             # Defense-in-depth re-check (S1): the worker consumes from a queue
             # anything can write to; do not trust that intake already checked.
-            assert_can_write(Principal(user_id=job.requested_by), job.namespace)
+            # The jobstore reconstructs the acting principal (deployment stores
+            # may rehydrate claims they stamped at create time) so a plugged
+            # authorizer sees the same identity the original caller carried.
+            principal = jobstore.principal_for(job)
+            assert_can_write(principal, job.namespace)
             # Identity + job travel with the pipeline call so middleware and
             # providers see who this work belongs to (context.custom is the
             # opaque extension surface; the core attaches no meaning to it).
@@ -57,7 +61,7 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                 namespace=job.namespace,
                 user_id=job.requested_by,
                 source="worker",
-                custom={"ingest_job": job},
+                custom={"ingest_job": job, "principal": principal},
             )
             # Strip transport-only keys before they reach enrichers / vector store.
             md = {k: v for k, v in job.metadata.items() if k not in _TRANSPORT_KEYS}

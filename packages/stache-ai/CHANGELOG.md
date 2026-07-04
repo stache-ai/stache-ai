@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`scan_by_metadata`**: New capability-gated `VectorDBProvider` method (advertise via the `"metadata_scan"` capability) for full-collection metadata scans, replacing routes that previously reached into a provider's raw client directly.
 - **`principal=` on ingestion seams**: `JobStore.create`/`JobStore.list` and `IntakeProvider.begin` accept an optional `principal` kwarg. `BlobStore.make_key(job_id, filename, *, principal=None)` is now overridable so deployment-specific stores can vary key layout by caller.
 - **Producer-drop gate**: `INGEST_PRODUCER_DROPS_ENABLED` config flag controls whether raw drops into the originals bucket (no pre-created job) are accepted.
+- **Job visibility + queued-work identity seams**: `JobStore.visible_to(job, principal)` scopes the single-job fetch (`GET /api/jobs/{id}` treats an invisible job exactly like a missing one — 404, no existence leak) and `JobStore.principal_for(job)` reconstructs the acting principal for the worker's authorization re-check. Defaults preserve current behavior (requester-only visibility, id-only principal); deployment-specific stores may override both from attributes they stamp at `create` time. The worker also places the reconstructed principal on `context.custom["principal"]`.
+- **`get_ancestors`/`get_path` on `NamespaceProvider`**: promoted to context-aware base-class methods (default parent walk over `get`); the four first-party implementations now share the base implementation. `pipeline.update_document`, the insight operations, and summary generation also gained/forward `context=`.
 
 ### Changed
 

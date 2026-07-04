@@ -1213,7 +1213,8 @@ class RAGPipeline:
         self,
         doc_id: str,
         namespace: str,
-        updates: dict[str, Any]
+        updates: dict[str, Any],
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """Update document metadata in both DynamoDB and S3 Vectors
 
@@ -1242,7 +1243,7 @@ class RAGPipeline:
             raise ValueError("Document index required for metadata updates")
 
         # 1. Get chunk IDs from document index
-        chunk_ids = self.document_index_provider.get_chunk_ids(doc_id, namespace)
+        chunk_ids = self.document_index_provider.get_chunk_ids(doc_id, namespace, context=context)
         if not chunk_ids:
             raise ValueError(f"Document {doc_id} not found in namespace {namespace}")
 
@@ -1259,7 +1260,8 @@ class RAGPipeline:
             # This handles retry scenarios where vectors may already be in the new namespace
             vectors_data = self.documents_provider.get_vectors_with_embeddings(
                 chunk_ids,
-                namespace=None  # Don't filter - IDs are unique
+                namespace=None,  # Don't filter - IDs are unique
+                context=context
             )
 
             # Prepare metadata updates, filtering out summary chunks
@@ -1332,7 +1334,8 @@ class RAGPipeline:
                         vectors=batch_vectors,
                         texts=texts,
                         metadatas=cleaned_metadatas,
-                        namespace=new_namespace  # Namespace in metadata updated
+                        namespace=new_namespace,  # Namespace in metadata updated
+                        context=context
                     )
 
                 chunks_updated = len(updated_ids)
@@ -1350,7 +1353,7 @@ class RAGPipeline:
         doc_updated = False
         try:
             doc_updated = self.document_index_provider.update_document_metadata(
-                doc_id, namespace, updates
+                doc_id, namespace, updates, context=context
             )
         except Exception as e:
             logger.error(f"Failed to update document index for {doc_id}: {e}")
@@ -1833,7 +1836,8 @@ class RAGPipeline:
         self,
         content: str,
         namespace: str,
-        tags: list[str] | None = None
+        tags: list[str] | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Create a new insight (user note with semantic search capability)
@@ -1873,7 +1877,8 @@ class RAGPipeline:
             texts=[content],
             metadatas=[metadata],
             ids=[insight_id],
-            namespace=namespace
+            namespace=namespace,
+            context=context
         )
 
         logger.info(f"Created insight {insight_id} in namespace {namespace}")
@@ -1890,7 +1895,8 @@ class RAGPipeline:
         self,
         query: str,
         namespace: str,
-        top_k: int = 10
+        top_k: int = 10,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Search insights using semantic search
@@ -1913,7 +1919,8 @@ class RAGPipeline:
             query_vector=query_embedding,
             top_k=top_k,
             namespace=namespace,
-            filter={"_type": "insight"}
+            filter={"_type": "insight"},
+            context=context
         )
 
         logger.info(f"Found {len(results)} insights matching query")
@@ -1923,7 +1930,8 @@ class RAGPipeline:
     def delete_insight(
         self,
         insight_id: str,
-        namespace: str
+        namespace: str,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Delete an insight by ID
@@ -1940,7 +1948,8 @@ class RAGPipeline:
         # Delete from insights provider by ID
         result = self.insights_provider.delete(
             ids=[insight_id],
-            namespace=namespace
+            namespace=namespace,
+            context=context
         )
 
         logger.info(f"Deleted insight {insight_id}")

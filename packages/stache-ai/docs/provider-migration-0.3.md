@@ -287,6 +287,38 @@ and is otherwise yours to use — namespace your keys as
 `context.custom["YourMiddleware.key"]` per the existing middleware-plugin
 guide convention.
 
+## 9. Job visibility and queued-work identity (`JobStore`)
+
+Two new concrete (non-abstract) methods on the `JobStore` ABC — you inherit
+working defaults, and may override either:
+
+```python
+def visible_to(self, job, principal) -> bool:
+    # Default: principal is not None and job.requested_by == principal.user_id
+    ...
+
+def principal_for(self, job) -> Principal:
+    # Default: Principal(user_id=job.requested_by)
+    ...
+```
+
+`visible_to` gates the single-job fetch: `GET /api/jobs/{job_id}` returns 404
+for an invisible job, byte-identical to a missing one, so overrides must be
+pure predicates with no side effects or logging that could differ by case.
+`principal_for` is called by the ingestion worker before its authorization
+re-check; if your store stamps identity attributes at `create(job,
+principal=...)` time, rehydrate them here so a plugged authorizer sees the
+same claims the original caller carried. The worker places this principal on
+`context.custom["principal"]` for the pipeline call.
+
+If your store duck-typed the old protocol instead of subclassing `JobStore`,
+subclass it now (the worker calls both methods).
+
+`NamespaceProvider` also gained concrete, context-aware `get_ancestors` /
+`get_path` base methods (parent walk over `get`). If you overrode these
+before, add the keyword-only `context=None` parameter and forward it to any
+`get` calls you make.
+
 ## Summary of signature changes for provider authors
 
 | ABC | Change |

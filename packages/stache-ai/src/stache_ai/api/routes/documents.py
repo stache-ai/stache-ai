@@ -689,9 +689,10 @@ async def update_document_metadata(
 
     try:
         pipeline = get_pipeline()
+        context = RequestContext.from_fastapi_request(http_request, current_namespace)
 
         # Perform dual-write update
-        result = pipeline.update_document(doc_id, current_namespace, updates)
+        result = pipeline.update_document(doc_id, current_namespace, updates, context=context)
 
         return {
             "success": result["success"],

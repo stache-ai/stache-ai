@@ -433,6 +433,31 @@ class NamespaceProvider(ABC):
         """
         pass
 
+    def get_ancestors(self, id: str, context: "RequestContext | None" = None) -> builtins.list[dict[str, Any]]:
+        """Get all ancestor namespaces, root first.
+
+        Default implementation walks parent links via ``get``. Providers may
+        override with a more efficient lookup; overrides must accept and
+        forward ``context`` like every other data method.
+        """
+        ancestors: builtins.list[dict[str, Any]] = []
+        current = self.get(id, context=context)
+        while current and current.get("parent_id"):
+            parent = self.get(current["parent_id"], context=context)
+            if not parent:
+                break
+            ancestors.append(parent)
+            current = parent
+        return list(reversed(ancestors))
+
+    def get_path(self, id: str, context: "RequestContext | None" = None) -> str:
+        """Get the display path of a namespace (e.g. 'A > B > C')."""
+        current = self.get(id, context=context)
+        if not current:
+            return ""
+        ancestors = self.get_ancestors(id, context=context)
+        return " > ".join([a["name"] for a in ancestors] + [current["name"]])
+
     def get_name(self) -> str:
         """Get provider name"""
         return self.__class__.__name__

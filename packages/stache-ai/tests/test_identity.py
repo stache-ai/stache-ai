@@ -67,7 +67,9 @@ def test_submit_normalizes_principal_and_stores_user_id():
 
     seen = {}
 
-    class _Store:
+    from stache_ai.ingestion.base import JobStore
+
+    class _Store(JobStore):
         def __init__(self):
             self.jobs = {}
 
@@ -142,7 +144,12 @@ def test_worker_passes_context_and_job_to_pipeline():
         metadata={"_text": "hello world"},
     )
 
-    class _Store:
+    from stache_ai.ingestion.base import JobStore
+
+    class _Store(JobStore):
+        def create(self, job, *, principal=None):
+            pass
+
         def get(self, job_id):
             return job
 
@@ -153,6 +160,9 @@ def test_worker_passes_context_and_job_to_pipeline():
             for k, v in fields.items():
                 setattr(job, k, v)
             return job
+
+        def list(self, **kw):
+            return [job], None
 
     pipeline = AsyncMock()
     pipeline.ingest_text.return_value = {"doc_id": "d1", "chunks_created": 1}
@@ -332,7 +342,12 @@ def test_worker_denial_fails_job_without_touching_pipeline(monkeypatch):
         metadata={"_text": "hello world"},
     )
 
-    class _Store:
+    from stache_ai.ingestion.base import JobStore
+
+    class _Store(JobStore):
+        def create(self, job, *, principal=None):
+            pass
+
         def get(self, job_id):
             return job
 
@@ -343,6 +358,9 @@ def test_worker_denial_fails_job_without_touching_pipeline(monkeypatch):
             for k, v in fields.items():
                 setattr(job, k, v)
             return job
+
+        def list(self, **kw):
+            return [job], None
 
     pipeline = AsyncMock()
     notifier = type("N", (), {"publish": lambda self, e: None})()

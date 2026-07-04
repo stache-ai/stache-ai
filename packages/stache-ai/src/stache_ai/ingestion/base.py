@@ -126,6 +126,26 @@ class JobStore(ABC):
              cursor: Optional[str] = None,
              principal: Optional[Principal] = None) -> tuple[list[Job], Optional[str]]: ...
 
+    def visible_to(self, job: Job, principal: Optional[Principal]) -> bool:
+        """Whether ``principal`` may read this job (single-job fetch scoping).
+
+        Default: the requester themselves. Deployment-specific stores may
+        tighten this from attributes they stamped at ``create`` time (the
+        caller treats an invisible job exactly like a missing one, so a
+        mismatch never leaks existence).
+        """
+        return principal is not None and job.requested_by == principal.user_id
+
+    def principal_for(self, job: Job) -> Principal:
+        """Reconstruct the acting principal for queued work on this job.
+
+        The worker re-checks authorization before processing (defense in
+        depth), which needs the caller's identity - not just the bare user id.
+        Default rebuilds an id-only principal; deployment-specific stores may
+        rehydrate claims from attributes they stamped at ``create`` time.
+        """
+        return Principal(user_id=job.requested_by)
+
     def claim(self, job_id: str, *, from_statuses: "set[JobStatus]",
               to_status: "JobStatus" = None) -> bool:
         """Atomically transition a job into ``to_status`` iff it is currently in

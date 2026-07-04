@@ -362,3 +362,73 @@ def test_routes_never_import_qdrant_client():
     assert not offenders, (
         f"Routes must not import provider-specific SDKs: {offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Context threading: document update, insights, namespace path/ancestors
+# ---------------------------------------------------------------------------
+
+def test_update_document_passes_principal_context(documents_client, documents_pipeline):
+    documents_pipeline.update_document = MagicMock(return_value={
+        "success": True, "doc_id": "doc-1", "namespace": "default",
+        "updated_chunks": 1, "updated_document": True,
+    })
+    response = documents_client.patch(
+        "/api/documents/doc-1?current_namespace=default",
+        json={"filename": "renamed.txt"},
+    )
+    assert response.status_code == 200
+    context = _assert_principal_context(documents_pipeline.update_document)
+    assert context.namespace == "default"
+
+
+@pytest.fixture
+def insights_pipeline():
+    pipeline = MagicMock()
+    pipeline.create_insight = MagicMock(return_value={
+        "insight_id": "i-1", "success": True, "namespace": "ns1",
+        "created_at": "2026-01-01T00:00:00Z", "tags": None,
+    })
+    pipeline.search_insights = MagicMock(return_value={"insights": [], "count": 0})
+    pipeline.delete_insight = MagicMock(return_value={
+        "success": True, "insight_id": "i-1", "namespace": "ns1",
+    })
+    return pipeline
+
+
+@pytest.fixture
+def insights_client(client, insights_pipeline):
+    with patch("stache_ai.api.routes.insights.get_pipeline", return_value=insights_pipeline):
+        yield client
+
+
+def test_create_insight_passes_principal_context(insights_client, insights_pipeline):
+    response = insights_client.post(
+        "/api/insights", json={"content": "note", "namespace": "ns1"},
+    )
+    assert response.status_code == 200
+    context = _assert_principal_context(insights_pipeline.create_insight)
+    assert context.namespace == "ns1"
+
+
+def test_search_insights_passes_principal_context(insights_client, insights_pipeline):
+    response = insights_client.get("/api/insights/search?query=q&namespace=ns1")
+    assert response.status_code == 200
+    _assert_principal_context(insights_pipeline.search_insights)
+
+
+def test_delete_insight_passes_principal_context(insights_client, insights_pipeline):
+    response = insights_client.delete("/api/insights/i-1?namespace=ns1")
+    assert response.status_code == 200
+    _assert_principal_context(insights_pipeline.delete_insight)
+
+
+def test_get_namespace_passes_context_to_path_and_ancestors(namespaces_client, namespaces_pipeline):
+    provider = namespaces_pipeline.namespace_provider
+    provider.get.return_value = {"id": "ns1", "name": "NS 1", "parent_id": None}
+    provider.get_path.return_value = "NS 1"
+    provider.get_ancestors.return_value = []
+    response = namespaces_client.get("/api/namespaces/ns1")
+    assert response.status_code == 200
+    _assert_principal_context(provider.get_path)
+    _assert_principal_context(provider.get_ancestors)
