@@ -1,10 +1,11 @@
 """Test trash management API routes."""
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
 from stache_ai.api.main import app
 from stache_ai.api.routes import trash
+from stache_ai.rag.pipeline import RAGPipeline
 
 
 @pytest.fixture
@@ -18,6 +19,10 @@ def mock_pipeline():
     """Mock pipeline with document index provider."""
     pipeline = MagicMock()
     pipeline.document_index_provider = MagicMock()
+    # Routes call pipeline-level operations; bind the real implementations so
+    # the mocked provider still receives the calls tests assert on.
+    for name in ("list_trash", "restore_document", "purge_trash_entry"):
+        setattr(pipeline, name, getattr(RAGPipeline, name).__get__(pipeline))
     return pipeline
 
 
@@ -79,6 +84,7 @@ def test_list_trash_with_namespace_filter(client, mock_pipeline):
             namespace="docs",
             limit=50,
             next_key=None,
+            context=ANY,
         )
 
 

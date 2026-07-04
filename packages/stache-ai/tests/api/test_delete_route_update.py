@@ -1,9 +1,10 @@
 """Test updated delete route (soft delete by default)."""
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
 from stache_ai.api.main import app
+from stache_ai.rag.pipeline import RAGPipeline
 
 
 @pytest.fixture
@@ -19,6 +20,10 @@ def mock_pipeline():
     pipeline.document_index_provider = MagicMock()
     # Permanent delete fires delete observers via this async method
     pipeline.notify_document_deleted = AsyncMock()
+    # Routes call pipeline-level operations; bind the real implementations so
+    # the mocked providers still receive the calls tests assert on.
+    for name in ("soft_delete_document", "permanently_delete_document", "_hard_delete_document"):
+        setattr(pipeline, name, getattr(RAGPipeline, name).__get__(pipeline))
     return pipeline
 
 
@@ -85,7 +90,9 @@ def test_permanent_delete_calls_get_chunk_ids(client, mock_pipeline):
     with patch("stache_ai.api.routes.documents.get_pipeline", return_value=mock_pipeline):
         response = client.delete("/api/documents/id/doc1?namespace=default&permanent=true")
         assert response.status_code == 200
-        mock_pipeline.document_index_provider.get_chunk_ids.assert_called_with("doc1", "default")
+        mock_pipeline.document_index_provider.get_chunk_ids.assert_called_with(
+            "doc1", "default", context=ANY
+        )
 
 
 def test_soft_delete_document_not_found(client, mock_pipeline):

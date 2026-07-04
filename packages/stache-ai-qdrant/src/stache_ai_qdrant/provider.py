@@ -336,6 +336,64 @@ class QdrantVectorDBProvider(VectorDBProvider):
 
         return results
 
+    def scan_by_metadata(
+        self,
+        filter: Optional[Dict[str, Any]] = None,
+        fields: Optional[List[str]] = None,
+        namespace: Optional[str] = None,
+        context=None
+    ) -> List[Dict[str, Any]]:
+        """Scan ALL vectors matching an exact-match metadata filter (full scroll)
+
+        Used by legacy maintenance operations (orphaned-chunk cleanup, summary
+        migration) that previously reached into the raw Qdrant client from API
+        routes. Walks the entire collection; vectors missing the requested
+        fields are still returned (with those fields absent).
+
+        Args:
+            filter: Optional dictionary of field:value pairs to match (None = all)
+            fields: Optional list of payload fields to return (None = all)
+            namespace: Optional namespace to restrict the scan to
+            context: Optional request context (unused by this provider)
+
+        Returns:
+            List of dictionaries with the point "id" plus requested payload fields
+        """
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+        conditions = [
+            FieldCondition(key=key, match=MatchValue(value=value))
+            for key, value in (filter or {}).items()
+        ]
+        if namespace:
+            conditions.append(
+                FieldCondition(key="namespace", match=MatchValue(value=namespace))
+            )
+
+        scroll_filter = Filter(must=conditions) if conditions else None
+
+        results = []
+        offset = None
+
+        while True:
+            points, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=scroll_filter,
+                limit=1000,
+                offset=offset,
+                with_payload=fields if fields else True,
+                with_vectors=False
+            )
+
+            for point in points:
+                payload = point.payload or {}
+                results.append({"id": point.id, **payload})
+
+            if offset is None:
+                break
+
+        return results
+
     def get_by_ids(
         self,
         ids: List[str],

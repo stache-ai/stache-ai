@@ -1376,6 +1376,265 @@ class RAGPipeline:
         """Get list of available chunking strategies"""
         return ChunkingStrategyFactory.get_available_strategies()
 
+    # ==================== Context-aware document operations ====================
+    # Thin delegations used by API routes (and other frontends) so every data
+    # access flows through the pipeline with a RequestContext. Providers may
+    # scope behavior on the context; core providers ignore it.
+
+    def list_documents(
+        self,
+        namespace: str | None = None,
+        limit: int = 100,
+        last_evaluated_key: dict[str, Any] | None = None,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """List documents via the document index provider (paginated)."""
+        return self.document_index_provider.list_documents(
+            namespace=namespace,
+            limit=limit,
+            last_evaluated_key=last_evaluated_key,
+            context=context,
+        )
+
+    def get_document_record(
+        self,
+        doc_id: str,
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any] | None:
+        """Get a document's metadata record from the document index."""
+        return self.document_index_provider.get_document(doc_id, namespace, context=context)
+
+    def get_document_chunks(
+        self,
+        ids: list[str],
+        context: "RequestContext | None" = None
+    ) -> list[dict[str, Any]]:
+        """Retrieve chunk records by vector IDs."""
+        return self.vectordb_provider.get_by_ids(ids=ids, context=context)
+
+    def discover_documents(
+        self,
+        query: str,
+        top_k: int = 10,
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> list[dict[str, Any]]:
+        """Semantic discovery over document summaries (embed query + search)."""
+        query_embedding = self.embedding_provider.embed(query)
+        return self.summaries_provider.search_summaries(
+            query_vector=query_embedding,
+            top_k=top_k,
+            namespace=namespace,
+            context=context,
+        )
+
+    def soft_delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_by: str | None = "api",
+        delete_reason: str = "user_initiated",
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Soft delete a document (move to trash) and mark its vectors."""
+        result = self.document_index_provider.soft_delete_document(
+            doc_id=doc_id,
+            namespace=namespace,
+            deleted_by=deleted_by,
+            delete_reason=delete_reason,
+            context=context,
+        )
+
+        # Update vector status to exclude from search results
+        chunk_ids = result.get("chunk_ids", [])
+        if chunk_ids and hasattr(self.vectordb_provider, "update_status"):
+            try:
+                self.vectordb_provider.update_status(chunk_ids, namespace, "deleting", context=context)
+                logger.info(f"Updated {len(chunk_ids)} vectors to deleting status")
+            except Exception as e:
+                # Log but don't fail - document is already in trash
+                logger.warning(f"Failed to update vector status: {e}")
+
+        return result
+
+    async def _hard_delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        chunk_ids: list[str],
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Shared hard-delete sequence: vectors, index entry, delete observers.
+
+        The single implementation of permanent deletion — every route/frontend
+        path funnels here so behavior (and observer notification) never diverges.
+        """
+        # Delete from vector database first (atomic operation pattern)
+        self.vectordb_provider.delete(chunk_ids, namespace=namespace, context=context)
+
+        # Delete from document index
+        self.document_index_provider.delete_document(doc_id, namespace, context=context)
+
+        # Fire delete observers now that the doc is permanently gone
+        # (e.g. concept-link cleanup). No-op without enterprise plugins.
+        await self.notify_document_deleted(doc_id, namespace, context=context)
+
+        logger.info(f"Permanently deleted document {doc_id} ({len(chunk_ids)} chunks) from {namespace}")
+
+        return {
+            "doc_id": doc_id,
+            "namespace": namespace,
+            "chunks_deleted": len(chunk_ids),
+        }
+
+    async def permanently_delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Permanently delete a document by ID (vectors + index + observers).
+
+        Raises:
+            ValueError: If the document has no chunks / does not exist.
+        """
+        chunk_ids = self.document_index_provider.get_chunk_ids(doc_id, namespace, context=context)
+        if not chunk_ids:
+            raise ValueError(f"Document not found: {doc_id}")
+        return await self._hard_delete_document(doc_id, namespace, chunk_ids, context=context)
+
+    async def delete_documents_by_filename(
+        self,
+        filename: str,
+        namespace: str,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Permanently delete a document looked up by filename in a namespace.
+
+        Uses the document index when available (preferred), falling back to a
+        metadata-match delete on the documents provider.
+
+        Raises:
+            ValueError: If the document is not found or has no chunks.
+            NotImplementedError: If the fallback provider lacks delete_by_metadata.
+        """
+        if self.document_index_provider:
+            # Direct GSI2 lookup by filename in the namespace
+            target_doc = self.document_index_provider.get_document_by_source_path(
+                namespace=namespace,
+                filename=filename,
+                context=context,
+            )
+
+            if not target_doc:
+                raise ValueError(f"Document not found: {filename}")
+
+            doc_id = target_doc.get('doc_id')
+            chunk_ids = target_doc.get('chunk_ids', [])
+
+            if not chunk_ids:
+                raise ValueError(f"Document has no chunks: {filename}")
+
+            result = await self._hard_delete_document(doc_id, namespace, chunk_ids, context=context)
+            logger.info(f"Deleted document {filename} ({len(chunk_ids)} chunks) from {namespace}")
+            return result
+
+        # Fallback: delete chunks by metadata match (backwards compatibility)
+        result = self.documents_provider.delete_by_metadata(
+            field="filename",
+            value=filename,
+            namespace=namespace,
+            context=context,
+        )
+        logger.info(f"Deleted {result['deleted']} chunks for filename: {filename}")
+        return {"chunks_deleted": result["deleted"]}
+
+    def list_trash(
+        self,
+        namespace: str | None = None,
+        limit: int = 50,
+        next_key: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """List documents in trash (30-day retention)."""
+        return self.document_index_provider.list_trash(
+            namespace=namespace,
+            limit=limit,
+            next_key=next_key,
+            context=context,
+        )
+
+    def restore_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_at_ms: int,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Restore a document from trash and reactivate its vectors."""
+        result = self.document_index_provider.restore_document(
+            doc_id=doc_id,
+            namespace=namespace,
+            deleted_at_ms=deleted_at_ms,
+            context=context,
+        )
+
+        # Restore vector status to active
+        chunk_ids = result.get("chunk_ids", [])
+        if chunk_ids and hasattr(self.vectordb_provider, "update_status"):
+            try:
+                self.vectordb_provider.update_status(chunk_ids, namespace, "active", context=context)
+            except Exception as e:
+                # Log but don't fail - document is already restored
+                logger.warning(f"Failed to restore vector status: {e}")
+
+        return result
+
+    def purge_trash_entry(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_at_ms: int,
+        deleted_by: str | None = "api",
+        filename: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Permanently delete a trash entry (creates an async cleanup job).
+
+        Observer notification happens when the cleanup worker completes the
+        purge, not here.
+        """
+        return self.document_index_provider.permanently_delete_document(
+            doc_id=doc_id,
+            namespace=namespace,
+            deleted_at_ms=deleted_at_ms,
+            deleted_by=deleted_by,
+            filename=filename,  # Use trash entry filename for correct PK
+            context=context,
+        )
+
+    def regenerate_document_summary(
+        self,
+        summary_text: str,
+        metadata: dict[str, Any],
+        namespace: str,
+        summary_id: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> str:
+        """Embed and store a document summary record (summary migration)."""
+        summary_embedding = self.embedding_provider.embed(summary_text)
+        sid = summary_id or str(uuid.uuid4())
+        self.vectordb_provider.insert(
+            vectors=[summary_embedding],
+            texts=[summary_text],
+            metadatas=[metadata],
+            ids=[sid],
+            namespace=namespace,
+            context=context,
+        )
+        return sid
+
     async def query(
         self,
         question: str,

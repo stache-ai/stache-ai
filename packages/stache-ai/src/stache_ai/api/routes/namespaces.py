@@ -3,27 +3,20 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, Path, Query
+from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
-from stache_ai.config import settings
-from stache_ai.providers import NamespaceProviderFactory
+from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Singleton namespace provider instance
-_namespace_provider = None
-
 
 def get_namespace_provider():
-    """Get or create namespace provider singleton"""
-    global _namespace_provider
-    if _namespace_provider is None:
-        _namespace_provider = NamespaceProviderFactory.create(settings)
-    return _namespace_provider
+    """Get the pipeline's namespace provider (single shared instance)."""
+    return get_pipeline().namespace_provider
 
 
 # ===== Request Models =====
@@ -97,7 +90,7 @@ class NamespaceUpdate(BaseModel):
 
 # ===== Helper Functions =====
 
-def get_namespace_stats(namespace_id: str) -> dict[str, int]:
+def get_namespace_stats(namespace_id: str, context: RequestContext | None = None) -> dict[str, int]:
     """Get document and chunk counts for a namespace
 
     Uses the document index provider (DynamoDB) for efficient counting
@@ -108,7 +101,7 @@ def get_namespace_stats(namespace_id: str) -> dict[str, int]:
         doc_index = pipeline.document_index_provider
 
         if doc_index:
-            return doc_index.count_by_namespace(namespace_id)
+            return doc_index.count_by_namespace(namespace_id, context=context)
 
         # Fallback to zeros if no document index provider
         return {"doc_count": 0, "chunk_count": 0}
@@ -117,10 +110,10 @@ def get_namespace_stats(namespace_id: str) -> dict[str, int]:
         return {"doc_count": 0, "chunk_count": 0}
 
 
-def enrich_namespace_with_stats(namespace: dict[str, Any]) -> dict[str, Any]:
+def enrich_namespace_with_stats(namespace: dict[str, Any], context: RequestContext | None = None) -> dict[str, Any]:
     """Add document and chunk counts to namespace"""
     namespace_id = namespace["id"]
-    stats = get_namespace_stats(namespace_id)
+    stats = get_namespace_stats(namespace_id, context=context)
     return {
         **namespace,
         "doc_count": stats["doc_count"],
@@ -131,7 +124,7 @@ def enrich_namespace_with_stats(namespace: dict[str, Any]) -> dict[str, Any]:
 # ===== Endpoints =====
 
 @router.post("/namespaces")
-async def create_namespace(data: NamespaceCreate):
+async def create_namespace(data: NamespaceCreate, http_request: Request):
     """
     Create a new namespace.
 
@@ -139,6 +132,7 @@ async def create_namespace(data: NamespaceCreate):
     Use hierarchical IDs like 'mba/finance/corporate-finance' for nested organization.
     """
     try:
+        context = RequestContext.from_fastapi_request(http_request, data.id)
         provider = get_namespace_provider()
         namespace = provider.create(
             id=data.id,
@@ -146,10 +140,11 @@ async def create_namespace(data: NamespaceCreate):
             description=data.description,
             parent_id=data.parent_id,
             metadata=data.metadata,
-            filter_keys=data.filter_keys
+            filter_keys=data.filter_keys,
+            context=context
         )
         logger.info(f"Created namespace: {data.id}")
-        return enrich_namespace_with_stats(namespace)
+        return enrich_namespace_with_stats(namespace, context=context)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -159,6 +154,7 @@ async def create_namespace(data: NamespaceCreate):
 
 @router.get("/namespaces")
 async def list_namespaces(
+    http_request: Request,
     parent_id: str | None = Query(None, description="Filter by parent namespace"),
     include_children: bool = Query(False, description="Include all descendants (flat list)"),
     include_stats: bool = Query(True, description="Include document/chunk counts (slower)")
@@ -172,11 +168,12 @@ async def list_namespaces(
     - With include_stats=true (default): Adds doc_count and chunk_count
     """
     try:
+        context = RequestContext.from_fastapi_request(http_request, parent_id or "")
         provider = get_namespace_provider()
-        namespaces = provider.list(parent_id=parent_id, include_children=include_children)
+        namespaces = provider.list(parent_id=parent_id, include_children=include_children, context=context)
 
         if include_stats:
-            namespaces = [enrich_namespace_with_stats(ns) for ns in namespaces]
+            namespaces = [enrich_namespace_with_stats(ns, context=context) for ns in namespaces]
 
         return {
             "namespaces": namespaces,
@@ -189,6 +186,7 @@ async def list_namespaces(
 
 @router.get("/namespaces/tree")
 async def get_namespace_tree(
+    http_request: Request,
     root_id: str | None = Query(None, description="Get subtree starting from this namespace"),
     include_stats: bool = Query(False, description="Include document/chunk counts (slower)")
 ):
@@ -198,14 +196,15 @@ async def get_namespace_tree(
     Returns nested structure with 'children' arrays for navigation UI.
     """
     try:
+        context = RequestContext.from_fastapi_request(http_request, root_id or "")
         provider = get_namespace_provider()
-        tree = provider.get_tree(root_id=root_id)
+        tree = provider.get_tree(root_id=root_id, context=context)
 
         if include_stats:
             # Recursively add stats to tree
             def add_stats_recursive(nodes: list[dict]) -> list[dict]:
                 for node in nodes:
-                    stats = get_namespace_stats(node["id"])
+                    stats = get_namespace_stats(node["id"], context=context)
                     node["doc_count"] = stats["doc_count"]
                     node["chunk_count"] = stats["chunk_count"]
                     if node.get("children"):
@@ -224,6 +223,7 @@ async def get_namespace_tree(
 
 @router.get("/namespaces/{namespace_id:path}")
 async def get_namespace(
+    http_request: Request,
     namespace_id: str = Path(..., description="Namespace ID")
 ):
     """
@@ -232,14 +232,15 @@ async def get_namespace(
     Also returns the namespace path (breadcrumb) and ancestors.
     """
     try:
+        context = RequestContext.from_fastapi_request(http_request, namespace_id)
         provider = get_namespace_provider()
-        namespace = provider.get(namespace_id)
+        namespace = provider.get(namespace_id, context=context)
 
         if not namespace:
             raise HTTPException(status_code=404, detail=f"Namespace not found: {namespace_id}")
 
         # Enrich with stats and path info
-        result = enrich_namespace_with_stats(namespace)
+        result = enrich_namespace_with_stats(namespace, context=context)
         result["path"] = provider.get_path(namespace_id)
         result["ancestors"] = provider.get_ancestors(namespace_id)
 
@@ -253,6 +254,7 @@ async def get_namespace(
 
 @router.put("/namespaces/{namespace_id:path}")
 async def update_namespace(
+    http_request: Request,
     namespace_id: str = Path(..., description="Namespace ID"),
     data: NamespaceUpdate = Body(...)
 ):
@@ -262,6 +264,7 @@ async def update_namespace(
     Only provided fields will be updated. Metadata is merged with existing.
     """
     try:
+        context = RequestContext.from_fastapi_request(http_request, namespace_id)
         provider = get_namespace_provider()
 
         # Handle empty string parent_id as None (make it a root)
@@ -275,14 +278,15 @@ async def update_namespace(
             description=data.description,
             parent_id=parent_id,
             metadata=data.metadata,
-            filter_keys=data.filter_keys
+            filter_keys=data.filter_keys,
+            context=context
         )
 
         if not namespace:
             raise HTTPException(status_code=404, detail=f"Namespace not found: {namespace_id}")
 
         logger.info(f"Updated namespace: {namespace_id}")
-        return enrich_namespace_with_stats(namespace)
+        return enrich_namespace_with_stats(namespace, context=context)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -294,6 +298,7 @@ async def update_namespace(
 
 @router.delete("/namespaces/{namespace_id:path}")
 async def delete_namespace(
+    http_request: Request,
     namespace_id: str = Path(..., description="Namespace ID"),
     cascade: bool = Query(False, description="Delete child namespaces too"),
     delete_documents: bool = Query(True, description="Also delete all documents in namespace from vector DB")
@@ -308,10 +313,11 @@ async def delete_namespace(
     By default, fails if namespace has children (use cascade=true to force).
     """
     try:
+        context = RequestContext.from_fastapi_request(http_request, namespace_id)
         provider = get_namespace_provider()
 
         # Check if namespace exists
-        namespace = provider.get(namespace_id)
+        namespace = provider.get(namespace_id, context=context)
         if not namespace:
             raise HTTPException(status_code=404, detail=f"Namespace not found: {namespace_id}")
 
@@ -324,7 +330,8 @@ async def delete_namespace(
             try:
                 result = pipeline.documents_provider.delete_by_metadata(
                     field="namespace",
-                    value=namespace_id
+                    value=namespace_id,
+                    context=context
                 )
                 total_deleted += result.get('deleted', 0)
                 logger.info(f"Deleted {result['deleted']} chunks from documents provider for namespace: {namespace_id}")
@@ -339,7 +346,8 @@ async def delete_namespace(
             try:
                 result = pipeline.summaries_provider.delete_by_metadata(
                     field="namespace",
-                    value=namespace_id
+                    value=namespace_id,
+                    context=context
                 )
                 total_deleted += result.get('deleted', 0)
                 logger.info(f"Deleted {result['deleted']} summaries from summaries provider for namespace: {namespace_id}")
@@ -348,7 +356,7 @@ async def delete_namespace(
                 # Don't fail - summaries are secondary
 
         # Delete namespace from registry
-        success = provider.delete(namespace_id, cascade=cascade)
+        success = provider.delete(namespace_id, cascade=cascade, context=context)
 
         if not success:
             raise HTTPException(status_code=404, detail=f"Namespace not found: {namespace_id}")
@@ -372,6 +380,7 @@ async def delete_namespace(
 
 @router.get("/namespaces/{namespace_id:path}/documents")
 async def list_namespace_documents(
+    http_request: Request,
     namespace_id: str = Path(..., description="Namespace ID"),
     limit: int = Query(100, description="Max documents to return"),
     offset: int = Query(0, description="Pagination offset")
@@ -383,9 +392,11 @@ async def list_namespace_documents(
     Uses the provider-agnostic list_by_filter method.
     """
     try:
+        context = RequestContext.from_fastapi_request(http_request, namespace_id)
+
         # Verify namespace exists
         provider = get_namespace_provider()
-        namespace = provider.get(namespace_id)
+        namespace = provider.get(namespace_id, context=context)
         if not namespace:
             raise HTTPException(status_code=404, detail=f"Namespace not found: {namespace_id}")
 
@@ -396,7 +407,8 @@ async def list_namespace_documents(
         vectors = vectordb.list_by_filter(
             filter={"namespace": namespace_id},
             fields=["doc_id", "filename", "total_chunks", "created_at"],
-            limit=10000  # Upper bound for unique doc extraction
+            limit=10000,  # Upper bound for unique doc extraction
+            context=context
         )
 
         # Collect unique documents

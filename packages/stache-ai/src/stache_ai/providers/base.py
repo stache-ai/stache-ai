@@ -697,6 +697,34 @@ class VectorDBProvider(ABC):
         """
         raise NotImplementedError("list_by_filter not implemented for this provider")
 
+    def scan_by_metadata(
+        self,
+        filter: dict[str, Any] | None = None,
+        fields: list[str] | None = None,
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> list[dict[str, Any]]:
+        """
+        Scan ALL vectors matching an exact-match metadata filter (full scan).
+
+        Unlike list_by_filter, this walks the entire collection without a limit
+        and includes vectors missing the filtered fields when filter is None.
+        Used by legacy maintenance operations (orphaned-chunk cleanup, summary
+        migration). Only meaningful for providers that advertise the
+        "metadata_scan" capability.
+
+        Args:
+            filter: Optional dictionary of field:value pairs to match (None = all)
+            fields: Optional list of metadata fields to return (None = all)
+            namespace: Optional namespace to restrict the scan to
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
+
+        Returns:
+            List of dictionaries with the vector "id" plus requested payload fields
+        """
+        raise NotImplementedError("scan_by_metadata not implemented for this provider")
+
     def get_by_ids(
         self,
         ids: list[str],

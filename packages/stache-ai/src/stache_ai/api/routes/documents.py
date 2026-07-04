@@ -3,9 +3,10 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, Path, Query
+from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
+from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,7 @@ router = APIRouter()
 
 @router.get("/documents")
 async def list_documents(
+    http_request: Request,
     namespace: str | None = Query(None, description="Optional namespace filter"),
     extension: str | None = Query(None, description="Filter by file extension (e.g., 'pdf', 'txt')"),
     orphaned: bool = Query(False, description="Show only chunks without doc_id (legacy data)"),
@@ -41,10 +43,11 @@ async def list_documents(
     try:
         pipeline = get_pipeline()
         vectordb = pipeline.vectordb_provider
+        context = RequestContext.from_fastapi_request(http_request, namespace or "")
 
         # Handle orphaned chunks separately (requires full scan, Qdrant only)
         if orphaned:
-            return await _list_orphaned_chunks(vectordb, namespace)
+            return await _list_orphaned_chunks(vectordb, namespace, context)
 
         # Try to use document index provider for listing (provider-agnostic)
         if pipeline.document_index_provider and use_summaries:
@@ -58,11 +61,12 @@ async def list_documents(
                     except (json.JSONDecodeError, ValueError):
                         logger.warning(f"Invalid next_key format: {next_key}")
 
-                # Query document index
-                result = pipeline.document_index_provider.list_documents(
+                # Query document index via the pipeline (context-aware)
+                result = pipeline.list_documents(
                     namespace=namespace,
                     limit=limit,
-                    last_evaluated_key=last_evaluated_key
+                    last_evaluated_key=last_evaluated_key,
+                    context=context
                 )
 
                 documents = result.get("documents", [])
@@ -109,7 +113,8 @@ async def list_documents(
             vectors = vectordb.list_by_filter(
                 filter=filter_dict,
                 fields=["doc_id", "filename", "namespace", "chunk_count", "created_at", "headings"],
-                limit=10000
+                limit=10000,
+                context=context
             )
 
             documents = []
@@ -154,7 +159,7 @@ async def list_documents(
             }
 
         # Legacy scan-based listing (fallback, uses document index for all providers)
-        return await _list_documents_legacy(pipeline, namespace, extension)
+        return await _list_documents_legacy(pipeline, namespace, extension, context)
 
     except HTTPException:
         raise
@@ -163,7 +168,7 @@ async def list_documents(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-async def _list_orphaned_chunks(vectordb, namespace: str | None):
+async def _list_orphaned_chunks(vectordb, namespace: str | None, context: RequestContext):
     """List chunks without doc_id (legacy data)"""
     if "metadata_scan" not in vectordb.capabilities:
         raise HTTPException(
@@ -173,52 +178,35 @@ async def _list_orphaned_chunks(vectordb, namespace: str | None):
                    "New S3 Vectors deployments don't have orphaned chunks."
         )
 
-    from qdrant_client.models import FieldCondition, Filter, MatchValue
-
-    scroll_filter = None
-    if namespace:
-        scroll_filter = Filter(
-            must=[FieldCondition(key="namespace", match=MatchValue(value=namespace))]
-        )
+    records = vectordb.scan_by_metadata(
+        fields=["doc_id", "filename", "namespace", "_type"],
+        namespace=namespace,
+        context=context
+    )
 
     orphaned_chunks = {}
-    offset = None
+    for record in records:
+        # Skip summary records
+        if record.get("_type") == "document_summary":
+            continue
 
-    while True:
-        points, offset = vectordb.client.scroll(
-            collection_name=vectordb.collection_name,
-            scroll_filter=scroll_filter,
-            limit=1000,
-            offset=offset,
-            with_payload=["doc_id", "filename", "namespace", "_type"],
-            with_vectors=False
-        )
+        doc_id = record.get("doc_id")
+        if doc_id:
+            continue
 
-        for point in points:
-            # Skip summary records
-            if point.payload.get("_type") == "document_summary":
-                continue
-
-            doc_id = point.payload.get("doc_id")
-            if doc_id:
-                continue
-
-            filename = point.payload.get("filename")
-            key = filename or f"orphan_{point.id}"
-            if key not in orphaned_chunks:
-                orphaned_chunks[key] = {
-                    "doc_id": None,
-                    "filename": filename,
-                    "namespace": point.payload.get("namespace", "default"),
-                    "chunk_count": 0,
-                    "point_ids": [],
-                    "created_at": None
-                }
-            orphaned_chunks[key]["chunk_count"] += 1
-            orphaned_chunks[key]["point_ids"].append(str(point.id))
-
-        if offset is None:
-            break
+        filename = record.get("filename")
+        key = filename or f"orphan_{record['id']}"
+        if key not in orphaned_chunks:
+            orphaned_chunks[key] = {
+                "doc_id": None,
+                "filename": filename,
+                "namespace": record.get("namespace", "default"),
+                "chunk_count": 0,
+                "point_ids": [],
+                "created_at": None
+            }
+        orphaned_chunks[key]["chunk_count"] += 1
+        orphaned_chunks[key]["point_ids"].append(str(record["id"]))
 
     return {
         "orphaned_chunks": list(orphaned_chunks.values()),
@@ -226,7 +214,7 @@ async def _list_orphaned_chunks(vectordb, namespace: str | None):
     }
 
 
-async def _list_documents_legacy(pipeline, namespace: str | None, extension: str | None):
+async def _list_documents_legacy(pipeline, namespace: str | None, extension: str | None, context: RequestContext):
     """Legacy document listing without summaries
 
     Now uses document index provider (available for all providers).
@@ -240,10 +228,11 @@ async def _list_documents_legacy(pipeline, namespace: str | None, extension: str
                 detail="Document index is not enabled. Set ENABLE_DOCUMENT_INDEX=true to use this endpoint."
             )
 
-        # Use document index provider to list all documents
-        result = pipeline.document_index_provider.list_documents(
+        # Use document index provider (via pipeline) to list all documents
+        result = pipeline.list_documents(
             namespace=namespace,
-            limit=10000  # Legacy scan without pagination
+            limit=10000,  # Legacy scan without pagination
+            context=context
         )
 
         documents = result.get("documents", [])
@@ -272,6 +261,7 @@ async def _list_documents_legacy(pipeline, namespace: str | None, extension: str
 
 @router.get("/documents/discover")
 async def discover_documents(
+    http_request: Request,
     query: str = Query(..., description="Semantic search query to find relevant documents"),
     namespace: str | None = Query(None, description="Optional namespace filter (supports wildcards like 'mba/*')"),
     top_k: int = Query(10, ge=1, le=50, description="Number of documents to return")
@@ -289,16 +279,14 @@ async def discover_documents(
     """
     try:
         pipeline = get_pipeline()
-        vectordb = pipeline.vectordb_provider
+        context = RequestContext.from_fastapi_request(http_request, namespace or "")
 
-        # Generate embedding for query
-        query_embedding = pipeline.embedding_provider.embed(query)
-
-        # Use summaries provider for semantic discovery
-        results = pipeline.summaries_provider.search_summaries(
-            query_vector=query_embedding,
+        # Semantic discovery via the pipeline (embed query + search summaries)
+        results = pipeline.discover_documents(
+            query=query,
             top_k=top_k,
-            namespace=namespace
+            namespace=namespace,
+            context=context
         )
 
         # Format response
@@ -330,6 +318,7 @@ async def discover_documents(
 # NOTE: Static routes must come before parameterized routes
 @router.get("/documents/chunks")
 async def get_chunks_by_ids(
+    http_request: Request,
     point_ids: str = Query(..., description="Comma-separated list of point IDs")
 ):
     """
@@ -346,10 +335,10 @@ async def get_chunks_by_ids(
 
     try:
         pipeline = get_pipeline()
-        vectordb = pipeline.vectordb_provider
+        context = RequestContext.from_fastapi_request(http_request, "")
 
-        # Use provider-agnostic get_by_ids
-        chunks = vectordb.get_by_ids(ids=ids)
+        # Use provider-agnostic chunk retrieval via the pipeline
+        chunks = pipeline.get_document_chunks(ids, context=context)
 
         # Sort by chunk_index if available
         chunks.sort(key=lambda x: x.get("chunk_index", 0))
@@ -377,6 +366,7 @@ async def get_chunks_by_ids(
 
 @router.delete("/documents/orphaned")
 async def delete_orphaned_chunks(
+    http_request: Request,
     filename: str | None = Query(None, description="Delete orphaned chunks for specific filename"),
     all_orphaned: bool = Query(False, description="Delete ALL orphaned chunks (use with caution)")
 ):
@@ -393,6 +383,7 @@ async def delete_orphaned_chunks(
     try:
         pipeline = get_pipeline()
         vectordb = pipeline.vectordb_provider
+        context = RequestContext.from_fastapi_request(http_request, "")
 
         # Provider check
         if "metadata_scan" not in vectordb.capabilities:
@@ -403,34 +394,24 @@ async def delete_orphaned_chunks(
                        "New S3 Vectors deployments don't have orphaned chunks."
             )
 
-
-        # Find orphaned chunks by scrolling and filtering in Python
+        # Find orphaned chunks by scanning and filtering in Python
         # (Qdrant's IsNull condition isn't reliable for missing fields)
+        records = vectordb.scan_by_metadata(
+            fields=["doc_id", "filename"],
+            context=context
+        )
+
         orphan_ids = []
-        offset = None
+        for record in records:
+            doc_id = record.get("doc_id")
+            record_filename = record.get("filename")
 
-        while True:
-            points, offset = vectordb.client.scroll(
-                collection_name=vectordb.collection_name,
-                limit=1000,
-                offset=offset,
-                with_payload=["doc_id", "filename"],
-                with_vectors=False
-            )
-
-            for point in points:
-                doc_id = point.payload.get("doc_id")
-                point_filename = point.payload.get("filename")
-
-                # Check if orphaned (no doc_id)
-                if doc_id is None:
-                    # If filtering by filename, check it matches
-                    if filename and point_filename != filename:
-                        continue
-                    orphan_ids.append(point.id)
-
-            if offset is None:
-                break
+            # Check if orphaned (no doc_id)
+            if doc_id is None:
+                # If filtering by filename, check it matches
+                if filename and record_filename != filename:
+                    continue
+                orphan_ids.append(record["id"])
 
         if not orphan_ids:
             return {
@@ -439,11 +420,8 @@ async def delete_orphaned_chunks(
                 "message": "No orphaned chunks found"
             }
 
-        # Delete
-        vectordb.client.delete(
-            collection_name=vectordb.collection_name,
-            points_selector=orphan_ids
-        )
+        # Delete via the provider method (no raw client access)
+        vectordb.delete(orphan_ids, context=context)
 
         logger.info(f"Deleted {len(orphan_ids)} orphaned chunks" + (f" for filename: {filename}" if filename else ""))
 
@@ -461,6 +439,7 @@ async def delete_orphaned_chunks(
 
 @router.get("/documents/id/{doc_id}")
 async def get_document(
+    http_request: Request,
     doc_id: str = Path(..., description="Document ID (UUID)"),
     namespace: str = "default"
 ):
@@ -482,8 +461,9 @@ async def get_document(
                 detail="Document index is not enabled. Set ENABLE_DOCUMENT_INDEX=true to use this endpoint."
             )
 
-        # Use document index to retrieve document metadata
-        doc = pipeline.document_index_provider.get_document(doc_id, namespace)
+        # Use document index (via pipeline) to retrieve document metadata
+        context = RequestContext.from_fastapi_request(http_request, namespace)
+        doc = pipeline.get_document_record(doc_id, namespace, context=context)
 
         if not doc:
             raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
@@ -511,6 +491,7 @@ async def get_document(
 
 @router.delete("/documents/id/{doc_id}")
 async def delete_document_by_id(
+    http_request: Request,
     doc_id: str = Path(..., description="Document ID (UUID) to delete"),
     namespace: str = "default",
     permanent: bool = Query(False, description="If true, permanently delete. Otherwise, soft delete to trash.")
@@ -527,51 +508,29 @@ async def delete_document_by_id(
         if not pipeline.document_index_provider:
             raise HTTPException(status_code=501, detail="Document index not available")
 
+        context = RequestContext.from_fastapi_request(http_request, namespace)
+
         if permanent:
-            # Permanent delete - delete vectors and document immediately
-            chunk_ids = pipeline.document_index_provider.get_chunk_ids(doc_id, namespace)
-
-            if not chunk_ids:
-                raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
-
-            # Delete from vector database first (atomic operation pattern)
-            vectordb = pipeline.vectordb_provider
-            vectordb.delete(chunk_ids, namespace=namespace)
-
-            # Delete from document index
-            pipeline.document_index_provider.delete_document(doc_id, namespace)
-
-            # Fire delete observers now that the doc is permanently gone
-            # (e.g. concept-link cleanup). No-op without enterprise plugins.
-            await pipeline.notify_document_deleted(doc_id, namespace)
-
-            logger.info(f"Permanently deleted document {doc_id} ({len(chunk_ids)} chunks) from {namespace}")
+            # Permanent delete - unified pipeline hard-delete (vectors, index,
+            # delete observers). Raises ValueError -> 404 if not found.
+            result = await pipeline.permanently_delete_document(doc_id, namespace, context=context)
 
             return {
                 "status": "deleted",
                 "doc_id": doc_id,
                 "namespace": namespace,
-                "chunks_deleted": len(chunk_ids),
+                "chunks_deleted": result["chunks_deleted"],
                 "message": "Document permanently deleted."
             }
         else:
-            # Soft delete - move to trash
-            result = pipeline.document_index_provider.soft_delete_document(
+            # Soft delete - move to trash (pipeline also marks vectors "deleting")
+            result = pipeline.soft_delete_document(
                 doc_id=doc_id,
                 namespace=namespace,
                 deleted_by="api",
                 delete_reason="user_initiated",
+                context=context,
             )
-
-            # Update vector status to exclude from search results
-            chunk_ids = result.get("chunk_ids", [])
-            if chunk_ids and hasattr(pipeline.vectordb_provider, "update_status"):
-                try:
-                    pipeline.vectordb_provider.update_status(chunk_ids, namespace, "deleting")
-                    logger.info(f"Updated {len(chunk_ids)} vectors to deleting status")
-                except Exception as e:
-                    # Log but don't fail - document is already in trash
-                    logger.warning(f"Failed to update vector status: {e}")
 
             return {
                 "status": "deleted",
@@ -593,6 +552,7 @@ async def delete_document_by_id(
 
 @router.delete("/documents")
 async def delete_document_by_filename(
+    http_request: Request,
     filename: str = Query(..., description="Filename to delete"),
     namespace: str = Query(..., description="Namespace containing the document")
 ):
@@ -605,57 +565,26 @@ async def delete_document_by_filename(
     """
     try:
         pipeline = get_pipeline()
+        context = RequestContext.from_fastapi_request(http_request, namespace)
 
-        # Use document index if available (preferred method)
-        if pipeline.document_index_provider:
-            # Direct GSI2 lookup by filename in the namespace
-            target_doc = pipeline.document_index_provider.get_document_by_source_path(
-                namespace=namespace,
-                filename=filename,
-            )
-
-            if not target_doc:
-                raise HTTPException(status_code=404, detail=f"Document not found: {filename}")
-
-            doc_id = target_doc.get('doc_id')
-            chunk_ids = target_doc.get('chunk_ids', [])
-
-            if not chunk_ids:
-                raise HTTPException(status_code=404, detail=f"Document has no chunks: {filename}")
-
-            # Delete from vector database first (atomic operation pattern)
-            vectordb = pipeline.vectordb_provider
-            vectordb.delete(chunk_ids, namespace=namespace)
-
-            # Delete from document index
-            pipeline.document_index_provider.delete_document(doc_id, namespace)
-
-            logger.info(f"Deleted document {filename} ({len(chunk_ids)} chunks) from {namespace}")
-
-            return {
-                "success": True,
-                "filename": filename,
-                "namespace": namespace,
-                "chunks_deleted": len(chunk_ids)
-            }
-
-        # Fallback: Use documents provider for deletion (for backwards compatibility)
-        result = pipeline.documents_provider.delete_by_metadata(
-            field="filename",
-            value=filename,
-            namespace=namespace
+        # Unified pipeline delete (document index lookup with fallback to
+        # metadata-match delete). Raises ValueError -> 404 if not found.
+        result = await pipeline.delete_documents_by_filename(
+            filename=filename,
+            namespace=namespace,
+            context=context,
         )
-
-        logger.info(f"Deleted {result['deleted']} chunks for filename: {filename}")
 
         return {
             "success": True,
             "filename": filename,
             "namespace": namespace,
-            "chunks_deleted": result["deleted"]
+            "chunks_deleted": result["chunks_deleted"]
         }
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except NotImplementedError:
         raise HTTPException(
             status_code=501,
@@ -753,6 +682,7 @@ async def update_document_metadata(
 
 @router.post("/documents/migrate-summaries")
 async def migrate_document_summaries(
+    http_request: Request,
     namespace: str | None = Query(None, description="Only migrate documents in this namespace"),
     dry_run: bool = Query(False, description="Show what would be migrated without making changes")
 ):
@@ -768,6 +698,7 @@ async def migrate_document_summaries(
     try:
         pipeline = get_pipeline()
         vectordb = pipeline.vectordb_provider
+        context = RequestContext.from_fastapi_request(http_request, namespace or "")
 
         # Provider check
         if "metadata_scan" not in vectordb.capabilities:
@@ -778,31 +709,16 @@ async def migrate_document_summaries(
                        "No migration needed."
             )
 
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
-
         # First, collect all existing summary doc_ids
         existing_summaries = set()
-        offset = None
-
-        while True:
-            points, offset = vectordb.client.scroll(
-                collection_name=vectordb.collection_name,
-                scroll_filter=Filter(
-                    must=[FieldCondition(key="_type", match=MatchValue(value="document_summary"))]
-                ),
-                limit=1000,
-                offset=offset,
-                with_payload=["doc_id"],
-                with_vectors=False
-            )
-
-            for point in points:
-                doc_id = point.payload.get("doc_id")
-                if doc_id:
-                    existing_summaries.add(doc_id)
-
-            if offset is None:
-                break
+        for record in vectordb.scan_by_metadata(
+            filter={"_type": "document_summary"},
+            fields=["doc_id"],
+            context=context
+        ):
+            doc_id = record.get("doc_id")
+            if doc_id:
+                existing_summaries.add(doc_id)
 
         # Now scan all chunks and group by doc_id
         documents = defaultdict(lambda: {
@@ -813,46 +729,29 @@ async def migrate_document_summaries(
             "headings": []
         })
 
-        scroll_filter = None
-        if namespace:
-            scroll_filter = Filter(
-                must=[FieldCondition(key="namespace", match=MatchValue(value=namespace))]
-            )
+        for record in vectordb.scan_by_metadata(
+            fields=["doc_id", "filename", "namespace", "text", "created_at", "headings", "_type"],
+            namespace=namespace,
+            context=context
+        ):
+            if record.get("_type") == "document_summary":
+                continue
 
-        offset = None
+            doc_id = record.get("doc_id")
+            if not doc_id or doc_id in existing_summaries:
+                continue
 
-        while True:
-            points, offset = vectordb.client.scroll(
-                collection_name=vectordb.collection_name,
-                scroll_filter=scroll_filter,
-                limit=1000,
-                offset=offset,
-                with_payload=["doc_id", "filename", "namespace", "text", "created_at", "headings", "_type"],
-                with_vectors=False
-            )
+            doc = documents[doc_id]
+            doc["chunks"].append(record.get("text", ""))
+            doc["filename"] = doc["filename"] or record.get("filename")
+            doc["namespace"] = doc["namespace"] or record.get("namespace", "default")
+            doc["created_at"] = doc["created_at"] or record.get("created_at")
 
-            for point in points:
-                if point.payload.get("_type") == "document_summary":
-                    continue
-
-                doc_id = point.payload.get("doc_id")
-                if not doc_id or doc_id in existing_summaries:
-                    continue
-
-                doc = documents[doc_id]
-                doc["chunks"].append(point.payload.get("text", ""))
-                doc["filename"] = doc["filename"] or point.payload.get("filename")
-                doc["namespace"] = doc["namespace"] or point.payload.get("namespace", "default")
-                doc["created_at"] = doc["created_at"] or point.payload.get("created_at")
-
-                chunk_headings = point.payload.get("headings", [])
-                if chunk_headings:
-                    for h in chunk_headings:
-                        if h and h not in doc["headings"]:
-                            doc["headings"].append(h)
-
-            if offset is None:
-                break
+            chunk_headings = record.get("headings", [])
+            if chunk_headings:
+                for h in chunk_headings:
+                    if h and h not in doc["headings"]:
+                        doc["headings"].append(h)
 
         if not documents:
             return {
@@ -902,10 +801,6 @@ async def migrate_document_summaries(
                     summary_parts.append(content_preview.strip())
 
                 summary_text = "\n".join(summary_parts)
-                summary_embedding = pipeline.embedding_provider.embed(summary_text)
-
-                import uuid
-                summary_id = str(uuid.uuid4())
                 summary_metadata = {
                     "_type": "document_summary",
                     "doc_id": doc_id,
@@ -916,12 +811,11 @@ async def migrate_document_summaries(
                     "created_at": doc["created_at"] or datetime.now(timezone.utc).isoformat(),
                 }
 
-                vectordb.insert(
-                    vectors=[summary_embedding],
-                    texts=[summary_text],
-                    metadatas=[summary_metadata],
-                    ids=[summary_id],
-                    namespace=doc["namespace"]
+                pipeline.regenerate_document_summary(
+                    summary_text=summary_text,
+                    metadata=summary_metadata,
+                    namespace=doc["namespace"],
+                    context=context
                 )
 
                 created += 1
