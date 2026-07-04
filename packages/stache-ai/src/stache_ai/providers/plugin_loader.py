@@ -17,6 +17,8 @@ Entry Point Groups:
     - stache.result_processor: Result processor middleware
     - stache.delete_observer: Delete observer middleware
     - stache.postingest_processor: Post-ingest processor middleware
+    - stache.principal_extractor: Principal extractors (caller identity)
+    - stache.authorizer: Authorization providers (operation-level policy)
     - stache.loader: Document format loaders
     - stache.chunking: Chunking strategies
 
@@ -84,6 +86,7 @@ PROVIDER_GROUPS = {
     'ingest_intake': 'stache.ingest_intake',
     'ingest_notifier': 'stache.ingest_notifier',
     'principal_extractor': 'stache.principal_extractor',
+    'authorizer': 'stache.authorizer',
     'loader': 'stache.loader',
     'chunking': 'stache.chunking',
 }

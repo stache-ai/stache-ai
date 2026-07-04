@@ -301,6 +301,13 @@ class Settings(BaseSettings):
                     "stache.principal_extractor entry point. Non-default values "
                     "are fail-closed: load failure aborts startup."
     )
+    authorization_provider: str | None = Field(
+        default=None,
+        description="Authorization provider: unset or 'allow-all' (default, no "
+                    "enforcement) or an installed stache.authorizer entry point. "
+                    "Non-default values are fail-closed: load failure aborts "
+                    "startup instead of degrading to allow-all."
+    )
 
     # ===== Ingestion Backbone (Phase 1: sync tier; all defaults are inert) =====
     ingest_queue_provider: str = Field(

@@ -45,11 +45,18 @@ app = FastAPI(
 # request.state for routes and RequestContext.from_fastapi_request.
 from fastapi.responses import JSONResponse as _JSONResponse
 
-from stache_ai.identity import AuthenticationError, build_extractor
+from stache_ai.identity import (
+    AuthenticationError,
+    ForbiddenError,
+    build_extractor,
+    get_authorizer,
+)
 
 _principal_extractor = build_extractor(settings)   # raises at import if misconfigured
+_route_authorizer = get_authorizer()               # raises at import if misconfigured (fail-closed)
 logger_boot = logging.getLogger(__name__)
 logger_boot.info(f"Principal extractor: {type(_principal_extractor).__name__}")
+logger_boot.info(f"Authorization provider: {type(_route_authorizer).__name__}")
 
 
 @app.middleware("http")
@@ -61,6 +68,12 @@ async def _identity_middleware(request, call_next):
     request.state.principal = principal
     request.state.user_id = principal.user_id
     return await call_next(request)
+
+
+@app.exception_handler(ForbiddenError)
+async def _forbidden_handler(request, exc: ForbiddenError):
+    # Authorizer denial (identity seam, S1) -> 403, same JSON shape as the 401.
+    return _JSONResponse(status_code=403, content={"detail": str(exc) or "Forbidden"})
 
 
 # CORS middleware - configure via environment for production

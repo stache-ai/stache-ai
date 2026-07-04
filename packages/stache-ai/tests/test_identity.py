@@ -24,8 +24,15 @@ def test_principal_of_passthrough():
     assert Principal.of(p) is p
 
 
-def test_assert_can_write_is_noop_stub():
-    assert assert_can_write(Principal(user_id="u"), "ns") is None
+def test_assert_can_write_allows_by_default():
+    """Nothing configured -> AllowAllAuthorizer -> writes pass through."""
+    from stache_ai import identity
+
+    identity.reset_authorizer()
+    try:
+        assert assert_can_write(Principal(user_id="u"), "ns") is None
+    finally:
+        identity.reset_authorizer()
 
 
 def test_api_principal_extracts_sub_and_opaque_claims():
@@ -222,6 +229,133 @@ def test_identity_middleware_populates_state_principal():
         # list_jobs scopes by the extracted principal - proves state wiring.
         resp = client.get("/api/jobs")
         assert resp.status_code == 200
+
+
+def test_build_authorizer_default_is_allow_all():
+    from stache_ai.identity import AllowAllAuthorizer, build_authorizer
+
+    class _Unset:
+        authorization_provider = None
+
+    class _Explicit:
+        authorization_provider = "allow-all"
+
+    assert isinstance(build_authorizer(_Unset()), AllowAllAuthorizer)
+    assert isinstance(build_authorizer(_Explicit()), AllowAllAuthorizer)
+    # Configs without the field at all (older Settings objects) also default.
+    assert isinstance(build_authorizer(object()), AllowAllAuthorizer)
+
+
+def test_build_authorizer_unknown_is_fail_closed():
+    """A configured-but-missing authorizer must abort, never fall back."""
+    import pytest as _pytest
+
+    from stache_ai.identity import build_authorizer
+
+    class _Cfg:
+        authorization_provider = "enterprise-policy"
+
+    with _pytest.raises(RuntimeError, match="Refusing to fall back"):
+        build_authorizer(_Cfg())
+
+
+def test_get_authorizer_is_cached_and_resettable():
+    from stache_ai import identity
+
+    identity.reset_authorizer()
+    try:
+        first = identity.get_authorizer()
+        assert identity.get_authorizer() is first  # process-wide singleton
+        identity.reset_authorizer()
+        second = identity.get_authorizer()
+        assert second is not first
+        assert isinstance(second, identity.AllowAllAuthorizer)
+    finally:
+        identity.reset_authorizer()
+
+
+def test_assert_can_write_delegates_to_configured_authorizer(monkeypatch):
+    """The worker-path hook enforces through the configured authorizer."""
+    import pytest as _pytest
+
+    from stache_ai import identity
+    from stache_ai.config import settings
+    from stache_ai.providers import plugin_loader
+
+    calls = []
+
+    class _Deny(identity.AuthorizationProvider):
+        def __init__(self, config=None):
+            self._config = config
+
+        def authorize(self, principal, operation, resource=None):
+            calls.append((principal, operation, resource))
+            raise identity.ForbiddenError("write denied")
+
+    plugin_loader.register_provider("authorizer", "deny-test", _Deny)
+    monkeypatch.setattr(settings, "authorization_provider", "deny-test")
+    identity.reset_authorizer()
+    try:
+        with _pytest.raises(identity.ForbiddenError, match="write denied"):
+            identity.assert_can_write(Principal(user_id="alice"), "ns-1")
+        principal, operation, resource = calls[0]
+        assert principal.user_id == "alice"
+        assert operation == "ingest"
+        assert resource == {"namespace": "ns-1"}
+    finally:
+        identity.reset_authorizer()
+        plugin_loader.reset()
+
+
+def test_worker_denial_fails_job_without_touching_pipeline(monkeypatch):
+    """The ingestion worker's defense-in-depth re-check goes through the seam."""
+    from stache_ai import identity
+    from stache_ai.config import settings
+    from stache_ai.ingestion.base import Job, JobStatus
+    from stache_ai.ingestion.worker import make_worker
+    from stache_ai.providers import plugin_loader
+
+    class _Deny(identity.AuthorizationProvider):
+        def __init__(self, config=None):
+            pass
+
+        def authorize(self, principal, operation, resource=None):
+            raise identity.ForbiddenError("write denied")
+
+    plugin_loader.register_provider("authorizer", "deny-test", _Deny)
+    monkeypatch.setattr(settings, "authorization_provider", "deny-test")
+    identity.reset_authorizer()
+
+    job = Job(
+        job_id="j1", status=JobStatus.QUEUED, namespace="ns", source="api",
+        filename="note", content_type="text", requested_by="alice",
+        metadata={"_text": "hello world"},
+    )
+
+    class _Store:
+        def get(self, job_id):
+            return job
+
+        def claim(self, job_id, *, from_statuses, to_status=None):
+            return True
+
+        def update(self, job_id, **fields):
+            for k, v in fields.items():
+                setattr(job, k, v)
+            return job
+
+    pipeline = AsyncMock()
+    notifier = type("N", (), {"publish": lambda self, e: None})()
+    try:
+        worker = make_worker(_Store(), AsyncMock(), notifier, pipeline)
+        asyncio.run(worker("j1"))
+        assert job.status == JobStatus.FAILED
+        assert "write denied" in job.error_detail
+        pipeline.ingest_text.assert_not_called()
+        pipeline.ingest_file.assert_not_called()
+    finally:
+        identity.reset_authorizer()
+        plugin_loader.reset()
 
 
 def test_broken_installed_plugin_fails_closed():

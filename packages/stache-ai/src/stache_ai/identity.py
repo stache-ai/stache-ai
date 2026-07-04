@@ -5,8 +5,10 @@ user id and an opaque claims dict; it attaches no meaning to any claim.
 Deployment-specific extensions (organizations, roles, plans) live entirely in
 external packages that read ``claims`` — the core never interprets them.
 
-``assert_can_write`` is the namespace write-authorization hook (finding S1).
-It is a no-op here; enforcement ships as a pluggable authorizer.
+``AuthorizationProvider`` is the pluggable authorization seam (finding S1).
+The default ``AllowAllAuthorizer`` preserves the OSS single-user posture;
+deployment-specific policy plugs in via the ``stache.authorizer`` entry point
+and is fail-closed: a configured-but-unloadable authorizer aborts startup.
 """
 
 from __future__ import annotations
@@ -25,6 +27,14 @@ class AuthenticationError(Exception):
 
     The API layer maps this to a 401. The core NEVER swallows it into an
     anonymous principal — a configured extractor is fail-closed.
+    """
+
+
+class ForbiddenError(Exception):
+    """Raised by an AuthorizationProvider to deny an operation.
+
+    The API layer maps this to a 403. The ingestion worker lets it fail the
+    job. The core never catches-and-continues past a denial.
     """
 
 
@@ -52,13 +62,87 @@ class Principal:
         return cls(user_id=value or ANONYMOUS)
 
 
-def assert_can_write(principal: Principal, namespace: str) -> None:
-    """Namespace write authorization hook.
+class AuthorizationProvider(ABC):
+    """Pluggable authorization seam (entry point: stache.authorizer).
 
-    NO-OP stub (finding S1). Routes and the ingestion worker call this so
-    enforcement lands in one place when an authorizer is installed.
+    Contract: ``authorize`` returns None to allow, raises ForbiddenError to
+    deny. ``operation`` is a neutral verb string (e.g. "ingest",
+    "delete_document"); ``resource`` is an opaque dict with keys like
+    "namespace" or "owner" when available. The core attaches no policy of its
+    own — actual rules live entirely in external packages.
     """
-    return None
+
+    @abstractmethod
+    def authorize(self, principal: Principal, operation: str, resource: dict | None = None) -> None:
+        """Allow (return None) or deny (raise ForbiddenError) an operation."""
+
+
+class AllowAllAuthorizer(AuthorizationProvider):
+    """Default authorizer: every operation is allowed (OSS single-user posture)."""
+
+    def __init__(self, config=None):
+        self._config = config
+
+    def authorize(self, principal: Principal, operation: str, resource: dict | None = None) -> None:
+        return None
+
+
+DEFAULT_AUTHORIZER = "allow-all"
+
+
+def build_authorizer(config) -> AuthorizationProvider:
+    """Instantiate the configured authorizer. FAIL-CLOSED.
+
+    Unset/None/"allow-all" yields the permissive default. Any other value must
+    resolve via the ``stache.authorizer`` entry point group; a misconfigured or
+    unloadable authorizer raises instead of silently falling back — falling
+    back would strip enforcement from a deployment that configured it.
+    """
+    name = getattr(config, "authorization_provider", None)
+    if name in (None, "", DEFAULT_AUTHORIZER):
+        return AllowAllAuthorizer(config)
+    from stache_ai.providers.plugin_loader import get_providers
+    available = get_providers("authorizer")
+    if name not in available:
+        raise RuntimeError(
+            f"Configured authorization provider '{name}' is not installed "
+            f"(available: {sorted(available) or 'none'}). Refusing to fall "
+            f"back to the allow-all authorizer."
+        )
+    cls = available[name]
+    try:
+        return cls(config)
+    except TypeError:
+        return cls()
+
+
+_authorizer: AuthorizationProvider | None = None
+
+
+def get_authorizer() -> AuthorizationProvider:
+    """Process-wide authorizer built lazily from the global settings."""
+    global _authorizer
+    if _authorizer is None:
+        from stache_ai.config import settings
+        _authorizer = build_authorizer(settings)
+        logger.info(f"Authorization provider: {type(_authorizer).__name__}")
+    return _authorizer
+
+
+def reset_authorizer() -> None:
+    """Discard the cached authorizer (tests / config reloads)."""
+    global _authorizer
+    _authorizer = None
+
+
+def assert_can_write(principal: Principal, namespace: str) -> None:
+    """Namespace write authorization hook (finding S1).
+
+    Delegates to the configured authorizer so route intake, the ingestion
+    worker, and the producer-drop path all enforce through one seam. Raises
+    ForbiddenError on denial.
+    """
+    get_authorizer().authorize(principal, "ingest", {"namespace": namespace})
 
 
 class PrincipalExtractor(ABC):
