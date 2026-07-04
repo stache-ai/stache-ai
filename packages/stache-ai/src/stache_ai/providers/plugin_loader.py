@@ -128,9 +128,15 @@ def discover_providers(group: str) -> dict[str, ProviderType]:
                 # Missing optional dependency - this is expected and normal
                 logger.debug(f"Skipping {group}.{ep.name}: missing dependency - {e}")
             except Exception as e:
-                # Unexpected error - log as warning
-                logger.warning(f"Failed to load provider {group}.{ep.name}: {e}")
+                # FAIL-CLOSED: the package registering this entry point IS
+                # installed, so a load failure means a broken plugin — and a
+                # silently-skipped plugin may be an access-control layer.
+                raise RuntimeError(
+                    f"Installed provider {group}.{ep.name} failed to load: {e}"
+                ) from e
 
+    except RuntimeError:
+        raise   # fail-closed: broken installed plugin (raised above)
     except Exception as e:
         logger.warning(f"Failed to discover providers for {group}: {e}")
 

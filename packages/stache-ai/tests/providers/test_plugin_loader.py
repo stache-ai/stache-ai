@@ -72,8 +72,9 @@ class TestPluginLoaderDiscovery:
         assert 'broken_provider' not in providers
 
     @patch('importlib.metadata.entry_points')
-    def test_handles_load_exception_gracefully(self, mock_eps):
-        """Should handle unexpected exceptions during load"""
+    def test_broken_installed_plugin_raises(self, mock_eps):
+        """An installed plugin that errors on load must abort (fail-closed),
+        not vanish with a warning - it may be an access-control layer."""
         mock_ep = MagicMock()
         mock_ep.name = 'error_provider'
         mock_ep.load.side_effect = RuntimeError("Unexpected error")
@@ -81,9 +82,9 @@ class TestPluginLoaderDiscovery:
         mock_eps.return_value.select.return_value = [mock_ep]
 
         plugin_loader.reset()
-        providers = plugin_loader.discover_providers('stache.llm')
+        with pytest.raises(RuntimeError, match="failed to load"):
+            plugin_loader.discover_providers('stache.llm')
 
-        assert 'error_provider' not in providers
 
 
 class TestPluginLoaderRegistration:

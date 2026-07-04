@@ -197,11 +197,15 @@ class RAGPipeline:
         return self._namespace_provider_instance
 
     def _get_namespace_provider(self):
-        """Get namespace provider, returns None if not configured."""
-        try:
-            return self.namespace_provider
-        except Exception:
+        """Get namespace provider, or None only when none is configured.
+
+        FAIL-CLOSED: a provider that is configured but cannot be built must
+        raise, not silently disappear — namespace scoping may be a security
+        control in some deployments.
+        """
+        if not getattr(self.config, "namespace_provider", None):
             return None
+        return self.namespace_provider
 
     @property
     def concept_index(self):

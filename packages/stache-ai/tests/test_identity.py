@@ -222,3 +222,22 @@ def test_identity_middleware_populates_state_principal():
         # list_jobs scopes by the extracted principal - proves state wiring.
         resp = client.get("/api/jobs")
         assert resp.status_code == 200
+
+
+def test_broken_installed_plugin_fails_closed():
+    """An installed entry point that errors on load must abort discovery."""
+    from unittest.mock import MagicMock, patch as _patch
+
+    import pytest as _pytest
+
+    from stache_ai.providers import plugin_loader
+
+    bad_ep = MagicMock()
+    bad_ep.name = "broken-isolation-layer"
+    bad_ep.load.side_effect = AttributeError("half-installed package")
+
+    eps = MagicMock()
+    eps.select.return_value = [bad_ep]
+    with _patch.object(plugin_loader.importlib.metadata, "entry_points", return_value=eps):
+        with _pytest.raises(RuntimeError, match="failed to load"):
+            plugin_loader.discover_providers("stache.result_processor")

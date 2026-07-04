@@ -94,7 +94,10 @@ for ep in entry_points(group="stache.routes"):
         app.include_router(router, prefix="/api", tags=[ep.name])
         logger.info(f"Loaded route plugin: {ep.name}")
     except Exception as e:
-        logger.warning(f"Failed to load route plugin {ep.name}: {e}")
+        # FAIL-CLOSED: the plugin package is installed, so this is a broken
+        # deployment — and a silently-dropped route plugin may be the layer
+        # enforcing access control. Abort instead of serving without it.
+        raise RuntimeError(f"Installed route plugin {ep.name} failed to load: {e}") from e
 
 # Serve static frontend files
 static_dir = Path("/app/static")

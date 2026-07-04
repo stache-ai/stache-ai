@@ -379,11 +379,12 @@ class RerankerProviderFactory:
 
         if provider_name == "cohere":
             if not settings.cohere_api_key:
-                logger.warning("Cohere API key not set, falling back to simple reranker")
-                simple_class = plugin_loader.get_provider_class('reranker', 'simple')
-                if simple_class:
-                    return simple_class(dedupe_threshold=settings.reranker_dedupe_threshold)
-                raise ValueError("Cohere API key not set and simple reranker not available")
+                # FAIL-CLOSED: the operator configured cohere; silently running
+                # a different reranker hides the misconfiguration.
+                raise ValueError(
+                    "RERANKER_PROVIDER=cohere but COHERE_API_KEY is not set. "
+                    "Set the key or configure RERANKER_PROVIDER=simple."
+                )
             logger.info("Creating Cohere reranker")
             return provider_class(api_key=settings.cohere_api_key)
 
