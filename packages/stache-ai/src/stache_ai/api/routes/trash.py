@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from stache_ai.api import auth
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -30,6 +31,10 @@ async def list_trash_documents(
     next_key: str | None = None,
 ) -> dict[str, Any]:
     """List documents in trash (30-day retention)."""
+    # S1 enforcement
+    auth.authorize(http_request, "read_document",
+                   {"namespace": namespace} if namespace else None)
+
     pipeline = get_pipeline()
 
     if not pipeline.document_index_provider:
@@ -54,6 +59,9 @@ async def restore_document(
     http_request: Request,
 ) -> dict[str, Any]:
     """Restore document from trash."""
+    # S1 enforcement
+    auth.authorize(http_request, "restore_document", {"namespace": request.namespace})
+
     pipeline = get_pipeline()
 
     if not pipeline.document_index_provider:
@@ -81,6 +89,9 @@ async def permanently_delete_document(
     http_request: Request,
 ) -> dict[str, Any]:
     """Permanently delete document from trash (irreversible)."""
+    # S1 enforcement
+    auth.authorize(http_request, "purge_trash", {"namespace": request.namespace})
+
     pipeline = get_pipeline()
 
     if not pipeline.document_index_provider:

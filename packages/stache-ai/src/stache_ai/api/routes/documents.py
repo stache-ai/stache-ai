@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
+from stache_ai.api import auth
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -40,6 +41,10 @@ async def list_documents(
     - limit: Maximum documents per page (default 100, max 1000)
     - next_key: Pagination token from previous response for loading more results
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "read_document",
+                   {"namespace": namespace} if namespace else None)
+
     try:
         pipeline = get_pipeline()
         vectordb = pipeline.vectordb_provider
@@ -277,6 +282,10 @@ async def discover_documents(
 
     Returns documents ranked by semantic similarity to the query.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "read_document",
+                   {"namespace": namespace} if namespace else None)
+
     try:
         pipeline = get_pipeline()
         context = RequestContext.from_fastapi_request(http_request, namespace or "")
@@ -329,6 +338,9 @@ async def get_chunks_by_ids(
 
     Example: /api/documents/chunks?point_ids=abc123,def456,ghi789
     """
+    # S1 enforcement (namespace unknown until the chunks are loaded).
+    auth.authorize(http_request, "read_document")
+
     ids = [pid.strip() for pid in point_ids.split(",") if pid.strip()]
     if not ids:
         raise HTTPException(status_code=400, detail="point_ids cannot be empty")
@@ -374,6 +386,9 @@ async def delete_orphaned_chunks(
 
     Note: Currently Qdrant-only. Orphaned chunks are legacy data.
     """
+    # S1 enforcement (orphaned chunks predate namespaces; none is known here).
+    auth.authorize(http_request, "delete_document")
+
     if not filename and not all_orphaned:
         raise HTTPException(
             status_code=400,
@@ -451,6 +466,9 @@ async def get_document(
     Requires Phase 2 document index (enabled by default via ENABLE_DOCUMENT_INDEX).
     Works for both Qdrant and S3 Vectors providers.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "read_document", {"namespace": namespace})
+
     try:
         pipeline = get_pipeline()
 
@@ -502,6 +520,9 @@ async def delete_document_by_id(
     Default: Soft delete (move to trash) with 30-day retention.
     Query param ?permanent=true for immediate permanent delete.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "delete_document", {"namespace": namespace})
+
     try:
         pipeline = get_pipeline()
 
@@ -563,6 +584,9 @@ async def delete_document_by_filename(
     Uses document index to find document by filename, then deletes vectors
     from vector database and entry from document index in atomic operation.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "delete_document", {"namespace": namespace})
+
     try:
         pipeline = get_pipeline()
         context = RequestContext.from_fastapi_request(http_request, namespace)
@@ -605,6 +629,7 @@ class DocumentUpdateRequest(BaseModel):
 
 @router.patch("/documents/{doc_id}")
 async def update_document_metadata(
+    http_request: Request,
     doc_id: str = Path(..., description="Document UUID to update"),
     current_namespace: str = Query("default", description="Current namespace"),
     body: DocumentUpdateRequest = Body(...)
@@ -640,6 +665,9 @@ async def update_document_metadata(
     {"metadata": {"author": "John Doe", "tags": ["important"]}}
     ```
     """
+    # S1 enforcement: check against the document's current namespace.
+    auth.authorize(http_request, "update_document", {"namespace": current_namespace})
+
     # Build updates dict from request body
     updates = {}
     if body.namespace is not None:
@@ -692,6 +720,10 @@ async def migrate_document_summaries(
     Note: Currently Qdrant-only due to requiring full collection scan.
     S3 Vectors users: summaries are created automatically during ingestion.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "regenerate_summary",
+                   {"namespace": namespace} if namespace else None)
+
     from collections import defaultdict
     from datetime import datetime, timezone
 

@@ -51,7 +51,8 @@ def _status_code(status: JobStatus) -> int:
 async def ingest(request: IngestRequest, http_request: Request):
     principal = auth.principal(http_request)
     namespace = request.namespace or settings.default_namespace
-    auth.assert_can_write(principal, namespace)   # S1 hook (no-op in Phase 1)
+    # S1 enforcement: covers both direct submission and the upload-begin flow.
+    auth.authorize(http_request, "ingest", {"namespace": namespace})
 
     service = get_ingestion_service()
 
@@ -111,6 +112,7 @@ async def ingest(request: IngestRequest, http_request: Request):
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str, http_request: Request):
     principal = auth.principal(http_request)
+    auth.authorize(http_request, "read_job")
     service = get_ingestion_service()
     job = service.get_job(job_id)
     # Scope to the requester; 404 (not 403) on mismatch so we don't leak existence.
@@ -126,6 +128,7 @@ async def list_jobs(
     limit: int = 50,
 ):
     principal = auth.principal(http_request)
+    auth.authorize(http_request, "read_job")
     status_filter = None
     if status is not None:
         try:

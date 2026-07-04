@@ -50,6 +50,11 @@ async def capture_thought(request: CaptureRequest, http_request: Request):
     - Optional namespace for multi-user/multi-project isolation
     - Optional AI-powered organization suggestions
     """
+    principal = auth.principal(http_request)
+    namespace = request.namespace or settings.default_namespace
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "capture", {"namespace": namespace})
+
     try:
         # Carry organization flags + prepend list as metadata for the pipeline.
         metadata = strip_reserved_metadata(request.metadata)
@@ -59,10 +64,6 @@ async def capture_thought(request: CaptureRequest, http_request: Request):
             metadata["_apply_suggestions"] = True
         if request.prepend_metadata:
             metadata["_prepend_metadata"] = request.prepend_metadata
-
-        principal = auth.principal(http_request)
-        namespace = request.namespace or settings.default_namespace
-        auth.assert_can_write(principal, namespace)
 
         service = get_ingestion_service()
         job = await service.submit(

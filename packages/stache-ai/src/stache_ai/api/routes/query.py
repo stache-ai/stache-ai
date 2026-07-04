@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from stache_ai.api import auth
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -36,6 +37,10 @@ async def query_knowledge(request: QueryRequest, http_request: Request):
     - model: Optional model ID to use for synthesis (e.g., us.anthropic.claude-3-5-sonnet-20241022-v2:0)
     - filter: Optional metadata filter (e.g., {"source": "meeting notes"})
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "query",
+                   {"namespace": request.namespace} if request.namespace else None)
+
     try:
         pipeline = get_pipeline()
 

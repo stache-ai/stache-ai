@@ -2,9 +2,10 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from stache_ai.api import auth
 from stache_ai.models.insight import InsightCreate
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -35,13 +36,16 @@ class InsightSearchResponse(BaseModel):
 
 
 @router.post("/insights", response_model=dict)
-async def create_insight(request: InsightCreate):
+async def create_insight(request: InsightCreate, http_request: Request):
     """
     Create a new insight (user note with semantic search capability)
 
     The insight will be indexed and immediately searchable.
     Optional tags help with categorization and discovery.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "create_insight", {"namespace": request.namespace})
+
     try:
         pipeline = get_pipeline()
 
@@ -66,6 +70,7 @@ async def create_insight(request: InsightCreate):
 
 @router.get("/insights/search", response_model=InsightSearchResponse)
 async def search_insights(
+    http_request: Request,
     query: str = Query(..., min_length=1, description="Search query"),
     namespace: str = Query(..., description="Namespace to search within"),
     top_k: int = Query(10, ge=1, le=100, description="Maximum results to return")
@@ -76,6 +81,9 @@ async def search_insights(
     Returns the most relevant insights based on semantic similarity to the query.
     Results are scoped to the specified namespace.
     """
+    # S1 enforcement
+    auth.authorize(http_request, "query", {"namespace": namespace})
+
     try:
         pipeline = get_pipeline()
 
@@ -110,6 +118,7 @@ async def search_insights(
 @router.delete("/insights/{insight_id}")
 async def delete_insight(
     insight_id: str,
+    http_request: Request,
     namespace: str = Query(..., description="Namespace containing the insight")
 ):
     """
@@ -118,6 +127,9 @@ async def delete_insight(
     Removes the insight from the knowledge base permanently.
     The namespace must match the insight's namespace for security.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "delete_insight", {"namespace": namespace})
+
     try:
         pipeline = get_pipeline()
 

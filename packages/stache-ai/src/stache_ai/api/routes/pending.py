@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from stache_ai.api import auth
 from stache_ai.config import settings
 from stache_ai.loaders import load_document
 from stache_ai.middleware.context import RequestContext
@@ -114,6 +115,9 @@ async def approve_pending(item_id: str, request: ApproveRequest, http_request: R
 
     This ingests the document with the provided metadata and removes it from the queue.
     """
+    # S1 enforcement: approval writes into the target namespace.
+    auth.authorize(http_request, "approve_pending", {"namespace": request.namespace})
+
     queue_dir = get_queue_dir()
     json_path = queue_dir / f"{item_id}.json"
     pdf_path = queue_dir / f"{item_id}.pdf"
@@ -177,12 +181,15 @@ async def approve_pending(item_id: str, request: ApproveRequest, http_request: R
 
 
 @router.delete("/pending/{item_id}")
-async def delete_pending(item_id: str):
+async def delete_pending(item_id: str, http_request: Request):
     """
     Delete a pending item without uploading
 
     This removes the item from the queue entirely.
     """
+    # S1 enforcement (no namespace: the item was never assigned one).
+    auth.authorize(http_request, "reject_pending")
+
     queue_dir = get_queue_dir()
     json_path = queue_dir / f"{item_id}.json"
     pdf_path = queue_dir / f"{item_id}.pdf"

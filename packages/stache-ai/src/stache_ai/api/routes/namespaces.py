@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
+from stache_ai.api import auth
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -131,6 +132,9 @@ async def create_namespace(data: NamespaceCreate, http_request: Request):
     Namespaces organize your knowledge base into logical sections.
     Use hierarchical IDs like 'mba/finance/corporate-finance' for nested organization.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "create_namespace", {"namespace": data.id})
+
     try:
         context = RequestContext.from_fastapi_request(http_request, data.id)
         provider = get_namespace_provider()
@@ -167,6 +171,10 @@ async def list_namespaces(
     - With include_children=true: Returns all namespaces as a flat list
     - With include_stats=true (default): Adds doc_count and chunk_count
     """
+    # S1 enforcement
+    auth.authorize(http_request, "read_namespace",
+                   {"namespace": parent_id} if parent_id else None)
+
     try:
         context = RequestContext.from_fastapi_request(http_request, parent_id or "")
         provider = get_namespace_provider()
@@ -195,6 +203,10 @@ async def get_namespace_tree(
 
     Returns nested structure with 'children' arrays for navigation UI.
     """
+    # S1 enforcement
+    auth.authorize(http_request, "read_namespace",
+                   {"namespace": root_id} if root_id else None)
+
     try:
         context = RequestContext.from_fastapi_request(http_request, root_id or "")
         provider = get_namespace_provider()
@@ -231,6 +243,9 @@ async def get_namespace(
 
     Also returns the namespace path (breadcrumb) and ancestors.
     """
+    # S1 enforcement
+    auth.authorize(http_request, "read_namespace", {"namespace": namespace_id})
+
     try:
         context = RequestContext.from_fastapi_request(http_request, namespace_id)
         provider = get_namespace_provider()
@@ -263,6 +278,9 @@ async def update_namespace(
 
     Only provided fields will be updated. Metadata is merged with existing.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "update_namespace", {"namespace": namespace_id})
+
     try:
         context = RequestContext.from_fastapi_request(http_request, namespace_id)
         provider = get_namespace_provider()
@@ -312,6 +330,9 @@ async def delete_namespace(
 
     By default, fails if namespace has children (use cascade=true to force).
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "delete_namespace", {"namespace": namespace_id})
+
     try:
         context = RequestContext.from_fastapi_request(http_request, namespace_id)
         provider = get_namespace_provider()
@@ -391,6 +412,9 @@ async def list_namespace_documents(
     Returns documents with their metadata from the vector DB.
     Uses the provider-agnostic list_by_filter method.
     """
+    # S1 enforcement
+    auth.authorize(http_request, "read_document", {"namespace": namespace_id})
+
     try:
         context = RequestContext.from_fastapi_request(http_request, namespace_id)
 

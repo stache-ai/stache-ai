@@ -7,6 +7,8 @@ import tempfile
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from stache_ai.api import auth
+from stache_ai.config import settings
 from stache_ai.middleware.context import RequestContext
 from stache_ai.sanitize import strip_reserved_metadata
 from stache_ai.rag.pipeline import get_pipeline
@@ -60,6 +62,9 @@ async def upload_document(
                       Example: "speaker,topic" with metadata {"speaker": "Dr. Anderson", "topic": "Faith"}
                       will prepend "Speaker: Dr. Anderson\nTopic: Faith\n\n" to each chunk.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "upload", {"namespace": namespace or settings.default_namespace})
+
     try:
         # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
@@ -130,6 +135,9 @@ async def batch_upload_documents(
     Returns:
         Results for each file with success/failure status
     """
+    # S1 enforcement: authorize once for the whole batch.
+    auth.authorize(http_request, "upload", {"namespace": namespace or settings.default_namespace})
+
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
