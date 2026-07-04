@@ -47,8 +47,11 @@ def get_queue_dir() -> Path:
 
 
 @router.get("/pending")
-async def list_pending() -> list[PendingItem]:
+async def list_pending(http_request: Request) -> list[PendingItem]:
     """List all pending items in the queue"""
+    # S1 enforcement (no namespace: items span namespaces until approved).
+    auth.authorize(http_request, "read_pending")
+
     queue_dir = get_queue_dir()
 
     if not queue_dir.exists():
@@ -70,8 +73,11 @@ async def list_pending() -> list[PendingItem]:
 
 
 @router.get("/pending/{item_id}")
-async def get_pending(item_id: str) -> PendingItem:
+async def get_pending(item_id: str, http_request: Request) -> PendingItem:
     """Get a specific pending item"""
+    # S1 enforcement (before the read: namespace isn't known until the file is loaded).
+    auth.authorize(http_request, "read_pending")
+
     queue_dir = get_queue_dir()
     json_path = queue_dir / f"{item_id}.json"
 
@@ -85,8 +91,11 @@ async def get_pending(item_id: str) -> PendingItem:
 
 
 @router.get("/pending/{item_id}/thumbnail")
-async def get_thumbnail(item_id: str):
+async def get_thumbnail(item_id: str, http_request: Request):
     """Get the thumbnail image for a pending item"""
+    # S1 enforcement (no namespace: pending items aren't namespaced yet).
+    auth.authorize(http_request, "read_pending")
+
     queue_dir = get_queue_dir()
     thumb_path = queue_dir / f"{item_id}.jpg"
 
@@ -97,8 +106,11 @@ async def get_thumbnail(item_id: str):
 
 
 @router.get("/pending/{item_id}/pdf")
-async def get_pdf(item_id: str):
+async def get_pdf(item_id: str, http_request: Request):
     """Get the PDF file for a pending item"""
+    # S1 enforcement (no namespace: pending items aren't namespaced yet).
+    auth.authorize(http_request, "read_pending")
+
     queue_dir = get_queue_dir()
     pdf_path = queue_dir / f"{item_id}.pdf"
 

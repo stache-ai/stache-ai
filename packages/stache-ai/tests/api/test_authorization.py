@@ -89,6 +89,10 @@ READ_CALLS = [
     ("read_namespace", "GET", "/api/namespaces", {}),
     ("read_job", "GET", "/api/jobs", {}),
     ("read_job", "GET", "/api/jobs/j-1", {}),
+    ("read_pending", "GET", "/api/pending", {}),
+    ("read_pending", "GET", "/api/pending/item-1", {}),
+    ("read_pending", "GET", "/api/pending/item-1/thumbnail", {}),
+    ("read_pending", "GET", "/api/pending/item-1/pdf", {}),
 ]
 
 
