@@ -16,6 +16,8 @@ import asyncio
 import json
 import logging
 
+from stache_ai.identity import Principal, assert_can_write
+
 from .base import TERMINAL, Job, JobStatus
 from .factory import get_ingestion_service
 
@@ -78,6 +80,13 @@ def _ingest_dropped_object(rec, service):
         return None
 
     # Raw producer drop (Phase 2 path): create a Job from the object's metadata.
+    from stache_ai.config import settings as _settings
+    if not _settings.ingest_producer_drops_enabled:
+        logger.warning(
+            f"[ingest] ignoring producer drop {logical}: producer drops are disabled "
+            f"(INGEST_PRODUCER_DROPS_ENABLED=false)"
+        )
+        return None
     return _create_producer_job(rec, service, logical)
 
 
@@ -94,14 +103,24 @@ def _create_producer_job(rec, service, logical):
     # silently fall back to defaults (octet-stream / "producer").
     meta = {k.replace("-", "_"): v for k, v in raw.items()}
     now = datetime.now(timezone.utc).isoformat()
+    namespace = meta.get("namespace", settings.default_namespace)
+    requested_by = meta.get("requested_by", "producer")
+    # Authorization hook (S1): object metadata is producer-asserted, not verified
+    # identity. The bucket policy is the real boundary for this path; deployments
+    # needing verified callers should disable producer drops instead.
+    assert_can_write(Principal(user_id=requested_by), namespace)
+    logger.info(
+        f"[ingest] producer drop accepted: key={logical} namespace={namespace} "
+        f"requested_by={requested_by}"
+    )
     job = Job(
         job_id=str(uuid.uuid4()),
         status=JobStatus.QUEUED,
-        namespace=meta.get("namespace", settings.default_namespace),
+        namespace=namespace,
         source="producer",
         filename=meta.get("filename", logical.rsplit("/", 1)[-1]),
         content_type=meta.get("content_type", "application/octet-stream"),
-        requested_by=meta.get("requested_by", "producer"),
+        requested_by=requested_by,
         blob_key=logical,
         metadata={},
         created_at=now,

@@ -307,6 +307,13 @@ class Settings(BaseSettings):
         default="inline",
         description="Ingestion queue provider: inline | sqs(P2) | redis(P5)"
     )
+    ingest_producer_drops_enabled: bool = Field(
+        default=True,
+        description="Accept raw S3 producer drops (objects landing in the "
+                    "originals bucket without a pre-created job). The bucket "
+                    "policy is the auth boundary for this path; disable it in "
+                    "deployments that require verified callers."
+    )
     ingest_jobstore_provider: str = Field(
         default="ephemeral",
         description="Ingestion job store: ephemeral | sqlite | dynamodb(P2)"
