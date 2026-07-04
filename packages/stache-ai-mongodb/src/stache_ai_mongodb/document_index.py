@@ -75,7 +75,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         headings: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         file_type: Optional[str] = None,
-        file_size: Optional[int] = None
+        file_size: Optional[int] = None,
+        context=None
     ) -> Dict[str, Any]:
         """Create document index entry
 
@@ -134,7 +135,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
     def get_document(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> Optional[Dict[str, Any]]:
         """Retrieve a document by ID
 
@@ -165,7 +167,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         self,
         namespace: Optional[str] = None,
         limit: int = 100,
-        last_evaluated_key: Optional[Dict[str, Any]] = None
+        last_evaluated_key: Optional[Dict[str, Any]] = None,
+        context=None
     ) -> Dict[str, Any]:
         """List documents with pagination support
 
@@ -222,7 +225,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
     def delete_document(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> bool:
         """Delete a document index entry
 
@@ -257,7 +261,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         summary: str,
         summary_embedding_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> bool:
         """Update the summary and summary embedding ID for a document
 
@@ -301,7 +306,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         self,
         doc_id: str,
         namespace: str,
-        updates: dict[str, Any]
+        updates: dict[str, Any],
+        context=None
     ) -> bool:
         """Update document metadata (namespace, filename, custom metadata)
 
@@ -422,7 +428,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
     def get_chunk_ids(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[str]:
         """Retrieve all chunk IDs for a document
 
@@ -445,7 +452,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
     def document_exists(
         self,
         filename: str,
-        namespace: str
+        namespace: str,
+        context=None
     ) -> bool:
         """Check if a document with the given filename already exists in namespace
 
@@ -485,7 +493,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         source_path: str | None = None,
         file_size: int | None = None,
         file_modified_at: str | None = None,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
+        context=None
     ) -> bool:
         """MongoDB provider does not support deduplication features"""
         raise NotImplementedError(
@@ -498,7 +507,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         content_hash: str,
         filename: str,
         namespace: str,
-        source_path: str | None = None
+        source_path: str | None = None,
+        context=None
     ) -> dict[str, Any] | None:
         """MongoDB provider does not support deduplication features"""
         raise NotImplementedError(
@@ -513,7 +523,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         namespace: str,
         doc_id: str,
         chunk_count: int,
-        source_path: str | None = None
+        source_path: str | None = None,
+        context=None
     ) -> None:
         """MongoDB provider does not support deduplication features"""
         raise NotImplementedError(
@@ -526,7 +537,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         content_hash: str,
         filename: str,
         namespace: str,
-        source_path: str | None = None
+        source_path: str | None = None,
+        context=None
     ) -> None:
         """MongoDB provider does not support deduplication features"""
         raise NotImplementedError(
@@ -541,7 +553,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         namespace: str,
         deleted_by: str | None = None,
-        delete_reason: str = "user_initiated"
+        delete_reason: str = "user_initiated",
+        context=None
     ) -> dict[str, Any]:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(
@@ -554,7 +567,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         namespace: str,
         deleted_at_ms: int,
-        restored_by: str | None = None
+        restored_by: str | None = None,
+        context=None
     ) -> dict[str, Any]:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(
@@ -566,7 +580,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         self,
         namespace: str | None = None,
         limit: int = 50,
-        next_key: str | None = None
+        next_key: str | None = None,
+        context=None
     ) -> dict[str, Any]:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(
@@ -581,6 +596,7 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         deleted_at_ms: int,
         deleted_by: str | None = None,
         filename: str | None = None,
+        context=None
     ) -> dict[str, Any]:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(
@@ -594,6 +610,7 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
         namespace: str,
         deleted_at_ms: int,
         filename: str,
+        context=None
     ) -> None:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(
@@ -601,14 +618,14 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
             "Use DynamoDB provider for trash/restore functionality."
         )
 
-    def list_cleanup_jobs(self, limit: int = 10) -> list[dict[str, Any]]:
+    def list_cleanup_jobs(self, limit: int = 10, context=None) -> list[dict[str, Any]]:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(
             "MongoDB provider does not support soft delete and trash features. "
             "Use DynamoDB provider for trash/restore functionality."
         )
 
-    def delete_cleanup_job(self, cleanup_job_id: str) -> None:
+    def delete_cleanup_job(self, cleanup_job_id: str, context=None) -> None:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(
             "MongoDB provider does not support soft delete and trash features. "
@@ -618,7 +635,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
     def mark_cleanup_job_failed(
         self,
         cleanup_job_id: str,
-        error_message: str
+        error_message: str,
+        context=None
     ) -> None:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(
@@ -629,7 +647,8 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
     def list_expired_trash(
         self,
         limit: int = 100,
-        next_key: str | None = None
+        next_key: str | None = None,
+        context=None
     ) -> dict[str, Any]:
         """MongoDB provider does not support trash/restore features"""
         raise NotImplementedError(

@@ -166,6 +166,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         source_path: Optional[str] = None,
         content_hash: Optional[str] = None,
         chunk_count: Optional[int] = None,
+        context=None
     ) -> Dict[str, Any]:
         """Create document index entry with active status by default
 
@@ -242,7 +243,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
     def get_document(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> Optional[Dict[str, Any]]:
         """Retrieve a document by ID
 
@@ -276,7 +278,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         self,
         namespace: Optional[str] = None,
         limit: int = 100,
-        last_evaluated_key: Optional[Dict[str, Any]] = None
+        last_evaluated_key: Optional[Dict[str, Any]] = None,
+        context=None
     ) -> Dict[str, Any]:
         """List documents with pagination support
 
@@ -349,7 +352,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
     def delete_document(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> bool:
         """Delete a document index entry
 
@@ -385,7 +389,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         summary: str,
         summary_embedding_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> bool:
         """Update the summary and summary embedding ID for a document
 
@@ -427,7 +432,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         self,
         doc_id: str,
         namespace: str,
-        updates: dict[str, Any]
+        updates: dict[str, Any],
+        context=None
     ) -> bool:
         """Update document metadata atomically in DynamoDB
 
@@ -594,7 +600,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
     def get_chunk_ids(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[str]:
         """Retrieve all chunk IDs for a document
 
@@ -617,7 +624,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
     def document_exists(
         self,
         filename: str,
-        namespace: str
+        namespace: str,
+        context=None
     ) -> bool:
         """Check if a document with the given filename already exists in namespace
 
@@ -647,6 +655,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         namespace: str,
         source_path: str | None = None,
         filename: str | None = None,
+        context=None
     ) -> Optional[Dict[str, Any]]:
         """Find active document by source_path or filename using GSI2.
 
@@ -697,7 +706,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             logger.error(f"Failed to lookup document by source_path {identifier}: {e}")
             return None
 
-    def count_by_namespace(self, namespace: str) -> dict[str, int]:
+    def count_by_namespace(self, namespace: str, context=None) -> dict[str, int]:
         """Get document and chunk counts for a namespace
 
         Uses GSI1 to efficiently query all documents in a namespace
@@ -782,7 +791,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         source_path: Optional[str] = None,
         file_size: Optional[int] = None,
         file_modified_at: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        context=None
     ) -> bool:
         """Atomically reserve identifier using DynamoDB conditional put.
 
@@ -838,7 +848,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         content_hash: str,
         filename: str,
         namespace: str,
-        source_path: Optional[str] = None
+        source_path: Optional[str] = None,
+        context=None
     ) -> Optional[Dict[str, Any]]:
         """Retrieve document by identifier (strongly consistent read).
 
@@ -888,7 +899,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         namespace: str,
         doc_id: str,
         chunk_count: int,
-        source_path: Optional[str] = None
+        source_path: Optional[str] = None,
+        context=None
     ) -> None:
         """Mark identifier reservation as complete.
 
@@ -923,7 +935,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         content_hash: str,
         filename: str,
         namespace: str,
-        source_path: Optional[str] = None
+        source_path: Optional[str] = None,
+        context=None
     ) -> None:
         """Release identifier reservation on failure.
 
@@ -949,7 +962,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         namespace: str,
         deleted_by: Optional[str] = None,
-        delete_reason: str = "user_initiated"
+        delete_reason: str = "user_initiated",
+        context=None
     ) -> Dict[str, Any]:
         """
         Soft delete using DynamoDB transaction (atomic).
@@ -1091,7 +1105,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         namespace: str,
         deleted_at_ms: int,
-        restored_by: Optional[str] = None
+        restored_by: Optional[str] = None,
+        context=None
     ) -> Dict[str, Any]:
         """
         Restore document from trash using DynamoDB transaction.
@@ -1242,7 +1257,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         self,
         namespace: Optional[str] = None,
         limit: int = 50,
-        next_key: Optional[str] = None
+        next_key: Optional[str] = None,
+        context=None
     ) -> Dict[str, Any]:
         """List trash entries using GSI1.
 
@@ -1334,6 +1350,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         deleted_at_ms: int,
         deleted_by: Optional[str] = None,
         filename: Optional[str] = None,
+        context=None
     ) -> Dict[str, Any]:
         """Create cleanup job for permanent deletion.
 
@@ -1479,6 +1496,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         namespace: str,
         deleted_at_ms: int,
         filename: str,
+        context=None
     ) -> None:
         """Complete permanent delete after vectors cleaned up.
 
@@ -1534,7 +1552,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 extra={"doc_id": doc_id, "namespace": namespace}
             )
 
-    def list_cleanup_jobs(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def list_cleanup_jobs(self, limit: int = 10, context=None) -> List[Dict[str, Any]]:
         """List pending cleanup jobs.
 
         Args:
@@ -1580,7 +1598,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             for item in items[:limit]
         ]
 
-    def delete_cleanup_job(self, cleanup_job_id: str) -> None:
+    def delete_cleanup_job(self, cleanup_job_id: str, context=None) -> None:
         """Delete completed cleanup job.
 
         Args:
@@ -1594,7 +1612,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         )
         logger.debug(f"Deleted cleanup job: {cleanup_job_id}")
 
-    def mark_cleanup_job_failed(self, cleanup_job_id: str, error: str) -> None:
+    def mark_cleanup_job_failed(self, cleanup_job_id: str, error: str, context=None) -> None:
         """Increment retry count or move to DLQ.
 
         Args:
@@ -1638,7 +1656,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 }
             )
 
-    def list_expired_trash(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def list_expired_trash(self, limit: int = 100, context=None) -> List[Dict[str, Any]]:
         """List trash entries past purge_after date.
 
         Args:

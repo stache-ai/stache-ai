@@ -80,7 +80,8 @@ class SQLiteNamespaceProvider(NamespaceProvider):
         description: str = "",
         parent_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        filter_keys: list[str] | None = None
+        filter_keys: list[str] | None = None,
+        context=None
     ) -> dict[str, Any]:
         """Create a new namespace"""
         now = datetime.now(timezone.utc).isoformat()
@@ -107,7 +108,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
 
         return self.get(id)
 
-    def get(self, id: str) -> dict[str, Any] | None:
+    def get(self, id: str, context=None) -> dict[str, Any] | None:
         """Get a namespace by ID"""
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -120,7 +121,8 @@ class SQLiteNamespaceProvider(NamespaceProvider):
     def list(
         self,
         parent_id: str | None = None,
-        include_children: bool = False
+        include_children: bool = False,
+        context=None
     ) -> list[dict[str, Any]]:
         """List namespaces, optionally filtered by parent"""
         with self._get_connection() as conn:
@@ -150,7 +152,8 @@ class SQLiteNamespaceProvider(NamespaceProvider):
         description: str | None = None,
         parent_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        filter_keys: builtins.list[str] | None = None
+        filter_keys: builtins.list[str] | None = None,
+        context=None
     ) -> dict[str, Any] | None:
         """Update a namespace"""
         existing = self.get(id)
@@ -206,7 +209,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
 
         return self.get(id)
 
-    def delete(self, id: str, cascade: bool = False) -> bool:
+    def delete(self, id: str, cascade: bool = False, context=None) -> bool:
         """Delete a namespace"""
         if not self.exists(id):
             return False
@@ -239,7 +242,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
 
         return True
 
-    def get_tree(self, root_id: str | None = None) -> builtins.list[dict[str, Any]]:
+    def get_tree(self, root_id: str | None = None, context=None) -> builtins.list[dict[str, Any]]:
         """Get namespace hierarchy as a tree"""
         all_namespaces = self.list(include_children=True)
 
@@ -265,7 +268,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
 
         return roots
 
-    def exists(self, id: str) -> bool:
+    def exists(self, id: str, context=None) -> bool:
         """Check if a namespace exists"""
         with self._get_connection() as conn:
             cursor = conn.execute(

@@ -194,7 +194,8 @@ class S3VectorsProvider(VectorDBProvider):
         texts: List[str],
         metadatas: Optional[List[Dict[str, Any]]] = None,
         ids: Optional[List[str]] = None,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[str]:
         """Insert vectors into S3 Vectors with active status by default"""
         if not ids:
@@ -245,7 +246,8 @@ class S3VectorsProvider(VectorDBProvider):
         query_vector: List[float],
         top_k: int = 5,
         filter: Optional[Dict[str, Any]] = None,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """
         Search for similar vectors in S3 Vectors with automatic soft-delete filtering
@@ -412,7 +414,7 @@ class S3VectorsProvider(VectorDBProvider):
                 formatted[k] = str(v)
         return formatted
 
-    def delete(self, ids: List[str], namespace: Optional[str] = None) -> bool:
+    def delete(self, ids: List[str], namespace: Optional[str] = None, context=None) -> bool:
         """Delete vectors by IDs"""
         if not ids:
             return True
@@ -438,7 +440,8 @@ class S3VectorsProvider(VectorDBProvider):
         self,
         query_vector: List[float],
         top_k: int = 10,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """Search document summaries for document discovery
 
@@ -513,7 +516,8 @@ class S3VectorsProvider(VectorDBProvider):
         self,
         field: str,
         value: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> Dict[str, Any]:
         """Delete vectors by metadata field value
 
@@ -558,7 +562,7 @@ class S3VectorsProvider(VectorDBProvider):
         logger.info(f"Deleted {len(ids_to_delete)} vectors by {field}={value}")
         return {'deleted': len(ids_to_delete), 'ids': ids_to_delete}
 
-    def get_collection_info(self) -> Dict[str, Any]:
+    def get_collection_info(self, context=None) -> Dict[str, Any]:
         """Get information about the S3 Vectors index"""
         try:
             index_info = self.client.get_index(
@@ -580,7 +584,7 @@ class S3VectorsProvider(VectorDBProvider):
                 'error': str(e)
             }
 
-    def count_by_filter(self, filter: Dict[str, Any]) -> int:
+    def count_by_filter(self, filter: Dict[str, Any], context=None) -> int:
         """Count vectors matching a filter using list_vectors with client-side filtering
 
         Note: S3 Vectors list_vectors API does NOT support metadata filtering,
@@ -637,7 +641,8 @@ class S3VectorsProvider(VectorDBProvider):
         self,
         filter: Dict[str, Any],
         fields: Optional[List[str]] = None,
-        limit: int = 1000
+        limit: int = 1000,
+        context=None
     ) -> List[Dict[str, Any]]:
         """List vectors matching a filter with their metadata
 
@@ -692,7 +697,8 @@ class S3VectorsProvider(VectorDBProvider):
         self,
         ids: List[str],
         fields: Optional[List[str]] = None,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """Retrieve vectors by IDs with their metadata
 
@@ -749,7 +755,8 @@ class S3VectorsProvider(VectorDBProvider):
     def get_vectors_with_embeddings(
         self,
         ids: List[str],
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """Retrieve vectors by IDs with embeddings and metadata
 
@@ -824,6 +831,7 @@ class S3VectorsProvider(VectorDBProvider):
         ids: List[str],
         namespace: str,
         status: str,
+        context=None
     ) -> int:
         """Update status field for soft delete (S3 Vectors batch update).
 

@@ -31,7 +31,8 @@ class CohereReranker(RerankerProvider):
         self,
         query: str,
         results: List[Dict[str, Any]],
-        top_k: int | None = None
+        top_k: int | None = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """Rerank results using Cohere"""
         if not results:

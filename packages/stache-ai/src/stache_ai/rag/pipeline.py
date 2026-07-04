@@ -487,6 +487,7 @@ class RAGPipeline:
                     source_path=metadata.get("source_path"),
                     file_size=metadata.get("file_size"),
                     file_modified_at=metadata.get("file_modified_at"),
+                    context=context,
                 )
 
                 if not reserved:
@@ -496,6 +497,7 @@ class RAGPipeline:
                         filename=metadata.get("filename", "text"),
                         namespace=ns,
                         source_path=metadata.get("source_path"),
+                        context=context,
                     )
 
                     if existing:
@@ -662,7 +664,8 @@ class RAGPipeline:
                 vectors=embeddings,
                 texts=chunks_for_embedding,
                 metadatas=metadatas,
-                namespace=ns
+                namespace=ns,
+                context=context
             )
             vectors_inserted = True
             chunk_ids = ids
@@ -738,6 +741,7 @@ class RAGPipeline:
                         doc_id=doc_id,
                         chunk_count=len(chunk_ids),
                         source_path=metadata.get("source_path"),
+                        context=context,
                     )
 
             # Create document index entry for efficient metadata queries (dual-write pattern)
@@ -769,6 +773,7 @@ class RAGPipeline:
                         chunk_count=len(chunk_ids),
                         source_path=metadata.get("source_path"),
                         content_hash=content_hash,
+                        context=context,
                     )
                     logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
                 except Exception as e:
@@ -861,6 +866,7 @@ class RAGPipeline:
                             filename=metadata.get("filename", "text"),
                             namespace=ns,
                             source_path=metadata.get("source_path"),
+                            context=context,
                         )
                     except Exception as cleanup_error:
                         logger.error(f"Failed to release identifier: {cleanup_error}")
@@ -870,7 +876,7 @@ class RAGPipeline:
                 try:
                     await asyncio.get_event_loop().run_in_executor(
                         None,
-                        lambda: self.documents_provider.delete(chunk_ids, ns)
+                        lambda: self.documents_provider.delete(chunk_ids, ns, context=context)
                     )
                     logger.info(f"Cleaned up {len(chunk_ids)} orphaned vectors after error")
                 except Exception as cleanup_error:
@@ -1097,7 +1103,8 @@ class RAGPipeline:
             vectors=embeddings,
             texts=chunks_for_embedding,
             metadatas=metadatas,
-            namespace=ns
+            namespace=ns,
+            context=context
         )
 
         # Create storage result and chunk tuples for middleware
@@ -1169,6 +1176,7 @@ class RAGPipeline:
                     file_size=file_size,
                     source_path=metadata.get("source_path") if metadata else None,
                     content_hash=metadata.get("content_hash") if metadata else None,
+                    context=context,
                 )
                 logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
             except Exception as e:
@@ -1460,7 +1468,8 @@ class RAGPipeline:
             query_vector=query_embedding,
             top_k=search_top_k,
             namespace=ns,
-            filter=sanitized_filter
+            filter=sanitized_filter,
+            context=context
         )
 
         # Format sources - include namespace in metadata for downstream consumers
@@ -1509,7 +1518,7 @@ class RAGPipeline:
         # Apply reranking if requested
         if rerank and sources and self.reranker_provider:
             logger.info(f"Reranking {len(sources)} results")
-            sources = self.reranker_provider.rerank(question, sources, top_k=top_k)
+            sources = self.reranker_provider.rerank(question, sources, top_k=top_k, context=context)
         elif rerank and not self.reranker_provider:
             logger.warning("Reranking requested but no reranker configured")
             sources = sources[:top_k]
@@ -1753,7 +1762,7 @@ class RAGPipeline:
         # Delete from document index (if enabled)
         if self.document_index_provider:
             try:
-                self.document_index_provider.delete_document(doc_id, namespace)
+                self.document_index_provider.delete_document(doc_id, namespace, context=context)
                 logger.info(f"Deleted document index entry for {doc_id}")
             except Exception as e:
                 logger.error(f"Failed to delete document index for {doc_id}: {e}")
@@ -1768,7 +1777,8 @@ class RAGPipeline:
             # Delete chunks with this doc_id
             self.documents_provider.delete(
                 namespace=namespace,
-                filter=filter_dict
+                filter=filter_dict,
+                context=context
             )
             logger.info(f"Deleted document chunks for {doc_id}")
         except Exception as e:
@@ -1781,7 +1791,8 @@ class RAGPipeline:
             summary_filter = {"_type": "document_summary", "doc_id": doc_id}
             self.summaries_provider.delete(
                 namespace=namespace,
-                filter=summary_filter
+                filter=summary_filter,
+                context=context
             )
             logger.info(f"Deleted document summary for {doc_id}")
         except Exception as e:

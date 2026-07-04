@@ -146,7 +146,8 @@ class OllamaReranker(RerankerProvider):
         self,
         query: str,
         results: List[Dict[str, Any]],
-        top_k: int | None = None
+        top_k: int | None = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """Rerank results using Ollama BGE reranker"""
         if not results:

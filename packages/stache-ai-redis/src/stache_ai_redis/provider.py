@@ -69,7 +69,8 @@ class RedisNamespaceProvider(NamespaceProvider):
         description: str = "",
         parent_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        filter_keys: Optional[List[str]] = None
+        filter_keys: Optional[List[str]] = None,
+        context=None
     ) -> Dict[str, Any]:
         """Create a new namespace"""
         # Check if already exists
@@ -101,7 +102,7 @@ class RedisNamespaceProvider(NamespaceProvider):
         logger.info(f"Created namespace: {id}")
         return ns
 
-    def get(self, id: str) -> Optional[Dict[str, Any]]:
+    def get(self, id: str, context=None) -> Optional[Dict[str, Any]]:
         """Get a namespace by ID"""
         data = self.client.get(self._ns_key(id))
         if data is None:
@@ -111,7 +112,8 @@ class RedisNamespaceProvider(NamespaceProvider):
     def list(
         self,
         parent_id: Optional[str] = None,
-        include_children: bool = False
+        include_children: bool = False,
+        context=None
     ) -> List[Dict[str, Any]]:
         """List namespaces, optionally filtered by parent"""
         # Get all namespace IDs
@@ -154,7 +156,8 @@ class RedisNamespaceProvider(NamespaceProvider):
         description: Optional[str] = None,
         parent_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        filter_keys: Optional[List[str]] = None
+        filter_keys: Optional[List[str]] = None,
+        context=None
     ) -> Optional[Dict[str, Any]]:
         """Update a namespace"""
         existing = self.get(id)
@@ -193,7 +196,7 @@ class RedisNamespaceProvider(NamespaceProvider):
 
         return existing
 
-    def delete(self, id: str, cascade: bool = False) -> bool:
+    def delete(self, id: str, cascade: bool = False, context=None) -> bool:
         """Delete a namespace"""
         if not self.exists(id):
             return False
@@ -219,7 +222,7 @@ class RedisNamespaceProvider(NamespaceProvider):
         logger.info(f"Deleted namespace: {id}")
         return True
 
-    def get_tree(self, root_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_tree(self, root_id: Optional[str] = None, context=None) -> List[Dict[str, Any]]:
         """Get namespace hierarchy as a tree"""
         all_namespaces = self.list(include_children=True)
 
@@ -245,7 +248,7 @@ class RedisNamespaceProvider(NamespaceProvider):
 
         return roots
 
-    def exists(self, id: str) -> bool:
+    def exists(self, id: str, context=None) -> bool:
         """Check if a namespace exists"""
         return self.client.exists(self._ns_key(id)) > 0
 

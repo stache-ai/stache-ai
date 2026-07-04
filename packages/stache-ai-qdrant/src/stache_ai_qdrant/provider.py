@@ -43,7 +43,8 @@ class QdrantVectorDBProvider(VectorDBProvider):
         texts: List[str],
         metadatas: Optional[List[Dict[str, Any]]] = None,
         ids: Optional[List[str]] = None,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[str]:
         """Insert vectors into Qdrant"""
         if not ids:
@@ -77,7 +78,8 @@ class QdrantVectorDBProvider(VectorDBProvider):
         query_vector: List[float],
         top_k: int = 5,
         filter: Optional[Dict[str, Any]] = None,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """
         Search for similar vectors
@@ -159,7 +161,7 @@ class QdrantVectorDBProvider(VectorDBProvider):
             for hit in results
         ]
 
-    def delete(self, ids: List[str], namespace: Optional[str] = None) -> bool:
+    def delete(self, ids: List[str], namespace: Optional[str] = None, context=None) -> bool:
         """Delete vectors by IDs"""
         # Note: Qdrant doesn't support namespace in delete by IDs
         # If namespace filtering is critical, would need to search first then delete
@@ -169,7 +171,7 @@ class QdrantVectorDBProvider(VectorDBProvider):
         )
         return True
 
-    def delete_by_metadata(self, field: str, value: str, namespace: Optional[str] = None) -> Dict[str, Any]:
+    def delete_by_metadata(self, field: str, value: str, namespace: Optional[str] = None, context=None) -> Dict[str, Any]:
         """Delete vectors by metadata field value (e.g., filename)"""
         from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -199,7 +201,7 @@ class QdrantVectorDBProvider(VectorDBProvider):
 
         return {"deleted": len(ids), "ids": ids}
 
-    def get_collection_info(self) -> Dict[str, Any]:
+    def get_collection_info(self, context=None) -> Dict[str, Any]:
         """Get collection information"""
         info = self.client.get_collection(collection_name=self.collection_name)
         return {
@@ -213,7 +215,8 @@ class QdrantVectorDBProvider(VectorDBProvider):
         self,
         query_vector: List[float],
         top_k: int = 10,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """Search document summaries for document discovery"""
         from qdrant_client.models import Filter, FieldCondition, MatchValue
@@ -262,7 +265,7 @@ class QdrantVectorDBProvider(VectorDBProvider):
             for hit in results
         ]
 
-    def count_by_filter(self, filter: Dict[str, Any]) -> int:
+    def count_by_filter(self, filter: Dict[str, Any], context=None) -> int:
         """Count vectors matching a filter
 
         Args:
@@ -288,7 +291,8 @@ class QdrantVectorDBProvider(VectorDBProvider):
         self,
         filter: Dict[str, Any],
         fields: Optional[List[str]] = None,
-        limit: int = 1000
+        limit: int = 1000,
+        context=None
     ) -> List[Dict[str, Any]]:
         """List vectors matching a filter with their metadata
 
@@ -336,7 +340,8 @@ class QdrantVectorDBProvider(VectorDBProvider):
         self,
         ids: List[str],
         fields: Optional[List[str]] = None,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """Retrieve vectors by IDs with their metadata
 
@@ -370,7 +375,8 @@ class QdrantVectorDBProvider(VectorDBProvider):
     def get_vectors_with_embeddings(
         self,
         ids: List[str],
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """Retrieve vectors WITH their embeddings for updating
 

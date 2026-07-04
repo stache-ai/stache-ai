@@ -85,7 +85,8 @@ class MongoDBNamespaceProvider(NamespaceProvider):
         description: str = "",
         parent_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        filter_keys: Optional[List[str]] = None
+        filter_keys: Optional[List[str]] = None,
+        context=None
     ) -> Dict[str, Any]:
         """Create a new namespace"""
         from pymongo.errors import DuplicateKeyError
@@ -115,7 +116,7 @@ class MongoDBNamespaceProvider(NamespaceProvider):
 
         return self.get(id)
 
-    def get(self, id: str) -> Optional[Dict[str, Any]]:
+    def get(self, id: str, context=None) -> Optional[Dict[str, Any]]:
         """Get a namespace by ID"""
         doc = self.collection.find_one({"_id": id})
         return self._from_mongo_doc(doc) if doc else None
@@ -123,7 +124,8 @@ class MongoDBNamespaceProvider(NamespaceProvider):
     def list(
         self,
         parent_id: Optional[str] = None,
-        include_children: bool = False
+        include_children: bool = False,
+        context=None
     ) -> List[Dict[str, Any]]:
         """List namespaces, optionally filtered by parent"""
         if parent_id is None and not include_children:
@@ -145,7 +147,8 @@ class MongoDBNamespaceProvider(NamespaceProvider):
         description: Optional[str] = None,
         parent_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        filter_keys: Optional[List[str]] = None
+        filter_keys: Optional[List[str]] = None,
+        context=None
     ) -> Optional[Dict[str, Any]]:
         """Update a namespace"""
         existing = self.get(id)
@@ -191,7 +194,7 @@ class MongoDBNamespaceProvider(NamespaceProvider):
 
         return self.get(id)
 
-    def delete(self, id: str, cascade: bool = False) -> bool:
+    def delete(self, id: str, cascade: bool = False, context=None) -> bool:
         """Delete a namespace"""
         if not self.exists(id):
             return False
@@ -215,7 +218,7 @@ class MongoDBNamespaceProvider(NamespaceProvider):
 
         return True
 
-    def get_tree(self, root_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_tree(self, root_id: Optional[str] = None, context=None) -> List[Dict[str, Any]]:
         """Get namespace hierarchy as a tree"""
         all_namespaces = self.list(include_children=True)
 
@@ -241,7 +244,7 @@ class MongoDBNamespaceProvider(NamespaceProvider):
 
         return roots
 
-    def exists(self, id: str) -> bool:
+    def exists(self, id: str, context=None) -> bool:
         """Check if a namespace exists"""
         return self.collection.count_documents({"_id": id}, limit=1) > 0
 
