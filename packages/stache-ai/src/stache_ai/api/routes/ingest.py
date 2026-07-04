@@ -17,6 +17,7 @@ from stache_ai.api import auth
 from stache_ai.config import settings
 from stache_ai.ingestion import TERMINAL, JobStatus
 from stache_ai.ingestion.factory import get_ingestion_service
+from stache_ai.sanitize import strip_reserved_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ async def ingest(request: IngestRequest, http_request: Request):
                 requested_by=principal,
                 filename=request.filename,
                 source="api",
-                metadata=request.metadata,
+                metadata=strip_reserved_metadata(request.metadata),
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -96,7 +97,7 @@ async def ingest(request: IngestRequest, http_request: Request):
         requested_by=principal,
         filename=request.filename,
         source="api",
-        metadata=request.metadata,
+        metadata=strip_reserved_metadata(request.metadata),
         text=request.text,
         data=data,
         chunking_strategy=request.chunking_strategy,

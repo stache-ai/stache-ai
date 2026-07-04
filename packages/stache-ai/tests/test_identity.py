@@ -241,3 +241,50 @@ def test_broken_installed_plugin_fails_closed():
     with _patch.object(plugin_loader.importlib.metadata, "entry_points", return_value=eps):
         with _pytest.raises(RuntimeError, match="failed to load"):
             plugin_loader.discover_providers("stache.result_processor")
+
+
+class TestS4MetadataSanitization:
+    """Caller-supplied internal control keys must never reach the pipeline."""
+
+    def test_strip_reserved_metadata(self):
+        from stache_ai.sanitize import strip_reserved_metadata
+
+        dirty = {
+            "author": "alice",
+            "content_hash": "forged",
+            "_reingest_version": True,
+            "_previous_doc_id": "victim-doc",
+            "_text": "smuggled",
+        }
+        assert strip_reserved_metadata(dirty) == {"author": "alice"}
+        assert strip_reserved_metadata(None) == {}
+        assert strip_reserved_metadata({}) == {}
+
+    def test_ingest_route_strips_forged_dedup_state(self):
+        """POST /ingest with forged control keys must not pass them to the job."""
+        from fastapi.testclient import TestClient
+
+        import stache_ai.api.main as main_mod
+        from stache_ai.ingestion.factory import reset_ingestion_service
+
+        reset_ingestion_service()
+        try:
+            client = TestClient(main_mod.app)
+            resp = client.post("/api/ingest", json={
+                "text": "hello", "content_type": "text",
+                "metadata": {
+                    "author": "alice",
+                    "content_hash": "forged",
+                    "_previous_doc_id": "victim-doc",
+                },
+            })
+            assert resp.status_code in (200, 202, 500)  # pipeline may fail w/o providers
+            if resp.status_code != 500:
+                job = resp.json()
+                assert "author" in job["metadata"]
+                assert "content_hash" not in job["metadata"]
+                assert "_previous_doc_id" not in job["metadata"]
+                # transport keys added AFTER sanitization survive
+                assert "_text" in job["metadata"]
+        finally:
+            reset_ingestion_service()

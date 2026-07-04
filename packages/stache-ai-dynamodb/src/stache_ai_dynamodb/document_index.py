@@ -14,6 +14,17 @@ from . import sanitize_for_dynamodb
 
 logger = logging.getLogger(__name__)
 
+
+def _esc(component) -> str:
+    """Escape the '#' key delimiter in user-controlled key components (S5).
+
+    Namespace, filename, and source_path come from callers; an embedded '#'
+    would otherwise let one (namespace, filename) pair forge the composite
+    key of another document or trash entry. '%' is escaped first so the
+    encoding is unambiguous and reversible.
+    """
+    return str(component).replace("%", "%25").replace("#", "%23")
+
 """Document status values."""
 DOC_STATUS_ACTIVE = "active"
 DOC_STATUS_DELETING = "deleting"
@@ -95,7 +106,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         Returns:
             Primary key in format: DOC#{namespace}#{doc_id}
         """
-        return f"DOC#{namespace}#{doc_id}"
+        return f"DOC#{_esc(namespace)}#{doc_id}"
 
     def _make_gsi1pk(self, namespace: str) -> str:
         """Create GSI1 partition key for namespace queries
@@ -106,7 +117,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         Returns:
             GSI1 partition key in format: NAMESPACE#{namespace}
         """
-        return f"NAMESPACE#{namespace}"
+        return f"NAMESPACE#{_esc(namespace)}"
 
     def _make_gsi1sk(self, timestamp: str) -> str:
         """Create GSI1 sort key using timestamp
@@ -134,7 +145,11 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             GSI2 partition key in format: FILENAME#{namespace}#{source_path_or_filename}
         """
         identifier = source_path if source_path else filename
-        return f"FILENAME#{namespace}#{identifier}"
+        return f"FILENAME#{_esc(namespace)}#{_esc(identifier)}"
+
+    def _make_trash_pk(self, namespace: str, filename: str, deleted_at_ms) -> str:
+        """Create the unique trash-entry primary key (escaped, S5)."""
+        return f"TRASH#{_esc(namespace)}#{_esc(filename)}#{deleted_at_ms}"
 
     def create_document(
         self,
@@ -492,8 +507,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 **item,
                 "PK": {"S": new_pk},
                 "namespace": {"S": new_namespace},
-                "GSI1PK": {"S": f"NAMESPACE#{new_namespace}"},
-                "GSI2PK": {"S": f"FILENAME#{new_namespace}#{filename}"},
+                "GSI1PK": {"S": self._make_gsi1pk(new_namespace)},
+                "GSI2PK": {"S": self._make_gsi2pk(new_namespace, filename)},
                 "filename": {"S": filename},
             }
 
@@ -550,7 +565,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             update_parts.append("filename = :filename")
             update_parts.append("GSI2PK = :gsi2pk")  # Must update GSI2PK too
             attr_values[":filename"] = updates["filename"]
-            attr_values[":gsi2pk"] = f"FILENAME#{namespace}#{updates['filename']}"
+            attr_values[":gsi2pk"] = self._make_gsi2pk(namespace, updates['filename'])
 
         if "metadata" in updates:
             update_parts.append("metadata = :metadata")
@@ -754,9 +769,9 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         Returns: (identifier_pk, identifier_type)
         """
         if source_path and not source_path.startswith("/tmp"):
-            return f"SOURCE#{namespace}#{source_path}", "source_path"
+            return f"SOURCE#{_esc(namespace)}#{_esc(source_path)}", "source_path"
         else:
-            return f"HASH#{namespace}#{content_hash}#{filename}", "fingerprint"
+            return f"HASH#{_esc(namespace)}#{content_hash}#{_esc(filename)}", "fingerprint"
 
     def reserve_identifier(
         self,
@@ -959,7 +974,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         # Get document metadata first
         response = self.table.get_item(
             Key={
-                "PK": f"DOC#{namespace}#{doc_id}",
+                "PK": self._make_pk(namespace, doc_id),
                 "SK": "METADATA"
             }
         )
@@ -1009,7 +1024,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Update": {
                             "TableName": self.table.name,
                             "Key": {
-                                "PK": {"S": f"DOC#{namespace}#{doc_id}"},
+                                "PK": {"S": self._make_pk(namespace, doc_id)},
                                 "SK": {"S": "METADATA"}
                             },
                             "UpdateExpression": "SET " + ", ".join(update_expr_parts),
@@ -1026,7 +1041,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Put": {
                             "TableName": self.table.name,
                             "Item": {
-                                "PK": {"S": f"TRASH#{namespace}#{filename}#{deleted_at_ms}"},
+                                "PK": {"S": self._make_trash_pk(namespace, filename, deleted_at_ms)},
                                 "SK": {"S": "ENTRY"},
                                 "doc_id": {"S": doc_id},
                                 "namespace": {"S": namespace},
@@ -1095,7 +1110,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         # Get document metadata
         response = self.table.get_item(
             Key={
-                "PK": f"DOC#{namespace}#{doc_id}",
+                "PK": self._make_pk(namespace, doc_id),
                 "SK": "METADATA"
             }
         )
@@ -1160,7 +1175,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Update": {
                             "TableName": self.table.name,
                             "Key": {
-                                "PK": {"S": f"DOC#{namespace}#{doc_id}"},
+                                "PK": {"S": self._make_pk(namespace, doc_id)},
                                 "SK": {"S": "METADATA"}
                             },
                             "UpdateExpression": (
@@ -1179,7 +1194,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Delete": {
                             "TableName": self.table.name,
                             "Key": {
-                                "PK": {"S": f"TRASH#{namespace}#{filename}#{deleted_at_ms}"},
+                                "PK": {"S": self._make_trash_pk(namespace, filename, deleted_at_ms)},
                                 "SK": {"S": "ENTRY"}
                             }
                         }
@@ -1338,7 +1353,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         # Get document metadata
         response = self.table.get_item(
             Key={
-                "PK": f"DOC#{namespace}#{doc_id}",
+                "PK": self._make_pk(namespace, doc_id),
                 "SK": "METADATA"
             }
         )
@@ -1391,7 +1406,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                     "Update": {
                         "TableName": self.table.name,
                         "Key": {
-                            "PK": {"S": f"DOC#{namespace}#{doc_id}"},
+                            "PK": {"S": self._make_pk(namespace, doc_id)},
                             "SK": {"S": "METADATA"}
                         },
                         "UpdateExpression": "SET #status = :purging, purge_started_at = :now, cleanup_job_id = :job_id",
@@ -1431,7 +1446,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                     "Delete": {
                         "TableName": self.table.name,
                         "Key": {
-                            "PK": {"S": f"TRASH#{namespace}#{trash_filename}#{deleted_at_ms}"},
+                            "PK": {"S": self._make_trash_pk(namespace, trash_filename, deleted_at_ms)},
                             "SK": {"S": "ENTRY"}
                         }
                     }
@@ -1484,7 +1499,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Update": {
                             "TableName": self.table.name,
                             "Key": {
-                                "PK": {"S": f"DOC#{namespace}#{doc_id}"},
+                                "PK": {"S": self._make_pk(namespace, doc_id)},
                                 "SK": {"S": "METADATA"}
                             },
                             "UpdateExpression": (
@@ -1504,7 +1519,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Delete": {
                             "TableName": self.table.name,
                             "Key": {
-                                "PK": {"S": f"TRASH#{namespace}#{filename}#{deleted_at_ms}"},
+                                "PK": {"S": self._make_trash_pk(namespace, filename, deleted_at_ms)},
                                 "SK": {"S": "ENTRY"}
                             }
                         }

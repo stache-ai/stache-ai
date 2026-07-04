@@ -14,6 +14,7 @@ from stache_ai.api import auth
 from stache_ai.config import settings
 from stache_ai.ingestion import JobStatus
 from stache_ai.ingestion.factory import get_ingestion_service
+from stache_ai.sanitize import strip_reserved_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ async def capture_thought(request: CaptureRequest, http_request: Request):
     """
     try:
         # Carry organization flags + prepend list as metadata for the pipeline.
-        metadata = dict(request.metadata or {})
+        metadata = strip_reserved_metadata(request.metadata)
         if request.suggest_organization:
             metadata["_suggest_organization"] = True
         if request.apply_suggestions:

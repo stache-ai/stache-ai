@@ -6,6 +6,7 @@ import uuid
 
 from stache_ai.config import settings
 from stache_ai.providers import NamespaceProviderFactory
+from stache_ai.sanitize import strip_reserved_metadata
 from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,8 @@ def do_ingest_text(text: str, metadata: dict = None, namespace: str = None,
         error_msg = f"Text exceeds maximum size of {limit_mb:.1f}MB (got {size_mb:.1f}MB)"
         logger.error(f"[{request_id}] {error_msg}")
         raise ValueError(error_msg)
+
+    metadata = strip_reserved_metadata(metadata)
 
     logger.info(f"[{request_id}] Ingest: {len(text)} chars, namespace={namespace}, strategy={chunking_strategy}")
 

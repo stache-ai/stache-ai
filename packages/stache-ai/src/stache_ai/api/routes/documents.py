@@ -718,7 +718,8 @@ async def update_document_metadata(
     if body.filename is not None:
         updates["filename"] = body.filename
     if body.metadata is not None:
-        updates["metadata"] = body.metadata
+        from stache_ai.sanitize import strip_reserved_metadata
+        updates["metadata"] = strip_reserved_metadata(body.metadata)
     if body.headings is not None:
         updates["headings"] = body.headings
 

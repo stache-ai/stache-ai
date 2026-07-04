@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from stache_ai.middleware.context import RequestContext
+from stache_ai.sanitize import strip_reserved_metadata
 from stache_ai.rag.pipeline import get_pipeline
 from stache_ai.types import EmptyExtractionError
 
@@ -76,7 +77,7 @@ async def upload_document(
             pipeline = get_pipeline()
             result = await pipeline.ingest_file(
                 file_path=temp_path,
-                metadata={**(metadata or {}), "filename": file.filename},
+                metadata={**strip_reserved_metadata(metadata), "filename": file.filename},
                 chunking_strategy=chunking_strategy,
                 namespace=namespace,
                 context=RequestContext.from_fastapi_request(http_request, namespace or ""),
@@ -161,7 +162,7 @@ async def batch_upload_documents(
                 temp_path = temp_file.name
 
             # Use file-based ingestion with auto strategy selection
-            file_metadata = {**meta_dict, "filename": file.filename}
+            file_metadata = {**strip_reserved_metadata(meta_dict), "filename": file.filename}
             result = await pipeline.ingest_file(
                 file_path=temp_path,
                 metadata=file_metadata,
