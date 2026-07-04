@@ -294,6 +294,14 @@ class Settings(BaseSettings):
         description="Enable scheduled trash purge job"
     )
 
+    # ===== Identity =====
+    principal_extractor: str = Field(
+        default="apigateway",
+        description="Principal extractor: apigateway (default) or an installed "
+                    "stache.principal_extractor entry point. Non-default values "
+                    "are fail-closed: load failure aborts startup."
+    )
+
     # ===== Ingestion Backbone (Phase 1: sync tier; all defaults are inert) =====
     ingest_queue_provider: str = Field(
         default="inline",

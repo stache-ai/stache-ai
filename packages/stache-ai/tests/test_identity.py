@@ -160,3 +160,65 @@ def test_worker_passes_context_and_job_to_pipeline():
     assert ctx.source == "worker"
     assert ctx.custom["ingest_job"] is job
     assert job.status == JobStatus.DONE
+
+
+def test_build_extractor_default():
+    from stache_ai.identity import ApiGatewayClaimsExtractor, build_extractor
+
+    class _Cfg:
+        principal_extractor = "apigateway"
+
+    assert isinstance(build_extractor(_Cfg()), ApiGatewayClaimsExtractor)
+
+
+def test_build_extractor_unknown_is_fail_closed():
+    """A configured-but-missing extractor must abort, never fall back."""
+    import pytest as _pytest
+
+    from stache_ai.identity import build_extractor
+
+    class _Cfg:
+        principal_extractor = "enterprise-oidc"
+
+    with _pytest.raises(RuntimeError, match="Refusing to fall back"):
+        build_extractor(_Cfg())
+
+
+def test_identity_middleware_maps_auth_error_to_401():
+    from unittest.mock import patch as _patch
+
+    from fastapi.testclient import TestClient
+
+    from stache_ai.identity import AuthenticationError, PrincipalExtractor
+
+    class _Refuser(PrincipalExtractor):
+        def extract(self, request):
+            raise AuthenticationError("token rejected")
+
+    import stache_ai.api.main as main_mod
+
+    with _patch.object(main_mod, "_principal_extractor", _Refuser()):
+        client = TestClient(main_mod.app)
+        resp = client.get("/api/jobs")
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "token rejected"
+
+
+def test_identity_middleware_populates_state_principal():
+    from unittest.mock import patch as _patch
+
+    from fastapi.testclient import TestClient
+
+    from stache_ai.identity import Principal, PrincipalExtractor
+
+    class _Fixed(PrincipalExtractor):
+        def extract(self, request):
+            return Principal(user_id="user-42", claims={"ext": "v"})
+
+    import stache_ai.api.main as main_mod
+
+    with _patch.object(main_mod, "_principal_extractor", _Fixed()):
+        client = TestClient(main_mod.app)
+        # list_jobs scopes by the extracted principal - proves state wiring.
+        resp = client.get("/api/jobs")
+        assert resp.status_code == 200

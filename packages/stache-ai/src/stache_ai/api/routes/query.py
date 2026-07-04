@@ -3,9 +3,10 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ class QueryRequest(BaseModel):
 
 
 @router.post("/query")
-async def query_knowledge(request: QueryRequest):
+async def query_knowledge(request: QueryRequest, http_request: Request):
     """
     Query your knowledge base with natural language
 
@@ -38,6 +39,8 @@ async def query_knowledge(request: QueryRequest):
     try:
         pipeline = get_pipeline()
 
+        context = RequestContext.from_fastapi_request(
+            http_request, request.namespace or "")
         result = await pipeline.query(
             question=request.query,
             top_k=request.top_k,
@@ -45,7 +48,8 @@ async def query_knowledge(request: QueryRequest):
             namespace=request.namespace,
             rerank=request.rerank,
             model=request.model,
-            filter=request.filter
+            filter=request.filter,
+            context=context,
         )
 
         return result

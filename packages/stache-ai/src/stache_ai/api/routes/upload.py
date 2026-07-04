@@ -4,9 +4,10 @@ import logging
 import os
 import tempfile
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 from stache_ai.types import EmptyExtractionError
 
@@ -26,6 +27,7 @@ class BatchUploadResult(BaseModel):
 
 @router.post("/upload")
 async def upload_document(
+    http_request: Request,
     file: UploadFile = File(...),
     chunking_strategy: str = Form("auto"),
     metadata: dict | None = Form(None),
@@ -77,6 +79,7 @@ async def upload_document(
                 metadata={**(metadata or {}), "filename": file.filename},
                 chunking_strategy=chunking_strategy,
                 namespace=namespace,
+                context=RequestContext.from_fastapi_request(http_request, namespace or ""),
                 prepend_metadata=prepend_keys
             )
 
@@ -101,6 +104,7 @@ async def upload_document(
 
 @router.post("/upload/batch")
 async def batch_upload_documents(
+    http_request: Request,
     files: list[UploadFile] = File(...),
     chunking_strategy: str = Form("auto"),
     namespace: str | None = Form(None),
@@ -163,6 +167,7 @@ async def batch_upload_documents(
                 metadata=file_metadata,
                 chunking_strategy=chunking_strategy,
                 namespace=namespace,
+                context=RequestContext.from_fastapi_request(http_request, namespace or ""),
                 prepend_metadata=prepend_keys
             )
 

@@ -6,12 +6,13 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from stache_ai.config import settings
 from stache_ai.loaders import load_document
+from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,7 @@ async def get_pdf(item_id: str):
 
 
 @router.post("/pending/{item_id}/approve")
-async def approve_pending(item_id: str, request: ApproveRequest):
+async def approve_pending(item_id: str, request: ApproveRequest, http_request: Request):
     """
     Approve a pending item and upload to stache
 
@@ -142,6 +143,7 @@ async def approve_pending(item_id: str, request: ApproveRequest):
             metadata=metadata,
             chunking_strategy=request.chunking_strategy,
             namespace=request.namespace,
+            context=RequestContext.from_fastapi_request(http_request, request.namespace or ""),
             prepend_metadata=request.prepend_metadata
         )
 

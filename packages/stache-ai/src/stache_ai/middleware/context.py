@@ -51,6 +51,13 @@ class RequestContext:
             source="api",
             trace_id=request.headers.get("x-trace-id"),
             ip_address=request.client.host if request.client else None,
+            # Opaque extension surface: the full principal (incl. claims) for
+            # deployment-specific middleware/providers. Core never reads it.
+            custom=(
+                {"principal": request.state.principal}
+                if getattr(getattr(request, "state", None), "principal", None) is not None
+                else {}
+            ),
         )
 
 

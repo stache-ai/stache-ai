@@ -83,6 +83,7 @@ PROVIDER_GROUPS = {
     'ingest_blob': 'stache.ingest_blob',
     'ingest_intake': 'stache.ingest_intake',
     'ingest_notifier': 'stache.ingest_notifier',
+    'principal_extractor': 'stache.principal_extractor',
     'loader': 'stache.loader',
     'chunking': 'stache.chunking',
 }

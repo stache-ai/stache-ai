@@ -40,6 +40,29 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# Identity middleware: extract the caller once per request (pluggable,
+# fail-closed when a non-default extractor is configured) and expose it on
+# request.state for routes and RequestContext.from_fastapi_request.
+from fastapi.responses import JSONResponse as _JSONResponse
+
+from stache_ai.identity import AuthenticationError, build_extractor
+
+_principal_extractor = build_extractor(settings)   # raises at import if misconfigured
+logger_boot = logging.getLogger(__name__)
+logger_boot.info(f"Principal extractor: {type(_principal_extractor).__name__}")
+
+
+@app.middleware("http")
+async def _identity_middleware(request, call_next):
+    try:
+        principal = _principal_extractor.extract(request)
+    except AuthenticationError as e:
+        return _JSONResponse(status_code=401, content={"detail": str(e) or "Unauthorized"})
+    request.state.principal = principal
+    request.state.user_id = principal.user_id
+    return await call_next(request)
+
+
 # CORS middleware - configure via environment for production
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
 app.add_middleware(

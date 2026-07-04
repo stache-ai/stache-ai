@@ -9,25 +9,26 @@ so routes have a single import site.
 
 import logging
 
-from stache_ai.identity import ANONYMOUS, Principal, assert_can_write  # noqa: F401
+from stache_ai.identity import (  # noqa: F401
+    ANONYMOUS,
+    ApiGatewayClaimsExtractor,
+    Principal,
+    assert_can_write,
+)
 
 logger = logging.getLogger(__name__)
+
+_fallback_extractor = ApiGatewayClaimsExtractor()
 
 
 def principal(request) -> Principal:
     """Return the authenticated caller as a Principal.
 
-    Never trust a client-supplied identity — read only the authorizer claims
-    injected by API Gateway. Supports both HTTP API v2 (``authorizer.jwt.claims``)
-    and REST API (``authorizer.claims``) event shapes.
+    The identity middleware extracts once per request and stashes the result
+    on ``request.state.principal``; fall back to direct extraction for callers
+    outside the ASGI app (tests, direct invocation).
     """
-    try:
-        event = request.scope.get("aws.event") or {}
-    except AttributeError:
-        event = {}
-    request_context = event.get("requestContext", {}) or {}
-    authorizer = request_context.get("authorizer", {}) or {}
-    # HTTP API v2 nests JWT claims under "jwt"; REST API puts them at "claims".
-    jwt = authorizer.get("jwt", {}) or {}
-    claims = jwt.get("claims") or authorizer.get("claims") or {}
-    return Principal(user_id=claims.get("sub") or ANONYMOUS, claims=dict(claims))
+    existing = getattr(getattr(request, "state", None), "principal", None)
+    if isinstance(existing, Principal):
+        return existing
+    return _fallback_extractor.extract(request)
