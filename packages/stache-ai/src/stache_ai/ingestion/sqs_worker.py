@@ -62,16 +62,20 @@ def _ingest_dropped_object(rec, service):
 
     existing = service.jobstore.get(job_id)
     if existing is not None:
-        # Presign path: resume our pre-created job. Idempotent on re-delivery -
-        # if it already finished, skip without reprocessing.
-        if existing.status in TERMINAL:
-            return None
-        service.jobstore.update(
-            job_id,
-            status=JobStatus.QUEUED,
-            updated_at=datetime.now(timezone.utc).isoformat(),
-        )
-        return job_id
+        # Presign path: the client's upload just landed, so hand the pre-created
+        # job (status UPLOADING) off to the worker. For any other state the object
+        # belongs to a job another trigger already owns - the inline/base64 path
+        # writes its retention blob to this same bucket but is driven by a direct
+        # enqueue (job is already QUEUED), and a redelivered event must never
+        # reset a QUEUED/PROCESSING/terminal job. Defer in those cases.
+        if existing.status == JobStatus.UPLOADING:
+            service.jobstore.update(
+                job_id,
+                status=JobStatus.QUEUED,
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return job_id
+        return None
 
     # Raw producer drop (Phase 2 path): create a Job from the object's metadata.
     return _create_producer_job(rec, service, logical)
@@ -83,7 +87,12 @@ def _create_producer_job(rec, service, logical):
 
     from stache_ai.config import settings
 
-    meta = service.blobstore.head(logical)        # x-amz-meta-stache-* mapped by S3BlobStore.head
+    raw = service.blobstore.head(logical)         # x-amz-meta-stache-* mapped by S3BlobStore.head
+    # Normalize hyphens to underscores so producers can tag objects with either
+    # `stache-content-type` or `stache-content_type` (S3 lowercases header keys
+    # and preserves the separator). Without this, `content-type`/`requested-by`
+    # silently fall back to defaults (octet-stream / "producer").
+    meta = {k.replace("-", "_"): v for k, v in raw.items()}
     now = datetime.now(timezone.utc).isoformat()
     job = Job(
         job_id=str(uuid.uuid4()),

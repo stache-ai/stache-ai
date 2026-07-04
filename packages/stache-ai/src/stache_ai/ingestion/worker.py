@@ -32,7 +32,14 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
         if job is None:
             logger.warning(f"[ingest] job {job_id} not found; nothing to process")
             return
-        jobstore.update(job_id, status=JobStatus.PROCESSING, updated_at=_now())
+        # Idempotent claim: win the QUEUED/UPLOADING -> PROCESSING transition or
+        # bail. The async tier delivers the same job more than once (SQS is
+        # at-least-once; a blob-backed job fires both a direct enqueue and an S3
+        # ObjectCreated event), so a losing duplicate must no-op here instead of
+        # re-ingesting.
+        if not jobstore.claim(job_id, from_statuses={JobStatus.QUEUED, JobStatus.UPLOADING}):
+            logger.info(f"[ingest] job {job_id} already claimed/terminal; skipping duplicate delivery")
+            return
         notifier.publish(JobEvent(job_id, JobStatus.PROCESSING, job.requested_by, job.namespace))
         try:
             # Strip transport-only keys before they reach enrichers / vector store.
@@ -49,14 +56,19 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
             else:
                 data, _ = blobstore.get(job.blob_key)            # bytes from BlobStore
                 md.setdefault("filename", job.filename)
-                suffix = os.path.splitext(job.filename)[1]
-                with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tf:
-                    tf.write(data)
-                    tf.flush()
+                # Write under the ORIGINAL filename (not a random tmp*.ext) so ingest_file
+                # records the real name and selects the loader by its true extension.
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    fpath = os.path.join(tmpdir, os.path.basename(job.filename))
+                    with open(fpath, "wb") as fh:
+                        fh.write(data)
                     result = await pipeline.ingest_file(            # loads + chunks internally
-                        file_path=tf.name,
+                        file_path=fpath,
                         namespace=job.namespace,
                         metadata=md,
+                        # Honor the client's chunking choice (the GUI submits "recursive");
+                        # only fall back to file-type auto-selection when unset.
+                        chunking_strategy=job.metadata.get("_chunking", "auto"),
                         prepend_metadata=prepend,
                     )
 

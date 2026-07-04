@@ -6,7 +6,7 @@ documents are written to both the vector database and the document index,
 as well as the various endpoint behaviors that depend on the document index.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -124,13 +124,28 @@ def mock_pipeline_with_index(mock_document_index_provider):
 
 @pytest.fixture
 def test_client_with_index(mock_pipeline_with_index):
-    """Create test client with document index mocked"""
+    """Create test client with document index mocked.
+
+    /api/capture goes through the IngestionService singleton (built from
+    ingestion.factory.get_pipeline), so patch the factory and rebuild the
+    singleton rather than patching the route module.
+    """
+    from stache_ai.ingestion.factory import reset_ingestion_service
+
+    # These pipeline methods are coroutines; routes/worker await them.
+    for method in ("ingest_text", "ingest_file", "query", "delete_document",
+                   "notify_document_deleted"):
+        setattr(mock_pipeline_with_index, method,
+                AsyncMock(return_value=getattr(mock_pipeline_with_index, method).return_value))
+
     with patch('stache_ai.api.routes.upload.get_pipeline', return_value=mock_pipeline_with_index):
-        with patch('stache_ai.api.routes.capture.get_pipeline', return_value=mock_pipeline_with_index):
+        with patch('stache_ai.rag.pipeline.get_pipeline', return_value=mock_pipeline_with_index):
             with patch('stache_ai.api.routes.documents.get_pipeline', return_value=mock_pipeline_with_index):
+                reset_ingestion_service()
                 from stache_ai.api.main import app
                 client = TestClient(app)
                 yield client
+                reset_ingestion_service()
 
 
 # ====================================================================
@@ -462,12 +477,10 @@ def test_document_index_missing_chunk_ids(test_client_with_index, mock_pipeline_
     # Setup: get_chunk_ids returns the list of chunks to delete
     doc_index.get_chunk_ids.return_value = ["chunk-1", "chunk-2"]
 
-    # Delete document
-    response = client.delete("/api/documents/id/doc-001?namespace=test")
+    # Permanent delete: get_chunk_ids -> delete from vectordb -> delete from index.
+    # (Default delete is a soft delete to trash and touches neither.)
+    response = client.delete("/api/documents/id/doc-001?namespace=test&permanent=true")
 
-    # Verify flow: get_chunk_ids -> delete from vectordb -> delete from index
     if response.status_code == 200:
-        # These might be called during deletion
-        # Verify at least one of these was called
-        assert doc_index.delete_document.called or vectordb.delete.called, \
-            "Neither document index nor vectordb deletion was called"
+        assert vectordb.delete.called, "vectordb deletion was not called"
+        assert doc_index.delete_document.called, "document index deletion was not called"

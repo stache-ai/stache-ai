@@ -357,6 +357,7 @@ def test_list_orphaned_chunks_returns_501_on_s3vectors(test_client_with_mock, mo
 
 def test_list_orphaned_chunks_works_on_qdrant(test_client_with_mock, mock_pipeline):
     """list_documents with orphaned=true should work on Qdrant"""
+    pytest.importorskip("qdrant_client")  # legacy Qdrant-only endpoint
     # Simulate Qdrant provider with client attribute and capabilities
     qdrant_client = MagicMock()
 
@@ -411,6 +412,7 @@ def test_migrate_summaries_returns_501_on_s3vectors(test_client_with_mock, mock_
 
 def test_migrate_summaries_works_on_qdrant(test_client_with_mock, mock_pipeline):
     """migrate_summaries should work on Qdrant"""
+    pytest.importorskip("qdrant_client")  # legacy Qdrant-only endpoint
     # Simulate Qdrant provider with client attribute and capabilities
     qdrant_client = MagicMock()
 

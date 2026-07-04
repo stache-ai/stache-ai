@@ -65,6 +65,13 @@ class _DictJobStore:
     def get(self, job_id):
         return self.jobs.get(job_id)
 
+    def claim(self, job_id, *, from_statuses, to_status=None):
+        job = self.jobs.get(job_id)
+        if job is None or job.status not in from_statuses:
+            return False
+        job.status = to_status or JobStatus.PROCESSING
+        return True
+
     def list(self, *, requested_by=None, status=None, limit=50, cursor=None):
         items = list(self.jobs.values())
         return items, None
@@ -237,7 +244,10 @@ aws_only = pytest.mark.skipif(
     not _HAVE_AWS, reason="stache-ai-aws / stache-ai-dynamodb not installed"
 )
 
-if _HAVE_AWS:
+if not _HAVE_AWS:
+    def mock_aws(func):  # pragma: no cover - tests skip via aws_only
+        return func
+else:
     moto = pytest.importorskip("moto")
     boto3 = pytest.importorskip("boto3")
     from moto import mock_aws
@@ -387,6 +397,80 @@ def test_worker_skips_already_terminal_presign_redelivery():
     # Pipeline was never invoked for re-delivery.
     assert pipeline.ingest_text.await_count == 0
     assert pipeline.ingest_file.await_count == 0
+
+
+@aws_only
+@mock_aws
+def test_jobstore_claim_is_atomic_single_winner():
+    """DynamoJobStore.claim: exactly one caller wins the QUEUED->PROCESSING CAS."""
+    _provision()
+    store = IngestionServiceFactory.build(_settings("unused"), _pipeline()).jobstore
+    now = datetime.now(timezone.utc).isoformat()
+    store.create(Job(
+        job_id="J1", status=JobStatus.QUEUED, namespace="docs", source="api",
+        filename="f.txt", content_type="text", requested_by="bob",
+        created_at=now, updated_at=now,
+    ))
+    first = store.claim("J1", from_statuses={JobStatus.QUEUED, JobStatus.UPLOADING})
+    second = store.claim("J1", from_statuses={JobStatus.QUEUED, JobStatus.UPLOADING})
+    assert first is True and second is False
+    assert store.get("J1").status == JobStatus.PROCESSING
+    # A claim against a terminal job also loses.
+    store.update("J1", status=JobStatus.DONE)
+    assert store.claim("J1", from_statuses={JobStatus.QUEUED, JobStatus.UPLOADING}) is False
+    # Missing job -> False, never raises.
+    assert store.claim("nope", from_statuses={JobStatus.QUEUED}) is False
+
+
+@aws_only
+@mock_aws
+def test_base64_double_trigger_ingests_once():
+    """The inline base64 path writes its blob to the originals bucket (fires an S3
+    event) AND direct-enqueues. Both deliveries target the same job; the claim
+    must ensure the pipeline runs exactly once and no duplicate job is created."""
+    queue_url = _provision()
+    pipeline = _pipeline()
+    service = IngestionServiceFactory.build(_settings(queue_url), pipeline)
+
+    job = asyncio.run(service.submit(
+        namespace="docs", content_type="application/pdf", requested_by="bob",
+        filename="f.pdf", data=b"%PDF-1.4 body", chunking_strategy="auto",
+    ))
+    # The job exists (created before the blob write) and its retention blob landed.
+    assert service.get_job(job.job_id).blob_key == f"{job.job_id}/f.pdf"
+
+    # Deliver BOTH triggers: the direct enqueue (bare job_id) and the S3 event.
+    _drive(service, job.job_id)
+    s3_event = {"Records": [{"eventSource": "aws:s3",
+                             "s3": {"object": {"key": f"originals/{job.blob_key}"}}}]}
+    _drive(service, json.dumps(s3_event))
+
+    assert pipeline.ingest_file.await_count == 1     # ingested exactly once
+    jobs, _ = service.list_jobs(limit=50)
+    assert len(jobs) == 1                             # no duplicate/producer job
+    assert jobs[0].status == JobStatus.DONE
+
+
+@aws_only
+@mock_aws
+def test_producer_metadata_hyphen_keys_populate_job():
+    """Producers may tag objects with hyphenated stache-* keys; content_type and
+    requested_by must survive (regression: they silently fell back to defaults)."""
+    queue_url = _provision()
+    service = IngestionServiceFactory.build(_settings(queue_url), _pipeline())
+    boto3.client("s3", region_name=REGION).put_object(
+        Bucket=BUCKET, Key="originals/Z/f.pdf", Body=b"producer bytes",
+        Metadata={"stache-namespace": "news", "stache-filename": "f.pdf",
+                  "stache-requested-by": "media", "stache-content-type": "application/pdf"},
+    )
+    s3_event = {"Records": [{"eventSource": "aws:s3",
+                             "s3": {"object": {"key": "originals/Z/f.pdf"}}}]}
+    _drive(service, json.dumps(s3_event))
+
+    jobs, _ = service.list_jobs(limit=50)
+    assert len(jobs) == 1
+    assert jobs[0].requested_by == "media"           # not the "producer" default
+    assert jobs[0].content_type == "application/pdf"  # not application/octet-stream
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ as the vector database provider. It tests all major features including document 
 semantic search, question answering, document discovery, and deletion.
 """
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -171,14 +171,29 @@ def mock_s3_pipeline():
 
 @pytest.fixture
 def s3_test_client(mock_s3_pipeline):
-    """Create test client with S3 Vectors mocked pipeline"""
+    """Create test client with S3 Vectors mocked pipeline.
+
+    /api/capture goes through the IngestionService singleton (built from
+    ingestion.factory.get_pipeline), so patch the factory and rebuild the
+    singleton rather than patching the route module.
+    """
+    from stache_ai.ingestion.factory import reset_ingestion_service
+
+    # These pipeline methods are coroutines; routes/worker await them.
+    for method in ("ingest_text", "ingest_file", "query", "delete_document",
+                   "notify_document_deleted"):
+        setattr(mock_s3_pipeline, method,
+                AsyncMock(return_value=getattr(mock_s3_pipeline, method).return_value))
+
     with patch('stache_ai.api.routes.query.get_pipeline', return_value=mock_s3_pipeline):
-        with patch('stache_ai.api.routes.capture.get_pipeline', return_value=mock_s3_pipeline):
+        with patch('stache_ai.rag.pipeline.get_pipeline', return_value=mock_s3_pipeline):
             with patch('stache_ai.api.routes.upload.get_pipeline', return_value=mock_s3_pipeline):
                 with patch('stache_ai.api.routes.documents.get_pipeline', return_value=mock_s3_pipeline):
+                    reset_ingestion_service()
                     from stache_ai.api.main import app
                     client = TestClient(app)
                     yield client
+                    reset_ingestion_service()
 
 
 @pytest.mark.s3vectors
@@ -345,7 +360,9 @@ def test_full_rag_workflow_s3(s3_test_client, mock_s3_pipeline, monkeypatch):
     # ==========================================
     # 7. DELETE DOCUMENT
     # ==========================================
-    response = test_client.delete(f"/api/documents/id/{doc_id}")
+    # Permanent delete (default is a soft delete to trash, which does not
+    # touch the vector store).
+    response = test_client.delete(f"/api/documents/id/{doc_id}?permanent=true")
 
     assert response.status_code == 200, f"Delete document failed: {response.text}"
     result = response.json()

@@ -195,3 +195,33 @@ def test_list_stuck_returns_only_active_past_cutoff(jobstore):
 
     stuck = jobstore.list_stuck(cutoff)
     assert {j.job_id for j in stuck} == {"stuck-q", "stuck-p"}
+
+
+def test_roundtrip_is_json_serializable(jobstore):
+    """DynamoDB deserializes numbers as Decimal; the store must convert back.
+
+    Regression: JSONResponse(job.to_dict()) in POST /ingest 500'd with
+    'Object of type Decimal is not JSON serializable' on the deployed stack.
+    """
+    import json as _json
+
+    jobstore.create(_make_job(
+        "j-dec", size_bytes=4096, chunks_created=3,
+        metadata={"pages": 12, "ratio": 0.5, "nested": {"n": 7}, "tags": [1, 2]},
+    ))
+
+    job = jobstore.get("j-dec")
+    _json.dumps(job.to_dict())  # must not raise
+    assert type(job.size_bytes) is int
+    assert type(job.chunks_created) is int
+    assert type(job.metadata["pages"]) is int
+    assert type(job.metadata["ratio"]) is float
+    assert type(job.metadata["nested"]["n"]) is int
+    assert all(type(v) is int for v in job.metadata["tags"])
+
+    # update() round-trips through get(); listing paths must convert too.
+    updated = jobstore.update("j-dec", chunks_created=5)
+    _json.dumps(updated.to_dict())
+    listed, _ = jobstore.list(requested_by="alice")
+    for j in listed:
+        _json.dumps(j.to_dict())

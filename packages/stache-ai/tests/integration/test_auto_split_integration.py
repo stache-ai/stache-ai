@@ -106,7 +106,7 @@ def pipeline_without_auto_split(settings_without_auto_split, mock_vectordb_provi
 class TestAutoSplitIntegration:
     """Integration tests for auto-split in pipeline"""
 
-    def test_ingest_long_text_succeeds_with_split(self, pipeline_with_auto_split):
+    async def test_ingest_long_text_succeeds_with_split(self, pipeline_with_auto_split):
         """Long text should ingest successfully with auto-split"""
         pipeline = pipeline_with_auto_split
 
@@ -122,8 +122,12 @@ class TestAutoSplitIntegration:
             return [0.1 * call_count[0]] * 1024
 
         pipeline._embedding_provider.embed.side_effect = embed_side_effect
+        # Batch embedding is tried first; a context-length failure there makes
+        # the wrapper fall back to individual embed() with auto-split.
+        pipeline._embedding_provider.embed_batch.side_effect = Exception(
+            "context length exceeded")
 
-        result = pipeline.ingest_text(
+        result = await pipeline.ingest_text(
             text="word " * 2000,  # Very long text
             namespace="test"
         )
@@ -133,12 +137,12 @@ class TestAutoSplitIntegration:
         assert "info" in result
         assert any("auto-split" in str(info).lower() for info in result.get("info", []))
 
-    def test_ingest_normal_text_no_split(self, pipeline_with_auto_split):
+    async def test_ingest_normal_text_no_split(self, pipeline_with_auto_split):
         """Normal-sized text should not trigger split"""
         pipeline = pipeline_with_auto_split
         pipeline._embedding_provider.embed.return_value = [0.1] * 1024
 
-        result = pipeline.ingest_text(
+        result = await pipeline.ingest_text(
             text="Normal sized text",
             namespace="test"
         )
@@ -146,7 +150,7 @@ class TestAutoSplitIntegration:
         # Normal text should not trigger splits
         assert result.get("splits_created", 0) == 0
 
-    def test_split_metadata_in_vectors(self, pipeline_with_auto_split):
+    async def test_split_metadata_in_vectors(self, pipeline_with_auto_split):
         """Split chunks should have metadata markers"""
         pipeline = pipeline_with_auto_split
 
@@ -163,7 +167,7 @@ class TestAutoSplitIntegration:
 
         pipeline._embedding_provider.embed.side_effect = embed_side_effect
 
-        result = pipeline.ingest_text(text="long " * 1000, namespace="test")
+        result = await pipeline.ingest_text(text="long " * 1000, namespace="test")
 
         # Verify that insert was called on the documents provider
         assert pipeline._vectordb_provider.insert.called
@@ -176,7 +180,7 @@ class TestAutoSplitIntegration:
         assert result is not None
         assert result.get("chunks_created", 0) > 0
 
-    def test_disabled_auto_split(self, pipeline_without_auto_split):
+    async def test_disabled_auto_split(self, pipeline_without_auto_split):
         """Auto-split can be disabled via config"""
         pipeline = pipeline_without_auto_split
 
@@ -187,7 +191,7 @@ class TestAutoSplitIntegration:
         # The error may be caught during document summary creation or other operations
         # Verify that the error is encountered (either raised or logged)
         try:
-            result = pipeline.ingest_text(text="long " * 1000, namespace="test")
+            result = await pipeline.ingest_text(text="long " * 1000, namespace="test")
             # If we get here, the error was handled gracefully (e.g., logged)
             # The ingest should still complete, but may not have embeddings
             assert result is not None

@@ -136,7 +136,6 @@ class IngestionService:
             size = len(text.encode("utf-8"))
         else:
             blob_key = f"{job_id}/{filename or 'upload.bin'}"
-            self.blobstore.put(blob_key, data, {"filename": filename, "namespace": namespace})
             size = len(data)
 
         now = self._now()
@@ -154,7 +153,15 @@ class IngestionService:
             created_at=now,
             updated_at=now,
         )
+        # Persist the job BEFORE writing the blob. In the async (S3) tier the blob
+        # write fires an ObjectCreated event that reaches the worker; the job must
+        # already exist so the S3-event path recognizes it as already-owned and
+        # skips it, instead of racing the write and spawning a duplicate
+        # "producer" job for the same object. The direct enqueue below is the
+        # authoritative trigger for this path.
         self.jobstore.create(job)
+        if data is not None:
+            self.blobstore.put(blob_key, data, {"filename": filename, "namespace": namespace})
         await self.queue.enqueue(job_id)   # inline tier: awaits the worker now
         job = self.jobstore.get(job_id) or job
         if wait and job.status not in TERMINAL:

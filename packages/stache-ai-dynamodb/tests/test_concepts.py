@@ -11,6 +11,9 @@ import pytest
 from unittest.mock import MagicMock, patch
 from botocore.exceptions import ClientError
 
+# The concept index moved to the enterprise packages; skip when absent.
+pytest.importorskip("stache_ai_dynamodb.concepts")
+
 from stache_ai_dynamodb.concepts import (
     DynamoDBConceptIndexProvider,
     generate_concept_id,

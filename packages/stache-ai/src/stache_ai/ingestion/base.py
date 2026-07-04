@@ -111,6 +111,30 @@ class JobStore(ABC):
              status: Optional[JobStatus] = None, limit: int = 50,
              cursor: Optional[str] = None) -> tuple[list[Job], Optional[str]]: ...
 
+    def claim(self, job_id: str, *, from_statuses: "set[JobStatus]",
+              to_status: "JobStatus" = None) -> bool:
+        """Atomically transition a job into ``to_status`` iff it is currently in
+        one of ``from_statuses``. Returns True if this caller won the claim, or
+        False if the job is missing or already claimed/terminal (the losing
+        duplicate then no-ops).
+
+        Idempotent-consumer guard. The async tier delivers the same job more than
+        once by design - SQS is at-least-once, and a blob-backed job is triggered
+        by both a direct enqueue and the bucket's S3 ObjectCreated event - so
+        processing MUST be gated on winning this claim, not on a bare status read.
+        This default is a non-atomic get+update, adequate for the single-process
+        sync tier (ephemeral/sqlite); DynamoDB overrides it with a conditional
+        write that is safe under real concurrency.
+        """
+        from datetime import datetime, timezone
+        to_status = to_status or JobStatus.PROCESSING
+        job = self.get(job_id)
+        if job is None or job.status not in from_statuses:
+            return False
+        self.update(job_id, status=to_status,
+                    updated_at=datetime.now(timezone.utc).isoformat())
+        return True
+
     def list_stuck(self, older_than_iso: str) -> list[Job]:
         return []                          # reaper - async tiers only
 
