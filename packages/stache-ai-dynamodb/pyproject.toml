@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai-dynamodb"
-version = "0.1.4"
+version = "0.1.5"
 readme = "README.md"
 description = "Dynamodb provider for Stache AI"
 requires-python = ">=3.10"
@@ -38,6 +38,9 @@ dynamodb = "stache_ai_dynamodb.namespace:DynamoDBNamespaceProvider"
 
 [project.entry-points."stache.document_index"]
 dynamodb = "stache_ai_dynamodb.document_index:DynamoDBDocumentIndex"
+
+[project.entry-points."stache.ingest_jobstore"]
+dynamodb = "stache_ai_dynamodb.ingest_jobstore:DynamoJobStore"
 
 [project.urls]
 Homepage = "https://github.com/stache-ai/stache-ai"

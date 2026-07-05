@@ -394,6 +394,10 @@ class S3VectorsProvider(VectorDBProvider):
                 # Primitives pass through directly
                 formatted[k] = v
             elif isinstance(v, list):
+                # S3 Vectors rejects empty arrays in metadata ("Empty arrays are not
+                # allowed") — drop the key entirely rather than fail the whole PutVectors.
+                if not v:
+                    continue
                 # S3 Vectors supports arrays - convert items to proper format
                 if all(isinstance(item, (str, int, float, bool)) for item in v):
                     formatted[k] = v

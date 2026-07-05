@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from stache_ai.rag.pipeline import get_pipeline
+from stache_ai.types import EmptyExtractionError
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,11 @@ async def upload_document(
             # Clean up temp file
             os.unlink(temp_path)
 
+    except EmptyExtractionError as e:
+        # Nothing extractable (empty/scanned/corrupt) — surface the actionable
+        # reason instead of a generic 500.
+        logger.warning(f"Upload rejected (no extractable text): {file.filename}: {e}")
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

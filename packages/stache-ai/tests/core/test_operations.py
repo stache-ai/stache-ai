@@ -1,6 +1,6 @@
 """Tests for core operations shared by HTTP routes and AgentCore handler"""
 
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -147,10 +147,10 @@ class TestDoIngestText:
         """Test that do_ingest_text calls pipeline.ingest_text with correct params"""
         mock_pipeline = MagicMock()
         mock_get_pipeline.return_value = mock_pipeline
-        mock_pipeline.ingest_text.return_value = {
+        mock_pipeline.ingest_text = AsyncMock(return_value={
             "success": True,
             "chunks_created": 5
-        }
+        })
 
         result = do_ingest_text(
             text="Test text content",
@@ -165,28 +165,30 @@ class TestDoIngestText:
         assert call_kwargs['namespace'] == "test-ns"
 
     @patch('stache_ai.core.operations.get_pipeline')
-    def test_raises_value_error_for_text_exceeding_100kb(self, mock_get_pipeline):
-        """Test that ValueError is raised for text exceeding 100KB"""
+    def test_raises_value_error_for_text_exceeding_limit(self, mock_get_pipeline):
+        """Test that ValueError is raised for text exceeding max_ingest_text_bytes"""
+        from stache_ai.config import settings
+
         mock_pipeline = MagicMock()
         mock_get_pipeline.return_value = mock_pipeline
 
-        # Create text larger than 100KB
-        large_text = "a" * (101 * 1024)
+        large_text = "a" * (settings.max_ingest_text_bytes + 1)
 
         with pytest.raises(ValueError) as exc_info:
             do_ingest_text(text=large_text)
 
-        assert "exceeds maximum size of 100KB" in str(exc_info.value)
+        assert "exceeds maximum size" in str(exc_info.value)
+        mock_pipeline.ingest_text.assert_not_called()
 
     def test_accepts_text_exactly_100kb(self):
         """Test that 100KB text is accepted (not rejected)"""
         with patch('stache_ai.core.operations.get_pipeline') as mock_get_pipeline:
             mock_pipeline = MagicMock()
             mock_get_pipeline.return_value = mock_pipeline
-            mock_pipeline.ingest_text.return_value = {
+            mock_pipeline.ingest_text = AsyncMock(return_value={
                 "success": True,
                 "chunks_created": 1
-            }
+            })
 
             # Create text exactly 100KB
             text_100kb = "a" * (100 * 1024)
@@ -200,10 +202,10 @@ class TestDoIngestText:
         """Test that request_id is included in response"""
         mock_pipeline = MagicMock()
         mock_get_pipeline.return_value = mock_pipeline
-        mock_pipeline.ingest_text.return_value = {
+        mock_pipeline.ingest_text = AsyncMock(return_value={
             "success": True,
             "chunks_created": 1
-        }
+        })
 
         result = do_ingest_text(text="test", request_id="ingest-123")
 
@@ -214,10 +216,10 @@ class TestDoIngestText:
         """Test that request_id is generated if not provided"""
         mock_pipeline = MagicMock()
         mock_get_pipeline.return_value = mock_pipeline
-        mock_pipeline.ingest_text.return_value = {
+        mock_pipeline.ingest_text = AsyncMock(return_value={
             "success": True,
             "chunks_created": 1
-        }
+        })
 
         result = do_ingest_text(text="test")
 
@@ -229,7 +231,7 @@ class TestDoIngestText:
         """Test that pipeline exceptions are caught and returned as error dict"""
         mock_pipeline = MagicMock()
         mock_get_pipeline.return_value = mock_pipeline
-        mock_pipeline.ingest_text.side_effect = Exception("Ingest failed")
+        mock_pipeline.ingest_text = AsyncMock(side_effect=Exception("Ingest failed"))
 
         result = do_ingest_text(text="test")
 
@@ -241,7 +243,9 @@ class TestDoIngestText:
     @patch('stache_ai.core.operations.get_pipeline')
     def test_value_error_propagates_not_caught(self, mock_get_pipeline):
         """Test that ValueError is re-raised (not caught)"""
-        large_text = "a" * (101 * 1024)
+        from stache_ai.config import settings
+
+        large_text = "a" * (settings.max_ingest_text_bytes + 1)
 
         with pytest.raises(ValueError):
             do_ingest_text(text=large_text)

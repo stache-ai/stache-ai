@@ -94,6 +94,46 @@ export const captureThought = async (text, metadata = null, namespace = null) =>
   return response.data
 }
 
+// Ingestion job API (async tier / presigned upload)
+const TERMINAL = ['done', 'skipped', 'failed', 'cancelled']
+
+export const submitIngest = async (payload) => (await client.post('/api/ingest', payload)).data
+
+export const getJob = async (id) => (await client.get(`/api/jobs/${id}`)).data
+
+export const listJobs = async (params = {}) => (await client.get('/api/jobs', { params })).data
+
+// Smart-poll a job until it reaches a terminal status (with exponential backoff).
+export async function pollJob(jobId, { interval = 1000, maxInterval = 5000, timeout = 600000, onUpdate } = {}) {
+  const start = Date.now()
+  let wait = interval
+  while (Date.now() - start < timeout) {
+    const job = await getJob(jobId)
+    if (onUpdate) onUpdate(job)
+    if (TERMINAL.includes(job.status)) return job
+    await new Promise(r => setTimeout(r, wait))
+    wait = Math.min(wait * 1.5, maxInterval)
+  }
+  throw new Error('Job polling timed out')
+}
+
+// Large-file path: ask for a presigned URL, PUT the file straight to S3, then poll.
+export const uploadViaPresign = async (file, { namespace = null, metadata = null, onUpdate } = {}) => {
+  const { job_id, upload_url, required_headers } = await submitIngest({
+    upload: true,
+    filename: file.name,
+    content_type: file.type || 'application/octet-stream',
+    namespace,
+    metadata,
+  })
+  // Use the RAW axios (not the `client` instance) so the auth interceptor and
+  // baseURL don't apply to the direct S3 PUT.
+  await axios.put(upload_url, file, {
+    headers: required_headers || { 'Content-Type': file.type },
+  })
+  return pollJob(job_id, { onUpdate })
+}
+
 export const queryKnowledge = async (query, synthesize = true, top_k = 5, namespace = null, rerank = false, model = null) => {
   const response = await getClient().post('/api/query', {
     query,

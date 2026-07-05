@@ -294,6 +294,59 @@ class Settings(BaseSettings):
         description="Enable scheduled trash purge job"
     )
 
+    # ===== Ingestion Backbone (Phase 1: sync tier; all defaults are inert) =====
+    ingest_queue_provider: str = Field(
+        default="inline",
+        description="Ingestion queue provider: inline | sqs(P2) | redis(P5)"
+    )
+    ingest_jobstore_provider: str = Field(
+        default="ephemeral",
+        description="Ingestion job store: ephemeral | sqlite | dynamodb(P2)"
+    )
+    ingest_blob_provider: str = Field(
+        default="null",
+        description="Original blob retention: null | filesystem | s3(P2)"
+    )
+    ingest_intake_provider: str = Field(
+        default="inline",
+        description="Intake provider: inline | s3presign(P2)"
+    )
+    ingest_notifier_provider: str = Field(
+        default="null",
+        description="Job event notifier: null | eventbridge(P4)"
+    )
+    ingest_blob_root: str = "/tmp/stache-originals"
+    ingest_jobstore_sqlite_path: str = "/tmp/stache-jobs.db"
+
+    # ===== Ingestion Backbone (Phase 2: AWS async tier; read by AWS/DynamoDB impls) =====
+    ingest_blob_s3_bucket: str = Field(
+        default="", description="S3 bucket for retained originals"
+    )
+    ingest_blob_s3_prefix: str = Field(
+        default="originals", description="Key prefix within the originals bucket"
+    )
+    ingest_queue_sqs_url: str = Field(
+        default="", description="SQS queue URL for ingestion jobs"
+    )
+    ingest_jobstore_dynamodb_table: str = Field(
+        default="", description="DynamoDB table for job records"
+    )
+    ingest_reaper_stuck_minutes: int = Field(
+        default=30, ge=1, description="Mark processing jobs older than this as failed"
+    )
+
+    # ===== Ingestion Backbone (Phase 3: wait-mode + presigned upload) =====
+    ingest_wait_default_timeout: float = Field(
+        default=25.0,
+        description="Max seconds /api/capture blocks for a terminal job (keep < API Gateway 29s)"
+    )
+    ingest_wait_poll_interval: float = Field(
+        default=0.5, description="Seconds between JobStore polls in wait-mode"
+    )
+    ingest_intake_s3_presign_expiry: int = Field(
+        default=3600, description="Presigned upload URL expiry (seconds)"
+    )
+
     # ===== Application Settings =====
     log_level: str = "info"
     upload_dir: str = "uploads"

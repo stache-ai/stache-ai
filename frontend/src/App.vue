@@ -19,6 +19,7 @@
           <router-link to="/" class="nav-link">Home</router-link>
           <router-link to="/capture" class="nav-link">Capture</router-link>
           <router-link to="/query" class="nav-link">Query</router-link>
+          <router-link to="/jobs" class="nav-link">Jobs</router-link>
           <DocManagementDropdown />
         </div>
 
@@ -37,6 +38,7 @@
           <router-link to="/" class="mobile-nav-link" @click="mobileMenuOpen = false">Home</router-link>
           <router-link to="/capture" class="mobile-nav-link" @click="mobileMenuOpen = false">Capture</router-link>
           <router-link to="/query" class="mobile-nav-link" @click="mobileMenuOpen = false">Query</router-link>
+          <router-link to="/jobs" class="mobile-nav-link" @click="mobileMenuOpen = false">Jobs</router-link>
           <DocManagementDropdown />
           <div class="mobile-health-status" :class="healthStatus">
             <span class="status-dot"></span>

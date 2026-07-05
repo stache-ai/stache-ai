@@ -7,6 +7,7 @@ import Query from './pages/Query.vue'
 import Documents from './pages/Documents.vue'
 import Namespaces from './pages/Namespaces.vue'
 import PendingQueue from './pages/PendingQueue.vue'
+import Jobs from './pages/Jobs.vue'
 import Trash from './pages/Trash.vue'
 import { loadConfig } from './config.js'
 import { initAuth, getAuthProvider, handleCallback, isAuthenticated, login } from './api/auth.js'
@@ -18,6 +19,7 @@ const routes = [
   { path: '/documents', component: Documents },
   { path: '/namespaces', component: Namespaces },
   { path: '/pending', component: PendingQueue },
+  { path: '/jobs', component: Jobs },
   { path: '/trash', component: Trash },
 ]
 

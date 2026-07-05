@@ -5,6 +5,17 @@ from enum import Enum
 from typing import Any
 
 
+class EmptyExtractionError(ValueError):
+    """Raised when a loader yields no meaningful text to ingest.
+
+    Guards against the data-integrity failure where an empty extraction
+    (scanned/image-only PDF, corrupt file, or a silent loader failure) sails
+    through the pipeline and produces a healthy-looking ``active`` document with
+    a hallucinated summary. Subclasses ``ValueError`` so the ingest route maps it
+    to a 400 and the async worker records it as a FAILED job with a clear reason.
+    """
+
+
 class IngestionAction(str, Enum):
     """Actions taken during document ingestion."""
     INGEST_NEW = "ingested_new"

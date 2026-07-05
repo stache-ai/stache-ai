@@ -126,6 +126,36 @@ class TestRAGPipeline:
         assert result["success"] is True
         assert result["chunks_created"] > 0
 
+    @pytest.mark.parametrize("empty_text", ["", "   \n\t  "])
+    async def test_ingest_text_empty_raises(self, mock_pipeline, empty_text):
+        """Empty/whitespace-only text is rejected, not stored as an empty doc."""
+        from stache_ai.types import EmptyExtractionError
+
+        with pytest.raises(EmptyExtractionError):
+            await mock_pipeline.ingest_text(text=empty_text)
+
+        # Nothing should have been embedded or stored.
+        mock_pipeline._documents_provider.insert.assert_not_called()
+        mock_pipeline._summaries_provider.insert.assert_not_called()
+
+    async def test_ingest_file_empty_extraction_raises(self, mock_pipeline, tmp_path):
+        """A loader that yields no text must fail loudly, never enrich-and-store.
+
+        Guards the PDF data-integrity bug: an empty extraction otherwise produced
+        a healthy-looking `active` doc with a hallucinated summary.
+        """
+        from stache_ai.types import EmptyExtractionError
+
+        f = tmp_path / "scanned.pdf"
+        f.write_bytes(b"%PDF-1.4 image-only, no extractable text")
+
+        with patch("stache_ai.loaders.load_document", return_value="   "):
+            with pytest.raises(EmptyExtractionError):
+                await mock_pipeline.ingest_file(file_path=str(f))
+
+        mock_pipeline._documents_provider.insert.assert_not_called()
+        mock_pipeline._summaries_provider.insert.assert_not_called()
+
     async def test_ingest_text_with_prepend_metadata(self, mock_pipeline):
         """Test text ingestion with metadata prepended to chunks"""
         # Disable auto-split for this test to check embed_batch directly

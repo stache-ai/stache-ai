@@ -41,14 +41,14 @@ async def test_process_cleanup_jobs_single_job(mock_pipeline):
         }
     ]
 
-    mock_pipeline.documents_provider.delete_by_ids = AsyncMock(return_value=3)
+    mock_pipeline.documents_provider.delete = MagicMock(return_value=True)
 
     result = await process_cleanup_jobs(mock_pipeline)
 
     assert result["processed"] == 1
     assert result["succeeded"] == 1
     assert result["failed"] == 0
-    mock_pipeline.documents_provider.delete_by_ids.assert_called_once()
+    mock_pipeline.documents_provider.delete.assert_called_once_with(["chunk1", "chunk2", "chunk3"], "default")
     mock_pipeline.document_index_provider.complete_permanent_delete.assert_called_once()
 
 
@@ -68,14 +68,14 @@ async def test_process_cleanup_jobs_multiple_jobs(mock_pipeline):
     ]
     mock_pipeline.document_index_provider.list_cleanup_jobs.return_value = jobs
 
-    mock_pipeline.documents_provider.delete_by_ids = AsyncMock(return_value=2)
+    mock_pipeline.documents_provider.delete = MagicMock(return_value=True)
 
     result = await process_cleanup_jobs(mock_pipeline, batch_size=10)
 
     assert result["processed"] == 3
     assert result["succeeded"] == 3
     assert result["failed"] == 0
-    assert mock_pipeline.documents_provider.delete_by_ids.call_count == 3
+    assert mock_pipeline.documents_provider.delete.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -94,7 +94,7 @@ async def test_process_cleanup_jobs_with_batch_size(mock_pipeline):
     ]
     mock_pipeline.document_index_provider.list_cleanup_jobs.return_value = jobs
 
-    mock_pipeline.documents_provider.delete_by_ids = AsyncMock(return_value=1)
+    mock_pipeline.documents_provider.delete = MagicMock(return_value=True)
 
     result = await process_cleanup_jobs(mock_pipeline, batch_size=5)
 
@@ -116,9 +116,7 @@ async def test_process_cleanup_job_failure(mock_pipeline):
         }
     ]
 
-    mock_pipeline.documents_provider.delete_by_ids = AsyncMock(
-        side_effect=Exception("Delete failed")
-    )
+    mock_pipeline.documents_provider.delete = MagicMock(side_effect=Exception("Delete failed"))
 
     result = await process_cleanup_jobs(mock_pipeline)
 
@@ -143,12 +141,13 @@ async def test_process_cleanup_job_timeout(mock_pipeline):
         }
     ]
 
-    # Simulate slow delete
-    async def slow_delete(*args, **kwargs):
-        await asyncio.sleep(0.1)
-        return 1
+    # Simulate slow delete (runs in executor, so plain sync callable)
+    def slow_delete(*args, **kwargs):
+        import time
+        time.sleep(0.1)
+        return True
 
-    mock_pipeline.documents_provider.delete_by_ids = slow_delete
+    mock_pipeline.documents_provider.delete = slow_delete
 
     # Process with very short timeout
     result = await process_cleanup_jobs(mock_pipeline, max_runtime_seconds=0.01)
@@ -172,7 +171,7 @@ async def test_process_cleanup_job_partial_deletion(mock_pipeline):
     ]
 
     # Only 2 of 3 chunks deleted
-    mock_pipeline.documents_provider.delete_by_ids = AsyncMock(return_value=2)
+    mock_pipeline.documents_provider.delete = MagicMock(return_value=2)
 
     result = await process_cleanup_jobs(mock_pipeline)
 
@@ -196,12 +195,12 @@ async def test_process_cleanup_job_idempotent(mock_pipeline):
 
     # First run
     mock_pipeline.document_index_provider.list_cleanup_jobs.return_value = [job]
-    mock_pipeline.documents_provider.delete_by_ids = AsyncMock(return_value=1)
+    mock_pipeline.documents_provider.delete = MagicMock(return_value=True)
     result1 = await process_cleanup_jobs(mock_pipeline)
 
     # Simulate second run (retry)
     mock_pipeline.document_index_provider.list_cleanup_jobs.return_value = [job]
-    mock_pipeline.documents_provider.delete_by_ids = AsyncMock(return_value=0)
+    mock_pipeline.documents_provider.delete = MagicMock(return_value=True)
     # Should still complete successfully
     result2 = await process_cleanup_jobs(mock_pipeline)
 
@@ -235,7 +234,7 @@ async def test_process_cleanup_job_with_missing_vectors(mock_pipeline):
     ]
 
     # No vectors found to delete
-    mock_pipeline.documents_provider.delete_by_ids = AsyncMock(return_value=0)
+    mock_pipeline.documents_provider.delete = MagicMock(return_value=0)
 
     result = await process_cleanup_jobs(mock_pipeline)
 
@@ -258,9 +257,7 @@ async def test_cleanup_job_mark_failed_on_exception(mock_pipeline):
         }
     ]
 
-    mock_pipeline.documents_provider.delete_by_ids = AsyncMock(
-        side_effect=Exception("Vector DB error")
-    )
+    mock_pipeline.documents_provider.delete = MagicMock(side_effect=Exception("Vector DB error"))
 
     await process_cleanup_jobs(mock_pipeline)
 

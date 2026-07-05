@@ -36,7 +36,7 @@ from stache_ai.rag.embedding_resilience import (
     BedrockErrorClassifier,
     OllamaErrorClassifier,
 )
-from stache_ai.types import IngestionResult, IngestionAction
+from stache_ai.types import EmptyExtractionError, IngestionResult, IngestionAction
 from stache_ai.utils.hashing import compute_hash_async
 
 logger = logging.getLogger(__name__)
@@ -205,13 +205,27 @@ class RAGPipeline:
 
     @property
     def concept_index(self):
-        """Lazy-load concept index provider from enterprise package."""
+        """Lazy-load the concept index provider (optional enterprise add-on).
+
+        Concept extraction is a post-ingest enhancement — it must never fail the
+        primary ingest. Returns None (never raises) when concepts are unavailable:
+        - Enterprise package not installed: expected, silent.
+        - Installed but unresolvable (unconfigured table, missing IAM, transient
+          error): unexpected — logged at ERROR so a broken setup is visible, not silent.
+        """
         if self._concept_index is None:
             try:
                 from stache_ai_enterprise_common import get_concept_index
-                self._concept_index = get_concept_index(self.config)
             except ImportError:
-                pass  # Enterprise not installed
+                return None  # Enterprise not installed — concepts are optional
+            try:
+                self._concept_index = get_concept_index(self.config)
+            except Exception as e:
+                logger.error(
+                    f"Concept index unavailable — concept extraction will be SKIPPED "
+                    f"for this ingest (enterprise package is installed but the concept "
+                    f"index could not be resolved): {e}"
+                )
         return self._concept_index
 
     @property
@@ -391,6 +405,12 @@ class RAGPipeline:
         start_time = time.perf_counter()
 
         logger.info(f"Ingesting text (length: {len(text)}, strategy: {chunking_strategy}, namespace: {namespace})")
+
+        # Empty-extraction guard: refuse to enrich-and-store emptiness (mirrors the
+        # file path). Blank text would otherwise yield a 0-chunk, unsearchable doc
+        # that still gets an LLM summary and an `active` status.
+        if not text or not text.strip():
+            raise EmptyExtractionError("Cannot ingest empty text.")
 
         # Prepare metadata and namespace (copy: guards and dedup state
         # mutate this dict, which must not leak into the caller's object)
@@ -907,6 +927,18 @@ class RAGPipeline:
         from stache_ai.loaders import load_document
         text = load_document(str(path), filename)
 
+        # Empty-extraction guard: never enrich-and-store emptiness. A loader that
+        # yields no meaningful text (scanned/image-only PDF, corrupt file, or a
+        # silent extraction failure — e.g. pdfminer unable to cache CMaps under a
+        # read-only serverless filesystem) must fail loudly here, not sail through
+        # to produce a healthy-looking `active` doc with a hallucinated summary.
+        if not text or not text.strip():
+            raise EmptyExtractionError(
+                f"No extractable text from '{filename}'; the file may be empty, "
+                "scanned/image-only, or an unsupported format. Enable OCR for "
+                "scanned PDFs."
+            )
+
         # Apply enrichment middleware before chunking
         current_text = text
         current_metadata = metadata or {}
@@ -949,11 +981,12 @@ class RAGPipeline:
         # Use chunking strategy factory
         strategy = ChunkingStrategyFactory.create(chunking_strategy)
 
-        # For hierarchical chunking, pass the file path directly
-        # For other strategies, use the enriched text
+        # For hierarchical chunking, pass file_path (Docling reads structure when
+        # available) AND the already-extracted text — the recursive fallback needs it
+        # when Docling isn't installed (e.g. serverless), else chunks come out empty.
         if chunking_strategy == "hierarchical":
             chunk_objects = strategy.chunk(
-                "",  # Empty text, file_path is used
+                text,
                 chunk_size=effective_chunk_size,
                 chunk_overlap=self.config.chunk_overlap,
                 file_path=str(path)

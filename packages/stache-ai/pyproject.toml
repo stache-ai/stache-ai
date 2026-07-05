@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai"
-version = "0.1.10"
+version = "0.2.0"
 readme = "README.md"
 description = "Personal AI-powered knowledge base with RAG"
 license = {text = "MIT"}
@@ -47,11 +47,14 @@ dev = [
     "httpx>=0.25.0",
     "mypy>=1.0.0",
     "ruff>=0.1.0",
+    # Async-ingestion AWS-tier tests (skip without these + the provider packages)
+    "moto[s3,sqs,dynamodb]>=5.0.0",
+    "boto3>=1.34.0",
 ]
 # Provider bundles for convenience
 aws = [
-    "stache-ai-s3vectors>=0.1.0",
-    "stache-ai-dynamodb>=0.1.0",
+    "stache-ai-s3vectors>=0.1.4",
+    "stache-ai-dynamodb>=0.1.5",
     "stache-ai-bedrock>=0.1.0",
 ]
 ollama = [

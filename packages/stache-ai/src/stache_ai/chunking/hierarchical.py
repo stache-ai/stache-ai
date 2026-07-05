@@ -137,18 +137,18 @@ class HierarchicalChunkingStrategy(ChunkingStrategy):
                             if hasattr(item, 'label'):
                                 doc_item_labels.append(str(item.label))
 
-                chunk = Chunk(
-                    text=doc_chunk.text,
-                    index=i,
-                    metadata={
-                        'strategy': 'hierarchical',
-                        'headings': headings,
-                        'heading_path': heading_path,
-                        'heading_level': len(headings),
-                        'doc_item_labels': doc_item_labels,
-                        'chunk_size': len(doc_chunk.text),
-                    }
-                )
+                meta = {
+                    'strategy': 'hierarchical',
+                    'heading_path': heading_path,
+                    'heading_level': len(headings),
+                    'chunk_size': len(doc_chunk.text),
+                }
+                # S3 Vectors rejects empty arrays — only attach list fields when non-empty
+                if headings:
+                    meta['headings'] = headings
+                if doc_item_labels:
+                    meta['doc_item_labels'] = doc_item_labels
+                chunk = Chunk(text=doc_chunk.text, index=i, metadata=meta)
                 chunks.append(chunk)
 
             logger.info(f"Created {len(chunks)} hierarchical chunks from {path.name}")
@@ -176,10 +176,10 @@ class HierarchicalChunkingStrategy(ChunkingStrategy):
         recursive = RecursiveChunkingStrategy()
         chunks = recursive.chunk(text, chunk_size, chunk_overlap)
 
-        # Add hierarchical metadata (empty since no structure)
+        # Add hierarchical metadata (no structure in fallback). Omit the 'headings'
+        # key entirely — an empty array would be rejected by S3 Vectors.
         for chunk in chunks:
             chunk.metadata['strategy'] = 'hierarchical'
-            chunk.metadata['headings'] = []
             chunk.metadata['heading_path'] = ''
             chunk.metadata['heading_level'] = 0
 

@@ -94,7 +94,7 @@
 
       <!-- Result -->
       <div v-if="result" class="result" :class="result.type">
-        <div class="result-icon">{{ result.type === 'success' ? '✅' : result.type === 'warning' ? '⚠️' : '❌' }}</div>
+        <div class="result-icon">{{ result.type === 'success' ? '✅' : result.type === 'warning' ? '⚠️' : result.type === 'info' ? '⏳' : '❌' }}</div>
         <div class="result-content">
           <strong>{{ result.message }}</strong>
           <p v-if="result.details">{{ result.details }}</p>
@@ -106,7 +106,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
-import { captureThought, uploadDocument, batchUploadDocuments } from '../api/client.js'
+import { captureThought, uploadViaPresign } from '../api/client.js'
 import MetadataFields from '../components/MetadataFields.vue'
 import NamespaceSelector from '../components/NamespaceSelector.vue'
 
@@ -165,23 +165,27 @@ const handleSubmit = async () => {
     const summaries = []
     let anyFailed = false
 
-    if (files.value.length > 1) {
-      // Batch upload multiple files
-      const response = await batchUploadDocuments(files.value, {
-        chunkingStrategy: chunkingStrategy.value,
+    // Upload each file via a presigned URL, then smart-poll its job to terminal.
+    for (const file of files.value) {
+      const job = await uploadViaPresign(file, {
         namespace: ns,
         metadata: metadata.value,
-        skipErrors: true,
-        onProgress: (percent) => {
-          uploadProgress.value = percent
+        onUpdate: (j) => {
+          result.value = {
+            type: 'info',
+            message: `Processing ${file.name}… (${j.status})`
+          }
         }
       })
-      if (response.failed > 0) anyFailed = true
-      summaries.push(`${response.successful}/${response.total_files} files ingested, ${response.total_chunks} chunks`)
-    } else if (files.value.length === 1) {
-      // Single file upload
-      const response = await uploadDocument(files.value[0], chunkingStrategy.value, metadata.value, ns)
-      summaries.push(`${files.value[0].name}: ${response.chunks_created} chunk(s)`)
+      if (job.status === 'done' || job.status === 'skipped') {
+        const detail = job.status === 'skipped'
+          ? 'skipped (already ingested)'
+          : `${job.chunks_created ?? 0} chunk(s)`
+        summaries.push(`${file.name}: ${detail}`)
+      } else {
+        anyFailed = true
+        summaries.push(`${file.name}: failed (${job.error_detail || job.status})`)
+      }
     }
 
     if (hasText) {
@@ -398,6 +402,11 @@ select {
 .result.warning {
   background: #fef3c7;
   border: 1px solid #fcd34d;
+}
+
+.result.info {
+  background: #dbeafe;
+  border: 1px solid #93c5fd;
 }
 
 .form-actions {
