@@ -119,13 +119,26 @@ export async function pollJob(jobId, { interval = 1000, maxInterval = 5000, time
 
 // Large-file path: ask for a presigned URL, PUT the file straight to S3, then poll.
 export const uploadViaPresign = async (file, { namespace = null, metadata = null, onUpdate } = {}) => {
-  const { job_id, upload_url, required_headers } = await submitIngest({
-    upload: true,
-    filename: file.name,
-    content_type: file.type || 'application/octet-stream',
-    namespace,
-    metadata,
-  })
+  let ticket
+  try {
+    ticket = await submitIngest({
+      upload: true,
+      filename: file.name,
+      content_type: file.type || 'application/octet-stream',
+      namespace,
+      metadata,
+    })
+  } catch (err) {
+    // Only a 400 from the presign REQUEST means the backend has no presigned
+    // intake (sync tier) and no job was created — safe for callers to fall back
+    // to the legacy upload. Errors after this point (S3 PUT, polling) must NOT
+    // be treated as fallback-able: the job already exists, and S3 itself
+    // returns 400s (RequestTimeout, EntityTooLarge) that would otherwise
+    // trigger a duplicate ingest alongside an orphaned UPLOADING job.
+    if (err.status === 400) err.presignUnsupported = true
+    throw err
+  }
+  const { job_id, upload_url, required_headers } = ticket
   // Use the RAW axios (not the `client` instance) so the auth interceptor and
   // baseURL don't apply to the direct S3 PUT.
   await axios.put(upload_url, file, {

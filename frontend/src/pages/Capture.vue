@@ -106,7 +106,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
-import { captureThought, uploadViaPresign } from '../api/client.js'
+import { captureThought, uploadViaPresign, uploadDocument } from '../api/client.js'
 import MetadataFields from '../components/MetadataFields.vue'
 import NamespaceSelector from '../components/NamespaceSelector.vue'
 
@@ -167,16 +167,29 @@ const handleSubmit = async () => {
 
     // Upload each file via a presigned URL, then smart-poll its job to terminal.
     for (const file of files.value) {
-      const job = await uploadViaPresign(file, {
-        namespace: ns,
-        metadata: metadata.value,
-        onUpdate: (j) => {
-          result.value = {
-            type: 'info',
-            message: `Processing ${file.name}… (${j.status})`
+      let job
+      try {
+        job = await uploadViaPresign(file, {
+          namespace: ns,
+          metadata: metadata.value,
+          onUpdate: (j) => {
+            result.value = {
+              type: 'info',
+              message: `Processing ${file.name}… (${j.status})`
+            }
           }
-        }
-      })
+        })
+      } catch (err) {
+        // Sync tier has no presigned-upload intake: the presign REQUEST fails
+        // with 400 and uploadViaPresign tags it (no job was created). Fall back
+        // to the legacy multipart upload, which ingests in-process and returns
+        // a terminal result. Any other error — including failures during the
+        // S3 PUT or polling, when a job already exists — propagates.
+        if (!err.presignUnsupported) throw err
+        result.value = { type: 'info', message: `Uploading ${file.name}…` }
+        const uploaded = await uploadDocument(file, chunkingStrategy.value, metadata.value, ns)
+        job = { status: 'done', chunks_created: uploaded.chunks_created }
+      }
       if (job.status === 'done' || job.status === 'skipped') {
         const detail = job.status === 'skipped'
           ? 'skipped (already ingested)'

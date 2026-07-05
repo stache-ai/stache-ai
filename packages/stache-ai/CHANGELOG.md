@@ -5,6 +5,61 @@ All notable changes to stache-ai will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-05
+
+See [docs/release-0.2.md](../../docs/release-0.2.md) for the full release notes.
+
+### Added
+
+- **Async Ingestion Backbone**: provider-abstracted submit → poll pipeline behind
+  five new seams (`IntakeProvider`, `QueueProvider`, `JobStore`, `BlobStore`,
+  `Notifier`) with matching entry point groups (`stache.ingest_queue`,
+  `stache.ingest_jobstore`, `stache.ingest_blob`, `stache.ingest_intake`,
+  `stache.ingest_notifier`). Sync in-process tier is the default; the AWS async
+  tier ships in `stache-ai-aws` 0.2.0 / `stache-ai-dynamodb` 0.1.6.
+- **Unified ingestion API**: `POST /api/ingest` (text, base64 file, or presigned
+  upload; optional server-side wait), `GET /api/jobs/{id}`, `GET /api/jobs`
+  (requester-scoped, `cursor` pagination param with validated `limit` 1–200).
+- `INGEST_PRODUCER_DROPS_ENABLED` (default `true`): kill switch for raw S3
+  producer drops, whose namespace/`requested_by` come from producer-asserted
+  (unauthenticated) object metadata.
+- Oversized text submissions (`POST /api/ingest`, `POST /api/capture`) are
+  rejected with **413** at the smaller of `MAX_INGEST_TEXT_BYTES` and any
+  jobstore-declared inline-payload cap (DynamoDB: 350KB, under its 400KB item
+  limit), so oversize text no longer 500s on the backend write; the completed
+  (and reaper-failed) job record no longer retains the document body.
+- **Request principals**: `requested_by` extracted from API Gateway JWT
+  authorizer claims (falls back to `anonymous`); namespace write-authz hook
+  stubbed for follow-up enforcement.
+- `EmptyExtractionError`: empty/scanned/corrupt documents fail loudly instead of
+  storing an empty `active` document with a hallucinated summary.
+- Frontend Jobs page (`/jobs`) and presign-upload client helpers.
+
+### Changed
+
+- `POST /api/capture` routes through the ingestion service in wait-mode
+  (response shape preserved; adds `job_id`/`status`). A wait-mode timeout now
+  returns `action: "processing"` instead of a false `ingested_new`.
+- Presigned upload `required_headers` now includes every signed header
+  (`Content-Type` + pinned `x-amz-meta-stache-*`), not just `Content-Type`;
+  the presign expiry default drops to 1500s (must stay under the reaper TTL).
+  Non-ASCII filenames are percent-encoded into `x-amz-meta-stache-filename` so
+  the browser can echo the signed header on the PUT (ISO-8859-1 only); the
+  producer path unquotes them back to the original name.
+- `POST /api/upload` returns 422 (was 500) when no text is extractable.
+- Hierarchical chunking omits empty `headings`/`doc_item_labels` metadata keys
+  (S3 Vectors rejects empty arrays).
+- Concept-index resolution failures are logged at ERROR instead of silently
+  skipping concept extraction.
+
+### Removed
+
+- AWS-specific ingestion code and settings from core: the SQS worker and reaper
+  Lambda entrypoints now live in `stache-ai-aws`, and `INGEST_BLOB_S3_*`,
+  `INGEST_QUEUE_SQS_URL`, `INGEST_JOBSTORE_DYNAMODB_TABLE`, and
+  `INGEST_INTAKE_S3_PRESIGN_EXPIRY` are read by the plugin packages (env var
+  names unchanged).
+
 ## [0.1.9] - 2026-01-26
 
 ### Changed

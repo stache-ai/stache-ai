@@ -1,7 +1,7 @@
 """Provider-agnostic ingestion worker.
 
 The single async processing function used by every tier: inline-awaited in the
-sync tier now, driven by an SQS Lambda via ``asyncio.run`` in Phase 2. It
+sync tier, driven by a queue-consumer entrypoint in async tiers. It
 delegates straight to the existing pipeline - text via ``ingest_text``, files
 by temp-writing the blob and calling ``ingest_file`` (which self-loads via
 Docling and auto-chunks by type). No custom loading lives here.
@@ -13,14 +13,11 @@ import tempfile
 import traceback
 from datetime import datetime, timezone
 
-from .base import JobEvent, JobStatus
+from .base import JobEvent, JobStatus, strip_transport
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_TEXT = {"text", "markdown"}
-
-# Transport-only metadata keys that must never reach enrichers / the vector store.
-_TRANSPORT_KEYS = {"_text", "_chunking", "_prepend_metadata"}
 
 
 def make_worker(jobstore, blobstore, notifier, pipeline):
@@ -33,17 +30,17 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
             logger.warning(f"[ingest] job {job_id} not found; nothing to process")
             return
         # Idempotent claim: win the QUEUED/UPLOADING -> PROCESSING transition or
-        # bail. The async tier delivers the same job more than once (SQS is
-        # at-least-once; a blob-backed job fires both a direct enqueue and an S3
-        # ObjectCreated event), so a losing duplicate must no-op here instead of
-        # re-ingesting.
+        # bail. The async tier delivers the same job more than once (queues are
+        # at-least-once; a blob-backed job fires both a direct enqueue and a
+        # blob-store object-created event), so a losing duplicate must no-op here
+        # instead of re-ingesting.
         if not jobstore.claim(job_id, from_statuses={JobStatus.QUEUED, JobStatus.UPLOADING}):
             logger.info(f"[ingest] job {job_id} already claimed/terminal; skipping duplicate delivery")
             return
         notifier.publish(JobEvent(job_id, JobStatus.PROCESSING, job.requested_by, job.namespace))
         try:
             # Strip transport-only keys before they reach enrichers / vector store.
-            md = {k: v for k, v in job.metadata.items() if k not in _TRANSPORT_KEYS}
+            md = strip_transport(job.metadata)
             prepend = job.metadata.get("_prepend_metadata")
             if job.content_type in SUPPORTED_TEXT and "_text" in job.metadata:
                 result = await pipeline.ingest_text(
@@ -81,6 +78,12 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                 status=status,
                 doc_id=doc_id,
                 chunks_created=result.get("chunks_created", 0) or 0,
+                # Drop the inline document body from the persisted record now that
+                # processing is done: transport-only keys (notably _text) can be
+                # hundreds of KB and would otherwise blow past DynamoDB's 400KB
+                # item cap and leak into GET /api/jobs responses. Safe here because
+                # the job is terminal (any losing duplicate already no-op'd).
+                metadata=strip_transport(job.metadata),
                 updated_at=_now(),
                 completed_at=_now(),
             )
@@ -90,6 +93,7 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                 job_id,
                 status=JobStatus.FAILED,
                 error_detail=str(e)[:500],
+                metadata=strip_transport(job.metadata),
                 updated_at=_now(),
                 completed_at=_now(),
             )

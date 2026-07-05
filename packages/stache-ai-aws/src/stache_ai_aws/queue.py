@@ -6,10 +6,12 @@ import boto3
 
 from stache_ai.ingestion.base import QueueProvider
 
+from .settings import resolve
+
 
 class SqsQueue(QueueProvider):
     def __init__(self, config):
-        self._url = config.ingest_queue_sqs_url
+        self._url = resolve(config, "ingest_queue_sqs_url")
         self._sqs = boto3.client("sqs", region_name=config.aws_region)
 
     async def enqueue(self, job_id: str) -> None:

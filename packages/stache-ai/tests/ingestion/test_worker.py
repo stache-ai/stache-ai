@@ -49,6 +49,26 @@ def test_worker_text_success_marks_done():
     assert pipeline.ingest_text.call_args.kwargs["chunking_strategy"] == "recursive"
 
 
+def test_worker_strips_transport_keys_on_terminal():
+    # The terminal job record must not retain the document body (_text) or other
+    # transport-only keys, so GET /api/jobs / DynamoDB items stay small.
+    store = EphemeralJobStore()
+    store.create(_text_job({
+        "_text": "hello world", "_chunking": "recursive",
+        "_prepend_metadata": ["topic"], "topic": "x",
+    }))
+    pipeline = AsyncMock()
+    pipeline.ingest_text.return_value = {"doc_id": "d", "action": "ingested_new", "chunks_created": 1}
+    worker = make_worker(store, _Blob(), NullNotifier(), pipeline)
+    asyncio.run(worker("j1"))
+
+    md = store.get("j1").metadata
+    assert "_text" not in md
+    assert "_chunking" not in md
+    assert "_prepend_metadata" not in md
+    assert md == {"topic": "x"}
+
+
 def test_worker_dedup_marks_skipped():
     store = EphemeralJobStore()
     store.create(_text_job({"_text": "dup"}))
@@ -73,6 +93,8 @@ def test_worker_failure_marks_failed():
     job = store.get("j1")
     assert job.status == JobStatus.FAILED
     assert "embedding exploded" in job.error_detail
+    # Even on failure the terminal record drops the transport-only body.
+    assert "_text" not in job.metadata
 
 
 def test_worker_file_path_uses_ingest_file_and_blob():
