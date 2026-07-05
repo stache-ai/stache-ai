@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from stache_ai.api import auth
+from stache_ai.identity import ForbiddenError
 from stache_ai.middleware.context import RequestContext
 from stache_ai.models.insight import InsightCreate
 from stache_ai.rag.pipeline import get_pipeline
@@ -63,6 +64,8 @@ async def create_insight(request: InsightCreate, http_request: Request):
             "message": "Insight created successfully",
             **result
         }
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to create insight: {e}")
         raise HTTPException(
@@ -112,6 +115,8 @@ async def search_insights(
             results=formatted_results,
             total=len(formatted_results)
         )
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to search insights: {e}")
         raise HTTPException(
@@ -150,6 +155,8 @@ async def delete_insight(
             "message": f"Insight {insight_id} deleted successfully",
             **result
         }
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete insight {insight_id}: {e}")
         raise HTTPException(

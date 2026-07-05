@@ -7,6 +7,7 @@ from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from stache_ai.api import auth
+from stache_ai.identity import ForbiddenError
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -98,6 +99,8 @@ async def list_documents(
 
                 return response
 
+            except ForbiddenError:
+                raise
             except Exception as e:
                 logger.warning(f"Document index provider error, falling back to summary search: {e}")
                 # Fall through to summary-based listing
@@ -167,6 +170,8 @@ async def list_documents(
         return await _list_documents_legacy(pipeline, namespace, extension, context)
 
     except HTTPException:
+        raise
+    except ForbiddenError:
         raise
     except Exception as e:
         logger.error(f"Failed to list documents: {e}")
@@ -259,6 +264,8 @@ async def _list_documents_legacy(pipeline, namespace: str | None, extension: str
             "source": "legacy_index_scan"
         }
 
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Legacy document listing failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -319,6 +326,8 @@ async def discover_documents(
             "count": len(documents)
         }
 
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to discover documents: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -371,6 +380,8 @@ async def get_chunks_by_ids(
             "count": len(chunks),
             "reconstructed_text": "\n\n".join(c.get("text", "") for c in chunks)
         }
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get chunks by IDs: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -447,6 +458,8 @@ async def delete_orphaned_chunks(
         }
     except HTTPException:
         raise
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete orphaned chunks: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -501,6 +514,8 @@ async def get_document(
             "metadata": metadata
         }
     except HTTPException:
+        raise
+    except ForbiddenError:
         raise
     except Exception as e:
         logger.error(f"Failed to get document: {e}")
@@ -564,6 +579,8 @@ async def delete_document_by_id(
             }
     except HTTPException:
         raise
+    except ForbiddenError:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -606,6 +623,8 @@ async def delete_document_by_filename(
             "chunks_deleted": result["chunks_deleted"]
         }
     except HTTPException:
+        raise
+    except ForbiddenError:
         raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -704,6 +723,8 @@ async def update_document_metadata(
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to update document {doc_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -853,6 +874,8 @@ async def migrate_document_summaries(
 
                 created += 1
 
+            except ForbiddenError:
+                raise
             except Exception as e:
                 errors.append({"doc_id": doc_id, "error": str(e)})
                 logger.error(f"Failed to create summary for {doc_id}: {e}")
@@ -867,6 +890,8 @@ async def migrate_document_summaries(
         }
 
     except HTTPException:
+        raise
+    except ForbiddenError:
         raise
     except Exception as e:
         logger.error(f"Migration failed: {e}")

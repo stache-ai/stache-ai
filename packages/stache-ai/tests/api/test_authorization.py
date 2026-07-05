@@ -7,10 +7,14 @@ authorizer through the real config/entry-point path (register_provider +
 settings) to prove every enforcement point actually enforces.
 """
 
+import ast
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 import stache_ai.api.main as main_mod
+import stache_ai.api.routes as routes_pkg
 from stache_ai import identity
 from stache_ai.config import settings
 from stache_ai.providers import plugin_loader
@@ -157,3 +161,82 @@ def test_misconfigured_authorizer_aborts_startup_path(monkeypatch):
             identity.get_authorizer()
     finally:
         identity.reset_authorizer()
+
+
+# ---------------------------------------------------------------------------
+# Static sweep: every blanket ``except Exception`` in a route module must not
+# swallow a ForbiddenError raised deeper in the call (a plugged authorizer or
+# a provider denying mid-request). A route that calls ``auth.authorize()``
+# and then does real work in a broad try/except needs a preceding
+# ``except ForbiddenError: raise`` in the SAME try statement, or the denial
+# gets rewritten into a 500 by the blanket handler.
+#
+# Entries below are the only except-Exception blocks that legitimately don't
+# need one, because nothing reachable in the guarded body can raise
+# ForbiddenError. Keep this allowlist short and remove entries once the
+# guarded code changes to make the justification stale.
+# ---------------------------------------------------------------------------
+
+_FORBIDDEN_SWEEP_ALLOWLIST = {
+    # No auth.authorize() call anywhere in this route; it's an unauthenticated
+    # health probe that only reports provider connectivity.
+    ("health.py", "except Exception"): "no authorization check in this route",
+    # Reads local queue JSON files off disk (json.load / Pydantic parsing) -
+    # no authorizer or provider call happens inside this loop.
+    ("pending.py", "except Exception"): "local file read only, no provider/authorizer call",
+}
+
+
+def _is_bare_exception_handler(handler: ast.ExceptHandler) -> bool:
+    return isinstance(handler.type, ast.Name) and handler.type.id == "Exception"
+
+
+def _is_forbidden_reraise_handler(handler: ast.ExceptHandler) -> bool:
+    if not (isinstance(handler.type, ast.Name) and handler.type.id == "ForbiddenError"):
+        return False
+    # Body must be a bare `raise` (possibly preceded by nothing else) - a
+    # re-raise, not a handler that swallows/transforms the denial.
+    return len(handler.body) == 1 and isinstance(handler.body[0], ast.Raise) \
+        and handler.body[0].exc is None
+
+
+def test_route_modules_reraise_forbidden_before_blanket_except():
+    """Static sweep making FIX 1 durable against future route additions.
+
+    Every ``except Exception`` in ``api/routes/*.py`` must be preceded, in the
+    same try statement, by an ``except ForbiddenError: raise``  -- otherwise a
+    denial raised inside the route body (by a plugged authorizer or a
+    provider) would be swallowed into a 500 instead of surfacing as 403.
+    """
+    routes_dir = Path(routes_pkg.__file__).parent
+    violations = []
+
+    for path in sorted(routes_dir.glob("*.py")):
+        source = path.read_text()
+        tree = ast.parse(source, filename=str(path))
+        imports_forbidden_error = any(
+            isinstance(node, ast.ImportFrom)
+            and node.module == "stache_ai.identity"
+            and any(alias.name == "ForbiddenError" for alias in node.names)
+            for node in ast.walk(tree)
+        )
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            for idx, handler in enumerate(node.handlers):
+                if not _is_bare_exception_handler(handler):
+                    continue
+                preceding = node.handlers[:idx]
+                if any(_is_forbidden_reraise_handler(h) for h in preceding):
+                    continue
+                key = (path.name, "except Exception")
+                if key in _FORBIDDEN_SWEEP_ALLOWLIST:
+                    continue
+                violations.append(
+                    f"{path.name}:{handler.lineno} `except Exception` with no "
+                    f"preceding `except ForbiddenError: raise` in the same try "
+                    f"(imports ForbiddenError: {imports_forbidden_error})"
+                )
+
+    assert not violations, "Unguarded except-Exception block(s):\n" + "\n".join(violations)

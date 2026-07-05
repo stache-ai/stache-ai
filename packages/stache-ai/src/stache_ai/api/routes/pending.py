@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from stache_ai.api import auth
 from stache_ai.config import settings
+from stache_ai.identity import ForbiddenError
 from stache_ai.loaders import load_document
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
@@ -186,6 +187,8 @@ async def approve_pending(item_id: str, request: ApproveRequest, http_request: R
         }
 
     except HTTPException:
+        raise
+    except ForbiddenError:
         raise
     except Exception as e:
         logger.error(f"Failed to approve {item_id}: {e}")

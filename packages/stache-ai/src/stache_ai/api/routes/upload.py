@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from stache_ai.api import auth
 from stache_ai.config import settings
+from stache_ai.identity import ForbiddenError
 from stache_ai.middleware.context import RequestContext
 from stache_ai.sanitize import strip_reserved_metadata
 from stache_ai.rag.pipeline import get_pipeline
@@ -103,6 +104,8 @@ async def upload_document(
         # reason instead of a generic 500.
         logger.warning(f"Upload rejected (no extractable text): {file.filename}: {e}")
         raise HTTPException(status_code=422, detail=str(e))
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -190,6 +193,10 @@ async def batch_upload_documents(
 
             logger.info(f"Batch upload: {file.filename} - {result['chunks_created']} chunks (strategy: {result.get('chunking_strategy', 'unknown')})")
 
+        except ForbiddenError:
+            # An authorization denial applies to the whole request, not just
+            # this file - do not record it as a per-file failure and continue.
+            raise
         except Exception as e:
             logger.error(f"Batch upload failed for {file.filename}: {e}")
             results.append(BatchUploadResult(

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from stache_ai.api import auth
+from stache_ai.identity import ForbiddenError
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -106,6 +107,8 @@ def get_namespace_stats(namespace_id: str, context: RequestContext | None = None
 
         # Fallback to zeros if no document index provider
         return {"doc_count": 0, "chunk_count": 0}
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.warning(f"Could not get stats for namespace {namespace_id}: {e}")
         return {"doc_count": 0, "chunk_count": 0}
@@ -151,6 +154,8 @@ async def create_namespace(data: NamespaceCreate, http_request: Request):
         return enrich_namespace_with_stats(namespace, context=context)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to create namespace: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -187,6 +192,8 @@ async def list_namespaces(
             "namespaces": namespaces,
             "count": len(namespaces)
         }
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to list namespaces: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -228,6 +235,8 @@ async def get_namespace_tree(
             "tree": tree,
             "count": len(tree)
         }
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get namespace tree: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -261,6 +270,8 @@ async def get_namespace(
 
         return result
     except HTTPException:
+        raise
+    except ForbiddenError:
         raise
     except Exception as e:
         logger.error(f"Failed to get namespace: {e}")
@@ -309,6 +320,8 @@ async def update_namespace(
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Failed to update namespace: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -356,6 +369,8 @@ async def delete_namespace(
                 )
                 total_deleted += result.get('deleted', 0)
                 logger.info(f"Deleted {result['deleted']} chunks from documents provider for namespace: {namespace_id}")
+            except ForbiddenError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to delete from documents provider for namespace {namespace_id}: {e}")
                 raise HTTPException(
@@ -372,6 +387,8 @@ async def delete_namespace(
                 )
                 total_deleted += result.get('deleted', 0)
                 logger.info(f"Deleted {result['deleted']} summaries from summaries provider for namespace: {namespace_id}")
+            except ForbiddenError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to delete from summaries provider for namespace {namespace_id}: {e}")
                 # Don't fail - summaries are secondary
@@ -393,6 +410,8 @@ async def delete_namespace(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
+        raise
+    except ForbiddenError:
         raise
     except Exception as e:
         logger.error(f"Failed to delete namespace: {e}")
@@ -466,6 +485,8 @@ async def list_namespace_documents(
             "limit": limit
         }
     except HTTPException:
+        raise
+    except ForbiddenError:
         raise
     except Exception as e:
         logger.error(f"Failed to list namespace documents: {e}")

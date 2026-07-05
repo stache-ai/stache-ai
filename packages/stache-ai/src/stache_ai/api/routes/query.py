@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from stache_ai.api import auth
+from stache_ai.identity import ForbiddenError
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -58,6 +59,8 @@ async def query_knowledge(request: QueryRequest, http_request: Request):
         )
 
         return result
+    except ForbiddenError:
+        raise
     except Exception as e:
         logger.error(f"Query failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

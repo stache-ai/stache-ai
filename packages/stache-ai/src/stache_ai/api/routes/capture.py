@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from stache_ai.api import auth
 from stache_ai.config import settings
+from stache_ai.identity import ForbiddenError
 from stache_ai.ingestion import JobStatus
 from stache_ai.ingestion.factory import get_ingestion_service
 from stache_ai.sanitize import strip_reserved_metadata
@@ -94,6 +95,8 @@ async def capture_thought(request: CaptureRequest, http_request: Request):
             "status": job.status.value,
         }
     except HTTPException:
+        raise
+    except ForbiddenError:
         raise
     except Exception as e:
         logger.error(f"Capture failed: {e}")

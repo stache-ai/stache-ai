@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from stache_ai.api import auth
+from stache_ai.identity import ForbiddenError
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -49,6 +50,8 @@ async def list_trash_documents(
             context=context,
         )
         return result
+    except ForbiddenError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list trash: {e}")
 
@@ -79,6 +82,8 @@ async def restore_document(
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ForbiddenError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to restore: {e}")
 
@@ -118,5 +123,7 @@ async def permanently_delete_document(
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ForbiddenError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete: {e}")
