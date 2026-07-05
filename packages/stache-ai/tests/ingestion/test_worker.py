@@ -49,6 +49,54 @@ def test_worker_text_success_marks_done():
     assert pipeline.ingest_text.call_args.kwargs["chunking_strategy"] == "recursive"
 
 
+def test_worker_strips_all_reserved_keys_not_just_transport_keys():
+    """Any `_`-prefixed job.metadata key (server-stamped state, not just the
+    transport keys) must never reach the pipeline's metadata kwarg - the
+    worker rehydrates that state from context.custom["ingest_job"] instead."""
+    store = EphemeralJobStore()
+    job = _text_job({
+        "_text": "hello world",
+        "_chunking": "recursive",
+        "_stamped": "server-set-state",
+        "topic": "x",
+    })
+    store.create(job)
+
+    pipeline = AsyncMock()
+    pipeline.ingest_text.return_value = {
+        "doc_id": "doc-1", "action": "ingested_new", "chunks_created": 4,
+    }
+    worker = make_worker(store, _Blob(), NullNotifier(), pipeline)
+    asyncio.run(worker("j1"))
+
+    call_md = pipeline.ingest_text.call_args.kwargs["metadata"]
+    assert "_stamped" not in call_md
+    assert call_md == {"topic": "x"}
+
+
+def test_worker_strips_reserved_keys_from_file_ingestion_metadata():
+    """Same guarantee on the ingest_file path: reserved keys never ride
+    along, but `filename` (set by the worker itself) still does."""
+    store = EphemeralJobStore()
+    job = Job(
+        job_id="j2", status=JobStatus.QUEUED, namespace="default", source="api",
+        filename="report.pdf", content_type="application/pdf", requested_by="alice",
+        blob_key="j2/report.pdf",
+        metadata={"_stamped": "server-set-state", "author": "alice"},
+        created_at="t", updated_at="t",
+    )
+    store.create(job)
+    pipeline = AsyncMock()
+    pipeline.ingest_file.return_value = {"doc_id": "doc-2", "chunks_created": 7}
+    worker = make_worker(store, _Blob(b"%PDF-1.4 fake"), NullNotifier(), pipeline)
+    asyncio.run(worker("j2"))
+
+    call_md = pipeline.ingest_file.call_args.kwargs["metadata"]
+    assert "_stamped" not in call_md
+    assert call_md["author"] == "alice"
+    assert call_md["filename"] == "report.pdf"
+
+
 def test_worker_dedup_marks_skipped():
     store = EphemeralJobStore()
     store.create(_text_job({"_text": "dup"}))

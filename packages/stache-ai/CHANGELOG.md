@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Metadata sanitization**: caller-supplied `_`-prefixed metadata keys and `content_hash` are now stripped at API boundaries before routes/guards write their own internal-control values, closing a path where a caller could forge dedup/error-recovery state.
 - **Pipeline ops layer**: document, trash, and namespace routes now go through the pipeline instead of calling providers directly, and delete is unified behind one code path.
 - **Authorization denials always surface as 403**: every API route now re-raises `ForbiddenError` ahead of its blanket error handler, so a denial raised mid-request (by a plugged authorizer or a provider) reaches the app's 403 handler instead of being caught by a route's catch-all and rewritten into a 500.
+- **Ingestion worker strips all reserved job metadata**: the worker now drops every `_`-prefixed `job.metadata` key (not just the transport keys) before calling the pipeline, so server-set state stamped on the job record can no longer leak into chunk/vector metadata.
 
 ### Removed
 

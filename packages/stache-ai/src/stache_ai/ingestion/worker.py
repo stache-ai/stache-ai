@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_TEXT = {"text", "markdown"}
 
-# Transport-only metadata keys that must never reach enrichers / the vector store.
+# Transport-only metadata keys the worker reads for its own use before
+# stripping. These (and every other underscore-prefixed key - see the filter
+# below) must never reach enrichers / the vector store.
 _TRANSPORT_KEYS = {"_text", "_chunking", "_prepend_metadata"}
 
 
@@ -63,8 +65,13 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                 source="worker",
                 custom={"ingest_job": job, "principal": principal},
             )
-            # Strip transport-only keys before they reach enrichers / vector store.
-            md = {k: v for k, v in job.metadata.items() if k not in _TRANSPORT_KEYS}
+            # Strip every reserved (underscore-prefixed) key before they reach
+            # enrichers / the vector store - not just the transport keys.
+            # Deployment stores stamp server-set state (dedup markers, error-
+            # recovery bookkeeping, etc.) under other `_` keys on the JOB
+            # record; that state is rehydrated from ``context.custom["ingest_job"]``
+            # above, never from chunk metadata, so none of it belongs here.
+            md = {k: v for k, v in job.metadata.items() if not k.startswith("_")}
             prepend = job.metadata.get("_prepend_metadata")
             if job.content_type in SUPPORTED_TEXT and "_text" in job.metadata:
                 result = await pipeline.ingest_text(
