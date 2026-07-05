@@ -9,13 +9,13 @@ import base64
 import binascii
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from stache_ai.api import auth
 from stache_ai.config import settings
-from stache_ai.ingestion import TERMINAL, JobStatus
+from stache_ai.ingestion import TERMINAL, IngestTextTooLargeError, JobStatus
 from stache_ai.ingestion.factory import get_ingestion_service
 
 logger = logging.getLogger(__name__)
@@ -90,20 +90,23 @@ async def ingest(request: IngestRequest, http_request: Request):
         except (binascii.Error, ValueError):
             raise HTTPException(status_code=400, detail="Invalid base64 in 'data_base64'")
 
-    job = await service.submit(
-        namespace=namespace,
-        content_type=request.content_type,
-        requested_by=principal,
-        filename=request.filename,
-        source="api",
-        metadata=request.metadata,
-        text=request.text,
-        data=data,
-        chunking_strategy=request.chunking_strategy,
-        wait=request.wait,
-        wait_timeout=settings.ingest_wait_default_timeout,
-        poll_interval=settings.ingest_wait_poll_interval,
-    )
+    try:
+        job = await service.submit(
+            namespace=namespace,
+            content_type=request.content_type,
+            requested_by=principal,
+            filename=request.filename,
+            source="api",
+            metadata=request.metadata,
+            text=request.text,
+            data=data,
+            chunking_strategy=request.chunking_strategy,
+            wait=request.wait,
+            wait_timeout=settings.ingest_wait_default_timeout,
+            poll_interval=settings.ingest_wait_poll_interval,
+        )
+    except IngestTextTooLargeError as e:
+        raise HTTPException(status_code=413, detail=str(e))
     return JSONResponse(status_code=_status_code(job.status), content=job.to_dict())
 
 
@@ -122,7 +125,8 @@ async def get_job(job_id: str, http_request: Request):
 async def list_jobs(
     http_request: Request,
     status: str | None = None,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
+    cursor: str | None = None,
 ):
     principal = auth.principal(http_request)
     status_filter = None
@@ -133,7 +137,11 @@ async def list_jobs(
             raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
 
     service = get_ingestion_service()
-    jobs, cursor = service.list_jobs(
-        requested_by=principal, status=status_filter, limit=limit
-    )
-    return {"jobs": [j.to_dict() for j in jobs], "cursor": cursor, "count": len(jobs)}
+    try:
+        jobs, next_cursor = service.list_jobs(
+            requested_by=principal, status=status_filter, limit=limit, cursor=cursor
+        )
+    except ValueError as e:
+        # A malformed pagination cursor is a client error, not a 500.
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"jobs": [j.to_dict() for j in jobs], "cursor": next_cursor, "count": len(jobs)}

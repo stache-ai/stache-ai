@@ -3,6 +3,7 @@
 from .base import (
     TERMINAL,
     BlobStore,
+    IngestTextTooLargeError,
     IntakeProvider,
     IntakeTicket,
     Job,
@@ -23,6 +24,7 @@ from .worker import make_worker
 __all__ = [
     "TERMINAL",
     "BlobStore",
+    "IngestTextTooLargeError",
     "IntakeProvider",
     "IntakeTicket",
     "Job",

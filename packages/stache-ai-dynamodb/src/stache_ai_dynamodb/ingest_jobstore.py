@@ -15,12 +15,19 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
-from stache_ai.ingestion.base import Job, JobStatus, JobStore
+from stache_ai.ingestion.base import (
+    IngestTextTooLargeError,
+    Job,
+    JobStatus,
+    JobStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +62,19 @@ def _undecimal(value):
 class DynamoJobStore(JobStore):
     """Persistent JobStore backed by DynamoDB."""
 
+    # DynamoDB caps a single item at 400KB total (attribute names + values).
+    # Reserve headroom for the other Job fields and DynamoDB's attribute-name
+    # overhead so an inline ``_text`` payload cannot push the item over the wire
+    # limit; submit enforces this and returns 413 before the write is attempted.
+    max_inline_payload_bytes = 350_000
+
     def __init__(self, config):
-        self._table_name = config.ingest_jobstore_dynamodb_table
+        # The table name lives in this package's env config, not core settings;
+        # an attribute on the injected config (tests) takes precedence.
+        self._table_name = (
+            getattr(config, "ingest_jobstore_dynamodb_table", None)
+            or os.environ.get("INGEST_JOBSTORE_DYNAMODB_TABLE", "")
+        )
         self._ddb = boto3.resource("dynamodb", region_name=config.aws_region)
         self._table = self._ddb.Table(self._table_name)
 
@@ -69,7 +87,17 @@ class DynamoJobStore(JobStore):
         item["GSI1SK"] = job.created_at
         item["GSI2PK"] = job.status.value
         item["GSI2SK"] = job.updated_at
-        self._table.put_item(Item=item)
+        try:
+            self._table.put_item(Item=item)
+        except ClientError as e:
+            # An oversize item (chiefly an inline _text past the 400KB cap)
+            # surfaces as ValidationException; remap it to 413 rather than a 500.
+            # submit's cap normally rejects this earlier, so this is belt-and-braces.
+            if e.response["Error"]["Code"] == "ValidationException":
+                raise IngestTextTooLargeError(
+                    "job payload exceeds the DynamoDB 400KB item limit"
+                ) from e
+            raise
 
     def update(self, job_id: str, **fields) -> Job:
         job = self.get(job_id)
@@ -120,10 +148,20 @@ class DynamoJobStore(JobStore):
         # Stored item carries extra GSI* keys; Job.from_dict ignores unknowns.
         return Job.from_dict(_undecimal(item)) if item else None
 
+    @staticmethod
+    def _decode_cursor(cursor):
+        # Cursors are opaque, ephemeral, and URL-safe base64 (see _page). A
+        # corrupt/garbage cursor must be a client error (400), not a 500, so
+        # normalize any decode failure to ValueError for the route to map.
+        try:
+            return json.loads(base64.urlsafe_b64decode(cursor))
+        except Exception as e:
+            raise ValueError("invalid cursor") from e
+
     def list(self, *, requested_by=None, status=None, limit=50, cursor=None):
         kwargs = {"Limit": limit, "ScanIndexForward": False}
         if cursor:
-            kwargs["ExclusiveStartKey"] = json.loads(base64.b64decode(cursor))
+            kwargs["ExclusiveStartKey"] = self._decode_cursor(cursor)
         if requested_by is not None:
             kwargs.update(
                 IndexName="GSI1",
@@ -137,7 +175,7 @@ class DynamoJobStore(JobStore):
         else:
             scan_kwargs = {"Limit": limit}
             if cursor:
-                scan_kwargs["ExclusiveStartKey"] = json.loads(base64.b64decode(cursor))
+                scan_kwargs["ExclusiveStartKey"] = self._decode_cursor(cursor)
             resp = self._table.scan(**scan_kwargs)
             return self._page(resp)
         resp = self._table.query(**kwargs)
@@ -162,5 +200,7 @@ class DynamoJobStore(JobStore):
     def _page(self, resp):
         jobs = [Job.from_dict(_undecimal(i)) for i in resp.get("Items", [])]
         lek = resp.get("LastEvaluatedKey")
-        cur = base64.b64encode(json.dumps(_undecimal(lek)).encode()).decode() if lek else None
+        # URL-safe base64: a standard-base64 "+" arrives as a space from clients
+        # that don't percent-encode the cursor, silently corrupting the decode.
+        cur = base64.urlsafe_b64encode(json.dumps(_undecimal(lek)).encode()).decode() if lek else None
         return jobs, cur

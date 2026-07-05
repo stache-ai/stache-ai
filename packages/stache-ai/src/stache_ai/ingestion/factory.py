@@ -4,9 +4,10 @@ Builds the five seams from config (mirroring the providers/factories registry
 pattern) and wires the worker into the queue. ``IngestionService`` is the single
 entry point the API routes use: ``submit`` / ``get_job`` / ``list_jobs``.
 
-Phase 1 ships only the synchronous tier (inline/null/sqlite/filesystem).
-Async providers (sqs/s3/dynamodb) raise a clear error until Phase 2 registers
-them - swapping ``INGEST_*_PROVIDER`` is the only change that phase needs.
+Core ships only the synchronous tier (inline/null/sqlite/filesystem). Async
+providers are registered by plugin packages via entry points and raise a clear
+error when not installed - swapping ``INGEST_*_PROVIDER`` is the only change a
+deployment needs.
 """
 
 import asyncio
@@ -20,7 +21,7 @@ from typing import Optional
 
 from ..config import settings as global_settings
 from ..providers import plugin_loader
-from .base import TERMINAL, IntakeTicket, Job, JobStatus
+from .base import TERMINAL, IngestTextTooLargeError, IntakeTicket, Job, JobStatus
 from .providers.inline import (
     EphemeralJobStore,
     FilesystemBlobStore,
@@ -49,7 +50,7 @@ def _build_jobstore(config):
         return EphemeralJobStore()
     if name == "sqlite":
         return SqliteJobStore(config.ingest_jobstore_sqlite_path)
-    return _discover("ingest_jobstore", name, config)   # dynamodb -> stache-ai-dynamodb
+    return _discover("ingest_jobstore", name, config)   # plugin-registered via entry points
 
 
 def _build_blobstore(config):
@@ -58,7 +59,7 @@ def _build_blobstore(config):
         return NullBlobStore()
     if name == "filesystem":
         return FilesystemBlobStore(config.ingest_blob_root)
-    return _discover("ingest_blob", name, config)       # s3 -> stache-ai-aws
+    return _discover("ingest_blob", name, config)       # plugin-registered via entry points
 
 
 def _build_notifier(config):
@@ -80,21 +81,41 @@ class IngestionService:
     in the sync tier the first ``submit`` response is already terminal.
     """
 
-    def __init__(self, *, intake, queue, jobstore, blobstore, notifier, worker=None):
+    def __init__(self, *, intake, queue, jobstore, blobstore, notifier, worker=None,
+                 max_text_bytes=None):
         self.intake = intake
         self.queue = queue
         self.jobstore = jobstore
         self.blobstore = blobstore
         self.notifier = notifier
         self.worker = worker
+        # Reject oversized text at the single submit choke point (both /ingest
+        # and /capture flow through here). None disables the cap.
+        self.max_text_bytes = max_text_bytes
 
     async def process_job(self, job_id):
-        """Drive a single job through the worker (used by the SQS worker Lambda)."""
+        """Drive a single job through the worker (used by queue-driven workers)."""
         await self.worker(job_id)
 
     @staticmethod
     def _now() -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    def _effective_text_cap(self) -> Optional[int]:
+        """Smallest applicable inline-text cap, or None if unbounded.
+
+        Combines the configured ``max_ingest_text_bytes`` with any per-item
+        limit the jobstore declares (e.g. DynamoDB's 400KB), so oversized text
+        is rejected at submit (413) rather than 500ing on the backend write.
+        """
+        caps = [
+            c for c in (
+                self.max_text_bytes,
+                getattr(self.jobstore, "max_inline_payload_bytes", None),
+            )
+            if c is not None
+        ]
+        return min(caps) if caps else None
 
     async def submit(
         self,
@@ -114,6 +135,15 @@ class IngestionService:
     ) -> Job:
         if text is None and data is None:
             raise ValueError("submit requires either text or data")
+        if text is not None:
+            cap = self._effective_text_cap()
+            if cap is not None:
+                text_bytes = len(text.encode("utf-8"))
+                if text_bytes > cap:
+                    raise IngestTextTooLargeError(
+                        f"text is {text_bytes} bytes, exceeds the {cap}-byte "
+                        f"inline limit"
+                    )
 
         job_id = str(uuid.uuid4())
         md = dict(metadata or {})
@@ -153,9 +183,9 @@ class IngestionService:
             created_at=now,
             updated_at=now,
         )
-        # Persist the job BEFORE writing the blob. In the async (S3) tier the blob
-        # write fires an ObjectCreated event that reaches the worker; the job must
-        # already exist so the S3-event path recognizes it as already-owned and
+        # Persist the job BEFORE writing the blob. In async tiers the blob write
+        # fires an object-created event that reaches the worker; the job must
+        # already exist so the event path recognizes it as already-owned and
         # skips it, instead of racing the write and spawning a duplicate
         # "producer" job for the same object. The direct enqueue below is the
         # authoritative trigger for this path.
@@ -172,8 +202,8 @@ class IngestionService:
         """Poll the JobStore until the job reaches a terminal status or timeout.
 
         On timeout returns the last known (possibly non-terminal) state; the
-        capture shim tolerates a non-terminal job rather than hitting the API
-        Gateway 29s ceiling.
+        capture shim tolerates a non-terminal job rather than hitting the HTTP
+        gateway timeout.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -195,9 +225,9 @@ class IngestionService:
     ) -> tuple[Job, IntakeTicket]:
         """Presigned-upload flow: create a job in UPLOADING, hand back an upload URL.
 
-        Do NOT enqueue - the S3 ObjectCreated event will, once bytes land. The
-        worker recovers ``job_id`` from the S3 key, so ``blob_key`` MUST match
-        the intake key convention ``f"{job_id}/{basename}"``.
+        Do NOT enqueue - the blob store's object-created event will, once bytes
+        land. The worker recovers ``job_id`` from the blob key, so ``blob_key``
+        MUST match the intake key convention ``f"{job_id}/{basename}"``.
         """
         job_id = str(uuid.uuid4())
         md = dict(metadata or {})
@@ -261,7 +291,7 @@ class IngestionServiceFactory:
         if queue_name == "inline":
             queue = InlineQueue(worker)
         else:
-            queue = _discover("ingest_queue", queue_name, config)   # sqs -> stache-ai-aws
+            queue = _discover("ingest_queue", queue_name, config)   # plugin-registered via entry points
 
         logger.info(
             "Ingestion service: queue=%s jobstore=%s blob=%s intake=%s notifier=%s",
@@ -274,6 +304,7 @@ class IngestionServiceFactory:
         return IngestionService(
             intake=intake, queue=queue, jobstore=jobstore,
             blobstore=blobstore, notifier=notifier, worker=worker,
+            max_text_bytes=getattr(config, "max_ingest_text_bytes", None),
         )
 
 

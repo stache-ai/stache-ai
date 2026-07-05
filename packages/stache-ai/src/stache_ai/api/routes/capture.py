@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from stache_ai.api import auth
 from stache_ai.config import settings
-from stache_ai.ingestion import JobStatus
+from stache_ai.ingestion import IngestTextTooLargeError, JobStatus
 from stache_ai.ingestion.factory import get_ingestion_service
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,21 @@ async def capture_thought(request: CaptureRequest, http_request: Request):
             logger.error(f"Capture failed: {job.error_detail}")
             raise HTTPException(status_code=500, detail="Internal server error")
 
+        if job.status not in (JobStatus.DONE, JobStatus.SKIPPED):
+            # Wait-mode timed out while the job is still queued/processing. The
+            # request WAS accepted, so report honestly instead of claiming a
+            # completed ingest with a null doc_id.
+            return {
+                "success": True,
+                "message": "Accepted; still processing. Check job status for completion.",
+                "doc_id": job.doc_id,
+                "chunks_created": job.chunks_created,
+                "namespace": job.namespace,
+                "action": "processing",
+                "job_id": job.job_id,
+                "status": job.status.value,
+            }
+
         action = "skipped" if job.status == JobStatus.SKIPPED else "ingested_new"
         return {
             "success": True,
@@ -91,6 +106,8 @@ async def capture_thought(request: CaptureRequest, http_request: Request):
             "job_id": job.job_id,
             "status": job.status.value,
         }
+    except IngestTextTooLargeError as e:
+        raise HTTPException(status_code=413, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
