@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from stache_ai.api import auth
-from stache_ai.identity import ForbiddenError
+from stache_ai.identity import ForbiddenError, LimitExceededError
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -39,6 +39,9 @@ async def query_knowledge(request: QueryRequest, http_request: Request):
     - filter: Optional metadata filter (e.g., {"source": "meeting notes"})
     """
     # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    # "query" deliberately unifies /query and /insights/search: both are
+    # same-scope semantic reads, so they share one read op rather than each
+    # carrying its own verb.
     auth.authorize(http_request, "query",
                    {"namespace": request.namespace} if request.namespace else None)
 
@@ -60,6 +63,8 @@ async def query_knowledge(request: QueryRequest, http_request: Request):
 
         return result
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Query failed: {e}")

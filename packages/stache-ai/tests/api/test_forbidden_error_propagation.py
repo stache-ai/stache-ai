@@ -87,7 +87,7 @@ def test_update_document_metadata_forwards_forbidden_from_pipeline(client):
 def test_create_insight_forwards_forbidden_from_pipeline(client):
     """insights.py create_insight wraps pipeline.create_insight()."""
     pipeline = MagicMock()
-    pipeline.create_insight = MagicMock(side_effect=ForbiddenError("insight denied"))
+    pipeline.create_insight = AsyncMock(side_effect=ForbiddenError("insight denied"))
     with patch("stache_ai.api.routes.insights.get_pipeline", return_value=pipeline):
         resp = client.post("/api/insights", json={"content": "x", "namespace": "ns"})
     assert resp.status_code == 403, resp.text

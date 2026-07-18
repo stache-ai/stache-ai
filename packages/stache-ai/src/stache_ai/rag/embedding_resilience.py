@@ -313,7 +313,9 @@ class AutoSplitEmbeddingWrapper:
         self,
         text: str,
         original_index: int,
-        depth: int = 0
+        depth: int = 0,
+        *,
+        context=None
     ) -> list[EmbeddingResult]:
         """
         Embed single text with automatic splitting on error.
@@ -335,7 +337,7 @@ class AutoSplitEmbeddingWrapper:
         """
         try:
             # Call provider's normal embed method
-            embedding = self.provider.embed(text)
+            embedding = self.provider.embed(text, context=context)
 
             return [EmbeddingResult(
                 text=text,
@@ -381,10 +383,10 @@ class AutoSplitEmbeddingWrapper:
 
             # Recursively embed each half
             left_results = self._embed_single_with_auto_split(
-                left_text, original_index, depth + 1
+                left_text, original_index, depth + 1, context=context
             )
             right_results = self._embed_single_with_auto_split(
-                right_text, original_index, depth + 1
+                right_text, original_index, depth + 1, context=context
             )
 
             # Combine and annotate with split metadata
@@ -404,7 +406,9 @@ class AutoSplitEmbeddingWrapper:
 
     def embed_batch_with_splits(
         self,
-        texts: list[str]
+        texts: list[str],
+        *,
+        context=None
     ) -> tuple[list[EmbeddingResult], int]:
         """
         Embed batch of texts with automatic splitting.
@@ -442,7 +446,7 @@ class AutoSplitEmbeddingWrapper:
         def _process_batch(batch_idx: int, start_offset: int, batch_texts: list[str]):
             """Try embed_batch; on context-length error, fall back to individual."""
             try:
-                embeddings = self.provider.embed_batch(batch_texts)
+                embeddings = self.provider.embed_batch(batch_texts, context=context)
                 results = [
                     EmbeddingResult(
                         text=text,
@@ -467,7 +471,7 @@ class AutoSplitEmbeddingWrapper:
                 splits = 0
                 for j, text in enumerate(batch_texts):
                     chunk_results = self._embed_single_with_auto_split(
-                        text, original_index=start_offset + j
+                        text, original_index=start_offset + j, context=context
                     )
                     if len(chunk_results) > 1:
                         splits += 1

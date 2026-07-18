@@ -269,6 +269,92 @@ def test_build_authorizer_unknown_is_fail_closed():
         build_authorizer(_Cfg())
 
 
+def test_instantiate_passes_config_when_ctor_accepts_it():
+    from stache_ai.identity import _instantiate
+
+    class _TakesConfig:
+        def __init__(self, config=None):
+            self.config = config
+
+    cfg = object()
+    assert _instantiate(_TakesConfig, cfg).config is cfg
+
+
+def test_instantiate_passes_config_to_keyword_only_ctor():
+    """A keyword-only ``config`` parameter (``def __init__(self, *, config=None)``)
+    must still receive config - a positional ``sig.bind(config)`` fails for this
+    shape and must not fall through to a config-less ``cls()`` call."""
+    from stache_ai.identity import _instantiate
+
+    class _TakesKeywordOnlyConfig:
+        def __init__(self, *, config=None):
+            self.config = config
+
+    cfg = object()
+    assert _instantiate(_TakesKeywordOnlyConfig, cfg).config is cfg
+
+
+def test_instantiate_omits_config_for_zero_arg_ctor():
+    """A ctor that takes no args (beyond self) is called without config -
+    decided by signature inspection, not by catching a TypeError."""
+    from stache_ai.identity import _instantiate
+
+    class _NoArgs:
+        def __init__(self):
+            self.built = True
+
+    assert _instantiate(_NoArgs, object()).built is True
+
+
+def test_instantiate_propagates_typeerror_from_inside_ctor():
+    """AUTHZ F3 (fail-closed): a config-accepting ctor that raises TypeError
+    from INSIDE must propagate and abort startup - NOT be silently retried
+    with no args, which would strip the plugin of its configuration."""
+    import pytest as _pytest
+
+    from stache_ai.identity import _instantiate
+
+    calls = []
+
+    class _RaisesInside:
+        def __init__(self, config=None):
+            calls.append(config)
+            raise TypeError("genuine bug deep in __init__")
+
+    with _pytest.raises(TypeError, match="genuine bug deep in __init__"):
+        _instantiate(_RaisesInside, object())
+    # Called exactly once (with config); no fail-open no-arg reconstruction.
+    assert len(calls) == 1
+
+
+def test_build_authorizer_propagates_ctor_typeerror(monkeypatch):
+    """End-to-end through the real config/entry-point path: a configured
+    authorizer whose ctor raises TypeError aborts get_authorizer rather than
+    degrading to a differently-constructed instance."""
+    import pytest as _pytest
+
+    from stache_ai import identity
+    from stache_ai.config import settings
+    from stache_ai.providers import plugin_loader
+
+    class _Broken(identity.AuthorizationProvider):
+        def __init__(self, config=None):
+            raise TypeError("boom in authorizer ctor")
+
+        def authorize(self, principal, operation, resource=None):
+            return None
+
+    plugin_loader.register_provider("authorizer", "broken-ctor", _Broken)
+    monkeypatch.setattr(settings, "authorization_provider", "broken-ctor")
+    identity.reset_authorizer()
+    try:
+        with _pytest.raises(TypeError, match="boom in authorizer ctor"):
+            identity.build_authorizer(settings)
+    finally:
+        identity.reset_authorizer()
+        plugin_loader.reset()
+
+
 def test_get_authorizer_is_cached_and_resettable():
     from stache_ai import identity
 
@@ -436,7 +522,91 @@ class TestS4MetadataSanitization:
                 assert "author" in job["metadata"]
                 assert "content_hash" not in job["metadata"]
                 assert "_previous_doc_id" not in job["metadata"]
-                # transport keys added AFTER sanitization survive
-                assert "_text" in job["metadata"]
+                # The terminal job record strips transport keys too (the
+                # document body must not be retained), so _text is gone here
+                # even though it was added after sanitization.
+                assert "_text" not in job["metadata"]
         finally:
             reset_ingestion_service()
+
+    def test_ingest_route_preserves_source_path_for_smart_update(self):
+        """SANITIZER F2 (feature preserved): the trusted /ingest path keeps
+        caller-supplied source_path so SOURCE-identifier smart updates work,
+        while still dropping genuinely reserved control keys."""
+        from fastapi.testclient import TestClient
+
+        import stache_ai.api.main as main_mod
+        from stache_ai.ingestion.factory import reset_ingestion_service
+
+        reset_ingestion_service()
+        try:
+            client = TestClient(main_mod.app)
+            resp = client.post("/api/ingest", json={
+                "text": "hello", "content_type": "text",
+                "metadata": {
+                    "source_path": "notes/todo.md",
+                    "file_size": 1234,
+                    "content_hash": "forged",
+                    "_previous_doc_id": "victim-doc",
+                },
+            })
+            assert resp.status_code in (200, 202, 500)
+            if resp.status_code != 500:
+                job = resp.json()
+                # Smart-update identifiers survive on the trusted path...
+                assert job["metadata"].get("source_path") == "notes/todo.md"
+                assert job["metadata"].get("file_size") == 1234
+                # ...but forged reserved control keys never do.
+                assert "content_hash" not in job["metadata"]
+                assert "_previous_doc_id" not in job["metadata"]
+        finally:
+            reset_ingestion_service()
+
+    def test_approve_pending_strips_reserved_and_source_identity(self, tmp_path, monkeypatch):
+        """SANITIZER F1/F2 (web ingress): approve is a web path, so caller
+        metadata is sanitized before pipeline.ingest_text - reserved control
+        keys (_stamped/content_hash) AND a forgeable source_path are dropped."""
+        import json as _json
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from fastapi.testclient import TestClient
+
+        import stache_ai.api.main as main_mod
+        from stache_ai.config import settings
+
+        monkeypatch.setattr(settings, "queue_dir", str(tmp_path))
+        item_id = "item-1"
+        (tmp_path / f"{item_id}.json").write_text(_json.dumps({
+            "id": item_id,
+            "original_filename": "scan.pdf",
+            "suggested_filename": "scan",
+            "suggested_namespace": "ns",
+            "extracted_text": "text",
+            "full_text_length": 4,
+            "created_at": "2026-01-01T00:00:00Z",
+        }))
+        (tmp_path / f"{item_id}.pdf").write_bytes(b"%PDF-1.4")
+
+        pipeline = MagicMock()
+        pipeline.ingest_text = AsyncMock(return_value={"doc_id": "d1", "chunks_created": 1})
+        with patch("stache_ai.api.routes.pending.load_document", return_value="extracted text"), \
+             patch("stache_ai.api.routes.pending.get_pipeline", return_value=pipeline):
+            resp = TestClient(main_mod.app).post(
+                f"/api/pending/{item_id}/approve",
+                json={
+                    "filename": "scan",
+                    "namespace": "ns",
+                    "metadata": {
+                        "author": "alice",
+                        "_stamped": "server-only",
+                        "content_hash": "forged",
+                        "source_path": "victims/secret.md",
+                    },
+                },
+            )
+        assert resp.status_code == 200, resp.text
+        call_md = pipeline.ingest_text.call_args.kwargs["metadata"]
+        assert call_md.get("author") == "alice"
+        assert "_stamped" not in call_md
+        assert "content_hash" not in call_md
+        assert "source_path" not in call_md

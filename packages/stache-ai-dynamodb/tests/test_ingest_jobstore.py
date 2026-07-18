@@ -197,6 +197,55 @@ def test_list_stuck_returns_only_active_past_cutoff(jobstore):
     assert {j.job_id for j in stuck} == {"stuck-q", "stuck-p"}
 
 
+def test_declares_inline_payload_cap():
+    # DynamoDB's 400KB item limit is exposed to submit (with headroom) so
+    # oversized inline text is rejected as 413 before the write is attempted.
+    assert DynamoJobStore.max_inline_payload_bytes == 350_000
+
+
+def test_create_oversized_item_maps_to_too_large(jobstore, monkeypatch):
+    # An item past DynamoDB's 400KB limit surfaces as a ValidationException;
+    # create() must remap it to IngestTextTooLargeError (413), not let a raw
+    # botocore ClientError bubble up as a 500. moto does not enforce the cap, so
+    # force the ClientError on put_item.
+    from botocore.exceptions import ClientError
+
+    from stache_ai.ingestion.base import IngestTextTooLargeError
+
+    def _raise_validation(**kwargs):
+        raise ClientError(
+            {"Error": {"Code": "ValidationException",
+                       "Message": "Item size has exceeded the maximum allowed size"}},
+            "PutItem",
+        )
+
+    monkeypatch.setattr(jobstore._table, "put_item", _raise_validation)
+    with pytest.raises(IngestTextTooLargeError):
+        jobstore.create(_make_job("too-big", metadata={"_text": "x" * 500_000}))
+
+
+def test_cursor_is_urlsafe(jobstore):
+    # The pagination cursor is URL-safe base64: a standard-base64 "+" arrives as a
+    # space from clients that don't percent-encode, silently corrupting the decode.
+    import base64
+    import json
+
+    # A LastEvaluatedKey whose JSON, in STANDARD base64, contains + or /.
+    lek = {"job_id": "j4", "GSI1PK": "bob", "GSI1SK": "??>>><<<~~~"}
+    assert any(c in base64.b64encode(json.dumps(lek).encode()).decode() for c in "+/")
+
+    _jobs, cursor = jobstore._page({"Items": [], "LastEvaluatedKey": lek})
+    assert cursor is not None
+    assert "+" not in cursor and "/" not in cursor
+    # Round-trips back to the original key.
+    assert jobstore._decode_cursor(cursor) == lek
+
+
+def test_garbage_cursor_raises_value_error(jobstore):
+    with pytest.raises(ValueError, match="invalid cursor"):
+        jobstore.list(requested_by="bob", cursor="not-valid-base64!!!")
+
+
 def test_roundtrip_is_json_serializable(jobstore):
     """DynamoDB deserializes numbers as Decimal; the store must convert back.
 

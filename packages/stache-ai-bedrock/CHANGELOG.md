@@ -5,6 +5,22 @@ All notable changes to stache-ai-bedrock will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-09
+
+### Added
+
+- Cohere Embed v4 support (`cohere.embed-v4:0`), alongside the existing v3
+  path. Selection is entirely config-driven via `bedrock_embedding_model` -
+  v3 and Titan code paths are unchanged. v4 uses the `embedding_types` +
+  `output_dimension` (Matryoshka, 256/512/1024/1536) request schema and
+  defaults `output_dimension` to 1024 to match the S3 Vectors index
+  dimension. Response parsing handles both the `{"embeddings": {"float": [...]}}`
+  and bare-list response shapes defensively.
+- Note: the v4 model id and request/response schema were verified against
+  published AWS Bedrock documentation as of 2026-07, not a live `invoke-model`
+  call in this account - run a CLI smoke test against the real model before
+  relying on this in production.
+
 ## [0.1.2] - 2026-01-16
 
 ### Changed

@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pluggable principal extraction**: `stache.principal_extractor` entry point group plus `PRINCIPAL_EXTRACTOR` config. Default `ApiGatewayClaimsExtractor` preserves the existing single-user posture. Identity middleware wires the extractor into every request; `AuthenticationError` maps to a 401. A configured-but-unloadable extractor aborts startup instead of silently degrading to anonymous.
 - **Pluggable authorization**: `stache.authorizer` entry point group plus `AUTHORIZATION_PROVIDER` config, `AuthorizationProvider` ABC, and the default `AllowAllAuthorizer` (no enforcement, matching current behavior). `ForbiddenError` maps to a 403. Every API route now calls through the authorization seam with a neutral operation string (e.g. `ingest`, `read_pending`). A configured-but-unloadable authorizer aborts startup rather than falling back to allow-all.
 - **`context=` on provider data methods**: `VectorDBProvider`, `DocumentIndexProvider`, `NamespaceProvider`, and `RerankerProvider` methods all gained a keyword-only `context: RequestContext | None = None` parameter, threaded from routes and the pipeline through to every provider call. First-party providers accept and ignore it unless they have a reason to act on it.
+- **`context=` on `LLMProvider`/`EmbeddingProvider`**: completes the provider context threading. `EmbeddingProvider.embed`/`embed_batch`/`embed_query` and `LLMProvider.generate`/`generate_with_model`/`generate_structured`/`generate_with_tools` gained a keyword-only `context=None`; `generate_with_context`/`generate_with_context_and_model` gained a keyword-only `request_context=None` (their `context` positional already denotes the RAG chunk list). Threaded through the pipeline embed/generate call sites (ingest, query synthesis, summary regeneration) and the auto-split embedding wrapper. First-party providers accept it and forward it across their own nested generate/embed calls — the per-package providers (Bedrock, Anthropic, OpenAI, Cohere, Ollama, Mixedbread) as well as the in-tree `fallback`/`none` providers shipped in core (`stache_ai.providers.llm`/`stache_ai.providers.embeddings`) — and otherwise ignore it.
+- **`LimitExceededError` → HTTP 429**: new neutral `stache_ai.identity.LimitExceededError`, raised when an operation is rejected by a configured rate/resource limit, mapped by an app exception handler to `429` with a `Retry-After` header. Mirrors the existing `ForbiddenError` → 403 seam; routes re-raise it ahead of their blanket handler, and a static AST sweep test enforces the re-raise (alongside `ForbiddenError`) so it cannot regress. OSS attaches no meaning to which limit was hit.
 - **`scan_by_metadata`**: New capability-gated `VectorDBProvider` method (advertise via the `"metadata_scan"` capability) for full-collection metadata scans, replacing routes that previously reached into a provider's raw client directly.
 - **`principal=` on ingestion seams**: `JobStore.create`/`JobStore.list` and `IntakeProvider.begin` accept an optional `principal` kwarg. `BlobStore.make_key(job_id, filename, *, principal=None)` is now overridable so deployment-specific stores can vary key layout by caller.
 - **Producer-drop gate**: `INGEST_PRODUCER_DROPS_ENABLED` config flag controls whether raw drops into the originals bucket (no pre-created job) are accepted.
@@ -26,10 +28,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pipeline ops layer**: document, trash, and namespace routes now go through the pipeline instead of calling providers directly, and delete is unified behind one code path.
 - **Authorization denials always surface as 403**: every API route now re-raises `ForbiddenError` ahead of its blanket error handler, so a denial raised mid-request (by a plugged authorizer or a provider) reaches the app's 403 handler instead of being caught by a route's catch-all and rewritten into a 500.
 - **Ingestion worker strips all reserved job metadata**: the worker now drops every `_`-prefixed `job.metadata` key (not just the transport keys) before calling the pipeline, so server-set state stamped on the job record can no longer leak into chunk/vector metadata.
+- **Request context forwarded through nested provider/middleware calls**: `context=` is now threaded through the previously-missing inner data calls — namespace `get_tree`/delete-cascade/create-update across the first-party implementations, the deduplication guard on the default ingest path, document-index `get_chunk_ids` → `get_document` and metadata helpers, the reingest-recovery error processor, and the core operations layer. A signature-presence check alone does not catch a dropped inner forward, so the accompanying tests assert propagation by object identity through the known nested sites.
+- **Relocation routes authorize the destination**: moving a document to another namespace, and reparenting/creating a namespace under another parent, now authorize the destination (the write target), not only the source — closing a gap where a caller allowed on the source could relocate into a namespace they may not write to. Read routes now also pass an opaque resource dict (owner/namespace when cheaply available) to the authorizer.
+- **Plugin construction by signature inspection**: configured plugins/providers are instantiated by inspecting the constructor signature rather than catching a `TypeError` from a probe call, so a genuine `TypeError` raised inside a constructor that *does* accept config now propagates (fail-closed) instead of being silently retried with no arguments (which would strip the plugin of its configuration).
+- **Ingress sanitization on every write path**: reserved-metadata sanitization now also runs on the pending-approve path, and source-identity keys (`source_path`, `file_modified_at`) are only honored on trusted CLI/API ingress; the worker and API boundary share one unified reserved-key definition so the two can no longer drift.
+- **Producer drops secure-by-default**: `INGEST_PRODUCER_DROPS_ENABLED` now defaults to `false`. Raw drops into the originals bucket carry producer-asserted (unauthenticated) namespace/`requested_by`, so accepting them is now opt-in rather than on by default.
+- **Unified content-write verb**: every path that submits content for ingestion (`POST /ingest`, `POST /capture`, the producer-drop path, and the worker's re-check) authorizes the single canonical `ingest` operation, so the route-presented op always equals the worker-enforced op.
+
+### Fixed
+
+- **Insight operations honor the guard/processor middleware seams**: `create_insight` now runs the ingest-guard chain (it stores a vector, like ingest) and `search_insights` now runs the query-processor chain (like `query`), mirroring the main paths. Previously a registered guard or query processor never fired on `POST /insights` or `GET /insights/search`, so a rejection (or a raised `LimitExceededError`/`ForbiddenError`) that blocks ingest/query was silently skipped there. A raised exception now propagates to the route's existing handlers; a reject blocks the operation.
+- **Error/cleanup processors run on the ingest SKIP-return paths**: when `ingest_text` returns a SKIP (a guard blocked ingestion, or Step-2 identifier reservation detected a concurrent duplicate) it now runs the `ErrorProcessor` cleanup seam, the same seam the exception path runs. Previously the SKIP was a plain return that bypassed it, so any state a guard reserved for rollback was never released; guards now get the symmetric release hook on skip and on error.
+
+## [0.2.0] - 2026-07-05
+
+See [docs/release-0.2.md](../../docs/release-0.2.md) for the full release notes.
+
+### Added
+
+- **Async Ingestion Backbone**: provider-abstracted submit → poll pipeline behind
+  five new seams (`IntakeProvider`, `QueueProvider`, `JobStore`, `BlobStore`,
+  `Notifier`) with matching entry point groups (`stache.ingest_queue`,
+  `stache.ingest_jobstore`, `stache.ingest_blob`, `stache.ingest_intake`,
+  `stache.ingest_notifier`). Sync in-process tier is the default; the AWS async
+  tier ships in `stache-ai-aws` 0.2.0 / `stache-ai-dynamodb` 0.1.6.
+- **Unified ingestion API**: `POST /api/ingest` (text, base64 file, or presigned
+  upload; optional server-side wait), `GET /api/jobs/{id}`, `GET /api/jobs`
+  (requester-scoped, `cursor` pagination param with validated `limit` 1–200).
+- `INGEST_PRODUCER_DROPS_ENABLED` (default `true`): kill switch for raw S3
+  producer drops, whose namespace/`requested_by` come from producer-asserted
+  (unauthenticated) object metadata.
+- Oversized text submissions (`POST /api/ingest`, `POST /api/capture`) are
+  rejected with **413** at the smaller of `MAX_INGEST_TEXT_BYTES` and any
+  jobstore-declared inline-payload cap (DynamoDB: 350KB, under its 400KB item
+  limit), so oversize text no longer 500s on the backend write; the completed
+  (and reaper-failed) job record no longer retains the document body.
+- **Request principals**: `requested_by` extracted from API Gateway JWT
+  authorizer claims (falls back to `anonymous`); namespace write-authz hook
+  stubbed for follow-up enforcement.
+- `EmptyExtractionError`: empty/scanned/corrupt documents fail loudly instead of
+  storing an empty `active` document with a hallucinated summary.
+- Frontend Jobs page (`/jobs`) and presign-upload client helpers.
+
+### Changed
+
+- `POST /api/capture` routes through the ingestion service in wait-mode
+  (response shape preserved; adds `job_id`/`status`). A wait-mode timeout now
+  returns `action: "processing"` instead of a false `ingested_new`.
+- Presigned upload `required_headers` now includes every signed header
+  (`Content-Type` + pinned `x-amz-meta-stache-*`), not just `Content-Type`;
+  the presign expiry default drops to 1500s (must stay under the reaper TTL).
+  Non-ASCII filenames are percent-encoded into `x-amz-meta-stache-filename` so
+  the browser can echo the signed header on the PUT (ISO-8859-1 only); the
+  producer path unquotes them back to the original name.
+- `POST /api/upload` returns 422 (was 500) when no text is extractable.
+- Hierarchical chunking omits empty `headings`/`doc_item_labels` metadata keys
+  (S3 Vectors rejects empty arrays).
+- Concept-index resolution failures are logged at ERROR instead of silently
+  skipping concept extraction.
 
 ### Removed
 
-- The unused `tenant_id` placeholder fields on `RequestContext` and `QueryContext` have been removed — they were dormant and read by nothing in core. Deployment-specific scoping belongs in `RequestContext.custom`.
+- AWS-specific ingestion code and settings from core: the SQS worker and reaper
+  Lambda entrypoints now live in `stache-ai-aws`, and `INGEST_BLOB_S3_*`,
+  `INGEST_QUEUE_SQS_URL`, `INGEST_JOBSTORE_DYNAMODB_TABLE`, and
+  `INGEST_INTAKE_S3_PRESIGN_EXPIRY` are read by the plugin packages (env var
+  names unchanged).
 
 ## [0.1.9] - 2026-01-26
 

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from stache_ai.api import auth
 from stache_ai.config import settings
-from stache_ai.identity import ForbiddenError
+from stache_ai.identity import ForbiddenError, LimitExceededError
 from stache_ai.middleware.context import RequestContext
 from stache_ai.sanitize import strip_reserved_metadata
 from stache_ai.rag.pipeline import get_pipeline
@@ -106,6 +106,8 @@ async def upload_document(
         raise HTTPException(status_code=422, detail=str(e))
     except ForbiddenError:
         raise
+    except LimitExceededError:
+        raise
     except Exception as e:
         logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -196,6 +198,10 @@ async def batch_upload_documents(
         except ForbiddenError:
             # An authorization denial applies to the whole request, not just
             # this file - do not record it as a per-file failure and continue.
+            raise
+        except LimitExceededError:
+            # A limit rejection also applies to the whole request; surface it
+            # as 429 rather than recording a per-file failure.
             raise
         except Exception as e:
             logger.error(f"Batch upload failed for {file.filename}: {e}")

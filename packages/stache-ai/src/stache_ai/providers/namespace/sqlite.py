@@ -89,7 +89,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
         filter_keys_json = json.dumps(filter_keys or [])
 
         # Validate parent exists if specified
-        if parent_id and not self.exists(parent_id):
+        if parent_id and not self.exists(parent_id, context=context):
             raise ValueError(f"Parent namespace not found: {parent_id}")
 
         with self._get_connection() as conn:
@@ -106,7 +106,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
             except sqlite3.IntegrityError:
                 raise ValueError(f"Namespace already exists: {id}")
 
-        return self.get(id)
+        return self.get(id, context=context)
 
     def get(self, id: str, context=None) -> dict[str, Any] | None:
         """Get a namespace by ID"""
@@ -156,7 +156,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
         context=None
     ) -> dict[str, Any] | None:
         """Update a namespace"""
-        existing = self.get(id)
+        existing = self.get(id, context=context)
         if not existing:
             return None
 
@@ -174,7 +174,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
 
         if parent_id is not None:
             # Validate parent exists
-            if parent_id and not self.exists(parent_id):
+            if parent_id and not self.exists(parent_id, context=context):
                 raise ValueError(f"Parent namespace not found: {parent_id}")
             # Prevent circular reference
             if parent_id == id:
@@ -207,11 +207,11 @@ class SQLiteNamespaceProvider(NamespaceProvider):
             conn.commit()
             logger.info(f"Updated namespace: {id}")
 
-        return self.get(id)
+        return self.get(id, context=context)
 
     def delete(self, id: str, cascade: bool = False, context=None) -> bool:
         """Delete a namespace"""
-        if not self.exists(id):
+        if not self.exists(id, context=context):
             return False
 
         with self._get_connection() as conn:
@@ -234,7 +234,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
                     (id,)
                 )
                 for row in cursor.fetchall():
-                    self.delete(row["id"], cascade=True)
+                    self.delete(row["id"], cascade=True, context=context)
 
             conn.execute("DELETE FROM namespaces WHERE id = ?", (id,))
             conn.commit()
@@ -244,7 +244,7 @@ class SQLiteNamespaceProvider(NamespaceProvider):
 
     def get_tree(self, root_id: str | None = None, context=None) -> builtins.list[dict[str, Any]]:
         """Get namespace hierarchy as a tree"""
-        all_namespaces = self.list(include_children=True)
+        all_namespaces = self.list(include_children=True, context=context)
 
         # Build lookup dict
         by_id = {ns["id"]: {**ns, "children": []} for ns in all_namespaces}

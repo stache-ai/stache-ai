@@ -113,7 +113,7 @@ class TestAutoSplitIntegration:
         # Create a function that fails on first call, then returns embeddings
         call_count = [0]
 
-        def embed_side_effect(text):
+        def embed_side_effect(text, *, context=None):
             call_count[0] += 1
             # First call fails with context length error
             if call_count[0] == 1:
@@ -157,7 +157,7 @@ class TestAutoSplitIntegration:
         # Create a function that fails on first call, then returns embeddings
         call_count = [0]
 
-        def embed_side_effect(text):
+        def embed_side_effect(text, *, context=None):
             call_count[0] += 1
             # First call fails with context length error
             if call_count[0] == 1:

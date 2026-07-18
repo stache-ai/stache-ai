@@ -1,33 +1,20 @@
 """End-to-end async-tier integration: real S3/SQS/DynamoDB providers via entry
-points, mocked with moto. Skips unless stache-ai-aws + stache-ai-dynamodb are
-installed (entry points discoverable).
+points, mocked with moto.
 """
 
 import asyncio
+import json
+import types
+from unittest.mock import AsyncMock
 
-import pytest
+import boto3
+from moto import mock_aws
 
-from stache_ai.providers import plugin_loader
+from stache_ai.ingestion.base import JobStatus
+from stache_ai.ingestion.factory import IngestionServiceFactory, reset_ingestion_service
+import stache_ai.ingestion.factory as factory_mod
 
-_HAVE_AWS = (
-    "s3" in plugin_loader.get_available_providers("ingest_blob")
-    and "sqs" in plugin_loader.get_available_providers("ingest_queue")
-    and "dynamodb" in plugin_loader.get_available_providers("ingest_jobstore")
-)
-
-pytestmark = pytest.mark.skipif(
-    not _HAVE_AWS, reason="stache-ai-aws / stache-ai-dynamodb not installed"
-)
-
-moto = pytest.importorskip("moto")
-boto3 = pytest.importorskip("boto3")
-from moto import mock_aws  # noqa: E402
-
-from unittest.mock import AsyncMock  # noqa: E402
-
-from stache_ai.config import Settings  # noqa: E402
-from stache_ai.ingestion.base import JobStatus  # noqa: E402
-from stache_ai.ingestion.factory import IngestionServiceFactory  # noqa: E402
+from stache_ai_aws import sqs_worker
 
 REGION = "us-east-1"
 JOBS_TABLE = "it-ingest-jobs"
@@ -64,11 +51,15 @@ def _provision():
     return boto3.client("sqs", region_name=REGION).create_queue(QueueName=QUEUE)["QueueUrl"]
 
 
-def _settings(queue_url):
-    return Settings(
+def _config(queue_url):
+    """Factory + provider config. AWS keys live on this injected config (the
+    providers' env-backed settings are the production path)."""
+    return types.SimpleNamespace(
         ingest_queue_provider="sqs",
         ingest_jobstore_provider="dynamodb",
         ingest_blob_provider="s3",
+        ingest_intake_provider="inline",
+        ingest_notifier_provider="null",
         ingest_queue_sqs_url=queue_url,
         ingest_jobstore_dynamodb_table=JOBS_TABLE,
         ingest_blob_s3_bucket=BUCKET,
@@ -84,11 +75,23 @@ def _pipeline():
     return p
 
 
+def _drive(service, body):
+    """Feed one SQS record to the worker Lambda against a pre-wired service."""
+    factory_mod._service = service           # make get_ingestion_service() return our wired service
+    try:
+        return sqs_worker.lambda_handler(
+            {"Records": [{"messageId": "m1", "body": body}]}, None
+        )
+    finally:
+        reset_ingestion_service()
+
+
 @mock_aws
-def test_async_submit_is_queued_then_worker_completes():
+def test_async_submit_is_queued_then_worker_completes(monkeypatch):
+    monkeypatch.setenv("INGEST_BLOB_S3_PREFIX", "originals")
     queue_url = _provision()
     pipeline = _pipeline()
-    service = IngestionServiceFactory.build(_settings(queue_url), pipeline)
+    service = IngestionServiceFactory.build(_config(queue_url), pipeline)
 
     # Providers resolved via real entry points.
     from stache_ai_aws.blob import S3BlobStore
@@ -110,15 +113,7 @@ def test_async_submit_is_queued_then_worker_completes():
     msgs = sqs.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=1).get("Messages", [])
     assert len(msgs) == 1 and msgs[0]["Body"] == job.job_id
 
-    # Drive the worker Lambda with that SQS record.
-    from stache_ai.ingestion import sqs_worker
-    from stache_ai.ingestion.factory import reset_ingestion_service
-    import stache_ai.ingestion.factory as factory_mod
-    factory_mod._service = service           # make get_ingestion_service() return our wired service
-    try:
-        resp = sqs_worker.lambda_handler({"Records": [{"messageId": "m1", "body": job.job_id}]}, None)
-    finally:
-        reset_ingestion_service()
+    resp = _drive(service, job.job_id)
 
     assert resp == {"batchItemFailures": []}
     done = service.get_job(job.job_id)
@@ -128,10 +123,11 @@ def test_async_submit_is_queued_then_worker_completes():
 
 
 @mock_aws
-def test_async_file_round_trips_through_s3():
+def test_async_file_round_trips_through_s3(monkeypatch):
+    monkeypatch.setenv("INGEST_BLOB_S3_PREFIX", "originals")
     queue_url = _provision()
     pipeline = _pipeline()
-    service = IngestionServiceFactory.build(_settings(queue_url), pipeline)
+    service = IngestionServiceFactory.build(_config(queue_url), pipeline)
 
     job = asyncio.run(service.submit(
         namespace="default", content_type="application/pdf", requested_by="bob",
@@ -140,14 +136,7 @@ def test_async_file_round_trips_through_s3():
     assert job.status == JobStatus.QUEUED
     assert job.blob_key  # stored to S3
 
-    from stache_ai.ingestion import sqs_worker
-    from stache_ai.ingestion.factory import reset_ingestion_service
-    import stache_ai.ingestion.factory as factory_mod
-    factory_mod._service = service
-    try:
-        sqs_worker.lambda_handler({"Records": [{"messageId": "m1", "body": job.job_id}]}, None)
-    finally:
-        reset_ingestion_service()
+    _drive(service, job.job_id)
 
     done = service.get_job(job.job_id)
     assert done.status == JobStatus.DONE
@@ -157,12 +146,16 @@ def test_async_file_round_trips_through_s3():
 
 
 @mock_aws
-def test_producer_s3_drop_path():
+def test_producer_s3_drop_path(monkeypatch):
     """An object dropped under the originals prefix (producer path) is ingested
     via an S3-event SQS record."""
+    monkeypatch.setenv("INGEST_BLOB_S3_PREFIX", "originals")
+    import stache_ai.config as cfg
+    from stache_ai.config import Settings
+    monkeypatch.setattr(cfg, "settings", Settings(ingest_producer_drops_enabled=True))
     queue_url = _provision()
     pipeline = _pipeline()
-    service = IngestionServiceFactory.build(_settings(queue_url), pipeline)
+    service = IngestionServiceFactory.build(_config(queue_url), pipeline)
 
     # Producer writes the original directly to S3 with pinned stache-* metadata.
     boto3.client("s3", region_name=REGION).put_object(
@@ -176,16 +169,7 @@ def test_producer_s3_drop_path():
             "s3": {"object": {"key": "originals/feed/article.txt"}},
         }]
     }
-    import json
-    from stache_ai.ingestion import sqs_worker
-    from stache_ai.ingestion.factory import reset_ingestion_service
-    import stache_ai.ingestion.factory as factory_mod
-    factory_mod._service = service
-    try:
-        resp = sqs_worker.lambda_handler(
-            {"Records": [{"messageId": "m1", "body": json.dumps(s3_event)}]}, None)
-    finally:
-        reset_ingestion_service()
+    resp = _drive(service, json.dumps(s3_event))
 
     assert resp == {"batchItemFailures": []}
     # A producer job was created and completed.

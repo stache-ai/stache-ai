@@ -113,11 +113,11 @@ class DynamoDBNamespaceProvider(NamespaceProvider):
     ) -> Dict[str, Any]:
         """Create a new namespace"""
         # Validate parent exists if specified
-        if parent_id and not self.exists(parent_id):
+        if parent_id and not self.exists(parent_id, context=context):
             raise ValueError(f"Parent namespace not found: {parent_id}")
 
         # Check if already exists
-        if self.exists(id):
+        if self.exists(id, context=context):
             raise ValueError(f"Namespace already exists: {id}")
 
         now = datetime.now(timezone.utc).isoformat()
@@ -127,7 +127,7 @@ class DynamoDBNamespaceProvider(NamespaceProvider):
         self.table.put_item(Item=sanitize_for_dynamodb(item))
         logger.info(f"Created namespace: {id}")
 
-        return self.get(id)
+        return self.get(id, context=context)
 
     def get(self, id: str, context=None) -> Optional[Dict[str, Any]]:
         """Get a namespace by ID"""
@@ -192,7 +192,7 @@ class DynamoDBNamespaceProvider(NamespaceProvider):
         context=None
     ) -> Optional[Dict[str, Any]]:
         """Update a namespace"""
-        existing = self.get(id)
+        existing = self.get(id, context=context)
         if not existing:
             return None
 
@@ -214,7 +214,7 @@ class DynamoDBNamespaceProvider(NamespaceProvider):
 
         if parent_id is not None:
             # Validate parent exists
-            if parent_id and not self.exists(parent_id):
+            if parent_id and not self.exists(parent_id, context=context):
                 raise ValueError(f"Parent namespace not found: {parent_id}")
             if parent_id == id:
                 raise ValueError("Namespace cannot be its own parent")
@@ -255,15 +255,15 @@ class DynamoDBNamespaceProvider(NamespaceProvider):
         self.table.update_item(**update_params)
         logger.info(f"Updated namespace: {id}")
 
-        return self.get(id)
+        return self.get(id, context=context)
 
     def delete(self, id: str, cascade: bool = False, context=None) -> bool:
         """Delete a namespace"""
-        if not self.exists(id):
+        if not self.exists(id, context=context):
             return False
 
         # Check for children
-        children = self.list(parent_id=id)
+        children = self.list(parent_id=id, context=context)
         if children and not cascade:
             raise ValueError(
                 f"Namespace has {len(children)} children. Use cascade=True to delete."
@@ -272,7 +272,7 @@ class DynamoDBNamespaceProvider(NamespaceProvider):
         # Delete children recursively if cascade
         if cascade:
             for child in children:
-                self.delete(child['id'], cascade=True)
+                self.delete(child['id'], cascade=True, context=context)
 
         # Delete the namespace
         self.table.delete_item(Key={'id': id})
@@ -282,7 +282,7 @@ class DynamoDBNamespaceProvider(NamespaceProvider):
 
     def get_tree(self, root_id: Optional[str] = None, context=None) -> List[Dict[str, Any]]:
         """Get namespace hierarchy as a tree"""
-        all_namespaces = self.list(include_children=True)
+        all_namespaces = self.list(include_children=True, context=context)
 
         # Build lookup dict
         by_id = {ns['id']: {**ns, 'children': []} for ns in all_namespaces}

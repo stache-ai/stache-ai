@@ -38,6 +38,17 @@ class TestSettings:
         settings = Settings(llm_provider="anthropic", llm_model="claude-3-opus")
         assert settings.get_llm_model() == "claude-3-opus"
 
+    def test_producer_drops_disabled_by_default(self):
+        """INGESTION F1: raw S3 producer drops are secure-by-default OFF.
+
+        This path has no per-request authorization seam, so accepting it must
+        be an explicit opt-in rather than the default."""
+        from stache_ai.config import Settings
+
+        assert Settings().ingest_producer_drops_enabled is False
+        # Still opt-in-able for deployments that trust every bucket writer.
+        assert Settings(ingest_producer_drops_enabled=True).ingest_producer_drops_enabled is True
+
     def test_get_embedding_model_default(self):
         """Test default embedding model selection"""
         from stache_ai.config import Settings

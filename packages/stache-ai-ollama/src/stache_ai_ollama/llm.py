@@ -25,8 +25,11 @@ class OllamaLLMProvider(LLMProvider):
         """Ollama supports structured output via JSON mode."""
         return {"structured_output", "generate"}
 
-    def generate(self, prompt: str, **kwargs) -> str:
-        """Generate text from prompt"""
+    def generate(self, prompt: str, *, context=None, **kwargs) -> str:
+        """Generate text from prompt.
+
+        ``context`` (keyword-only request context) is accepted and ignored.
+        """
         temperature = kwargs.get('temperature', 0)
 
         request_payload = {
@@ -50,11 +53,16 @@ class OllamaLLMProvider(LLMProvider):
         self,
         query: str,
         context: List[Dict[str, Any]],
+        *,
+        request_context=None,
         **kwargs
     ) -> str:
-        """Generate answer with context"""
+        """Generate answer with context.
+
+        ``request_context`` is forwarded to the nested generate().
+        """
         prompt = self._build_rag_prompt(query, context)
-        return self.generate(prompt, **kwargs)
+        return self.generate(prompt, context=request_context, **kwargs)
 
     def _build_rag_prompt(self, query: str, context: List[Dict[str, Any]]) -> str:
         """Build the RAG prompt from query and context"""
@@ -124,9 +132,14 @@ Answer:"""
         self,
         prompt: str,
         model_id: str,
+        *,
+        context=None,
         **kwargs
     ) -> str:
-        """Generate text using a specific Ollama model"""
+        """Generate text using a specific Ollama model.
+
+        ``context`` (keyword-only request context) is accepted and ignored.
+        """
         temperature = kwargs.get('temperature', 0)
 
         request_payload = {
@@ -151,11 +164,16 @@ Answer:"""
         query: str,
         context: List[Dict[str, Any]],
         model_id: str,
+        *,
+        request_context=None,
         **kwargs
     ) -> str:
-        """Generate answer with context using a specific model"""
+        """Generate answer with context using a specific model.
+
+        ``request_context`` is forwarded to the nested generate_with_model().
+        """
         prompt = self._build_rag_prompt(query, context)
-        return self.generate_with_model(prompt, model_id, **kwargs)
+        return self.generate_with_model(prompt, model_id, context=request_context, **kwargs)
 
     def generate_structured(
         self,
@@ -163,6 +181,8 @@ Answer:"""
         schema: dict[str, Any],
         max_tokens: int = 2048,
         temperature: float = 0.0,
+        *,
+        context=None,
         **kwargs
     ) -> dict[str, Any]:
         """Generate JSON output matching schema.

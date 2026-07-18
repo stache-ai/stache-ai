@@ -99,8 +99,12 @@ class BedrockLLMProvider(LLMProvider):
         self.model_id = settings.bedrock_llm_model
         logger.info(f"Bedrock LLM provider initialized: {self.model_id}")
 
-    def generate(self, prompt: str, **kwargs) -> str:
-        """Generate text from prompt using Bedrock Converse API"""
+    def generate(self, prompt: str, *, context=None, **kwargs) -> str:
+        """Generate text from prompt using Bedrock Converse API.
+
+        ``context`` is the optional request context (caller identity /
+        correlation); keyword-only, accepted and ignored here.
+        """
         max_tokens = kwargs.get('max_tokens', 1024)
         temperature = kwargs.get('temperature', 0)
 
@@ -172,11 +176,17 @@ class BedrockLLMProvider(LLMProvider):
         self,
         query: str,
         context: List[Dict[str, Any]],
+        *,
+        request_context=None,
         **kwargs
     ) -> str:
-        """Generate answer with context (RAG)"""
+        """Generate answer with context (RAG).
+
+        ``context`` is the RAG chunk list; ``request_context`` is the optional
+        request context (caller identity), forwarded to the nested generate().
+        """
         prompt = self._build_rag_prompt(query, context)
-        return self.generate(prompt, **kwargs)
+        return self.generate(prompt, context=request_context, **kwargs)
 
     def _build_rag_prompt(self, query: str, context: List[Dict[str, Any]]) -> str:
         """Build the RAG prompt from query and context"""
@@ -208,9 +218,14 @@ Answer:"""
         self,
         prompt: str,
         model_id: str,
+        *,
+        context=None,
         **kwargs
     ) -> str:
-        """Generate text using a specific Bedrock model"""
+        """Generate text using a specific Bedrock model.
+
+        ``context`` (keyword-only request context) is accepted and ignored.
+        """
         max_tokens = kwargs.get('max_tokens', 1024)
         temperature = kwargs.get('temperature', 0)
 
@@ -221,11 +236,17 @@ Answer:"""
         query: str,
         context: List[Dict[str, Any]],
         model_id: str,
+        *,
+        request_context=None,
         **kwargs
     ) -> str:
-        """Generate answer with context using a specific model"""
+        """Generate answer with context using a specific model.
+
+        ``context`` is the RAG chunk list; ``request_context`` is forwarded to
+        the nested generate_with_model().
+        """
         prompt = self._build_rag_prompt(query, context)
-        return self.generate_with_model(prompt, model_id, **kwargs)
+        return self.generate_with_model(prompt, model_id, context=request_context, **kwargs)
 
     def _converse_with_model(
         self,
@@ -314,6 +335,8 @@ Answer:"""
         schema: dict,
         max_tokens: int = 2048,
         temperature: float = 0.0,
+        *,
+        context=None,
         **kwargs
     ) -> dict:
         """Generate structured output using Bedrock tool use API.
@@ -414,6 +437,8 @@ Answer:"""
         system_prompt: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        *,
+        context=None,
         **kwargs
     ) -> ToolUseResult:
         """Generate with native Bedrock Converse API tool use."""

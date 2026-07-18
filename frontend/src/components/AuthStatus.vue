@@ -1,7 +1,7 @@
 <template>
   <div v-if="showAuth" class="auth-status">
     <template v-if="user">
-      <span class="user-email">{{ user.email }}</span>
+      <router-link to="/account" class="user-email" title="Account &amp; usage">{{ user.email }}</router-link>
       <button @click="handleLogout" class="auth-btn">Logout</button>
     </template>
     <template v-else>
@@ -44,6 +44,19 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+  color: white;
+  text-decoration: none;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s, opacity 0.2s;
+}
+
+.user-email:hover,
+.user-email.router-link-active {
+  opacity: 1;
+  border-bottom-color: rgba(255, 255, 255, 0.6);
 }
 
 .auth-btn {

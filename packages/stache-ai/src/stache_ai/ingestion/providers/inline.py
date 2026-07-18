@@ -1,6 +1,6 @@
 """Inline / null / self-hosted implementations of the ingestion seams.
 
-These are the Phase 1 synchronous tier: no AWS, stdlib only. They let the
+These are the synchronous tier: no external services, stdlib only. They let the
 existing pipeline run in-process behind the uniform POST /ingest contract.
 """
 

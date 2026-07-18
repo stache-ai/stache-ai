@@ -14,12 +14,15 @@ class EmbeddingProvider(ABC):
     """Abstract base class for embedding providers"""
 
     @abstractmethod
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, *, context: "RequestContext | None" = None) -> list[float]:
         """
         Generate embedding for a single text
 
         Args:
             text: Input text to embed
+            context: optional request context (caller identity / correlation);
+                keyword-only. Core and first-party providers ignore it — a
+                provider may read it to route or observe per caller.
 
         Returns:
             List of floats representing the embedding vector
@@ -27,12 +30,14 @@ class EmbeddingProvider(ABC):
         pass
 
     @abstractmethod
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], *, context: "RequestContext | None" = None) -> list[list[float]]:
         """
         Generate embeddings for multiple texts
 
         Args:
             texts: List of input texts
+            context: optional request context (caller identity / correlation);
+                keyword-only. Core and first-party providers ignore it.
 
         Returns:
             List of embedding vectors
@@ -49,7 +54,7 @@ class EmbeddingProvider(ABC):
         """
         pass
 
-    def embed_query(self, text: str) -> list[float]:
+    def embed_query(self, text: str, *, context: "RequestContext | None" = None) -> list[float]:
         """
         Generate embedding for a search query.
 
@@ -59,11 +64,13 @@ class EmbeddingProvider(ABC):
 
         Args:
             text: Query text to embed
+            context: optional request context (caller identity / correlation);
+                keyword-only. Forwarded to embed(); core providers ignore it.
 
         Returns:
             List of floats representing the embedding vector
         """
-        return self.embed(text)
+        return self.embed(text, context=context)
 
     def get_name(self) -> str:
         """Get provider name"""
@@ -101,12 +108,14 @@ class LLMProvider(ABC):
     """Abstract base class for LLM providers"""
 
     @abstractmethod
-    def generate(self, prompt: str, **kwargs) -> str:
+    def generate(self, prompt: str, *, context: "RequestContext | None" = None, **kwargs) -> str:
         """
         Generate text from a prompt
 
         Args:
             prompt: Input prompt
+            context: optional request context (caller identity / correlation);
+                keyword-only. Core and first-party providers ignore it.
             **kwargs: Provider-specific parameters
 
         Returns:
@@ -119,6 +128,8 @@ class LLMProvider(ABC):
         self,
         query: str,
         context: list[dict[str, Any]],
+        *,
+        request_context: "RequestContext | None" = None,
         **kwargs
     ) -> str:
         """
@@ -126,7 +137,11 @@ class LLMProvider(ABC):
 
         Args:
             query: User query
-            context: List of context chunks with metadata
+            context: List of context chunks with metadata (the RAG chunks)
+            request_context: optional request context (caller identity /
+                correlation); keyword-only. Named ``request_context`` here
+                because ``context`` already denotes the RAG chunk list. Core
+                and first-party providers ignore it.
             **kwargs: Provider-specific parameters
 
         Returns:
@@ -157,6 +172,8 @@ class LLMProvider(ABC):
         self,
         prompt: str,
         model_id: str,
+        *,
+        context: "RequestContext | None" = None,
         **kwargs
     ) -> str:
         """
@@ -168,19 +185,23 @@ class LLMProvider(ABC):
         Args:
             prompt: Input prompt
             model_id: Model ID to use
+            context: optional request context (caller identity / correlation);
+                keyword-only, forwarded to generate(). Core providers ignore it.
             **kwargs: Provider-specific parameters
 
         Returns:
             Generated text
         """
         # Default: ignore model_id and use configured model
-        return self.generate(prompt, **kwargs)
+        return self.generate(prompt, context=context, **kwargs)
 
     def generate_with_context_and_model(
         self,
         query: str,
         context: list[dict[str, Any]],
         model_id: str,
+        *,
+        request_context: "RequestContext | None" = None,
         **kwargs
     ) -> str:
         """
@@ -191,15 +212,18 @@ class LLMProvider(ABC):
 
         Args:
             query: User query
-            context: List of context chunks with metadata
+            context: List of context chunks with metadata (the RAG chunks)
             model_id: Model ID to use
+            request_context: optional request context (caller identity /
+                correlation); keyword-only, forwarded to
+                generate_with_context(). Core providers ignore it.
             **kwargs: Provider-specific parameters
 
         Returns:
             Generated answer
         """
         # Default: ignore model_id and use configured model
-        return self.generate_with_context(query, context, **kwargs)
+        return self.generate_with_context(query, context, request_context=request_context, **kwargs)
 
     def get_name(self) -> str:
         """Get provider name"""
@@ -211,6 +235,8 @@ class LLMProvider(ABC):
         schema: dict,
         max_tokens: int = 2048,
         temperature: float = 0.0,
+        *,
+        context: "RequestContext | None" = None,
         **kwargs
     ) -> dict:
         """Generate JSON output matching schema (synchronous).
@@ -244,6 +270,8 @@ class LLMProvider(ABC):
         system_prompt: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        *,
+        context: "RequestContext | None" = None,
         **kwargs
     ) -> ToolUseResult:
         """Generate response with tool use capability (synchronous).

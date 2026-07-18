@@ -74,11 +74,11 @@ class RedisNamespaceProvider(NamespaceProvider):
     ) -> Dict[str, Any]:
         """Create a new namespace"""
         # Check if already exists
-        if self.exists(id):
+        if self.exists(id, context=context):
             raise ValueError(f"Namespace already exists: {id}")
 
         # Validate parent exists if specified
-        if parent_id and not self.exists(parent_id):
+        if parent_id and not self.exists(parent_id, context=context):
             raise ValueError(f"Parent namespace not found: {parent_id}")
 
         now = datetime.now(timezone.utc).isoformat()
@@ -160,7 +160,7 @@ class RedisNamespaceProvider(NamespaceProvider):
         context=None
     ) -> Optional[Dict[str, Any]]:
         """Update a namespace"""
-        existing = self.get(id)
+        existing = self.get(id, context=context)
         if not existing:
             return None
 
@@ -173,7 +173,7 @@ class RedisNamespaceProvider(NamespaceProvider):
 
         if parent_id is not None:
             # Validate parent exists
-            if parent_id and not self.exists(parent_id):
+            if parent_id and not self.exists(parent_id, context=context):
                 raise ValueError(f"Parent namespace not found: {parent_id}")
             # Prevent circular reference
             if parent_id == id:
@@ -198,11 +198,11 @@ class RedisNamespaceProvider(NamespaceProvider):
 
     def delete(self, id: str, cascade: bool = False, context=None) -> bool:
         """Delete a namespace"""
-        if not self.exists(id):
+        if not self.exists(id, context=context):
             return False
 
         # Check for children
-        children = self.list(parent_id=id)
+        children = self.list(parent_id=id, context=context)
         if children and not cascade:
             raise ValueError(
                 f"Namespace has {len(children)} children. Use cascade=True to delete."
@@ -211,7 +211,7 @@ class RedisNamespaceProvider(NamespaceProvider):
         # Delete children recursively if cascade
         if cascade:
             for child in children:
-                self.delete(child["id"], cascade=True)
+                self.delete(child["id"], cascade=True, context=context)
 
         # Delete the namespace
         pipe = self.client.pipeline()
@@ -224,7 +224,7 @@ class RedisNamespaceProvider(NamespaceProvider):
 
     def get_tree(self, root_id: Optional[str] = None, context=None) -> List[Dict[str, Any]]:
         """Get namespace hierarchy as a tree"""
-        all_namespaces = self.list(include_children=True)
+        all_namespaces = self.list(include_children=True, context=context)
 
         # Build lookup dict
         by_id = {ns["id"]: {**ns, "children": []} for ns in all_namespaces}

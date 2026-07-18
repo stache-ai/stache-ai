@@ -64,19 +64,21 @@ async def test_processor_restores_old_version_on_error(context, mock_document_in
     assert result.metadata["restored_doc_id"] == "old-doc-123"
     assert result.metadata["chunks_restored"] == 3
 
-    # Verify restore was called
+    # Verify restore was called with context forwarded
     mock_document_index.restore_document.assert_called_once_with(
         doc_id="old-doc-123",
         namespace="test-ns",
         deleted_at_ms=1234567890,
-        restored_by="system_auto_recovery"
+        restored_by="system_auto_recovery",
+        context=context
     )
 
-    # Verify vector status update
+    # Verify vector status update with context forwarded
     mock_vectordb.update_status.assert_called_once_with(
         ids=["chunk-1", "chunk-2", "chunk-3"],
         namespace="test-ns",
-        status="active"
+        status="active",
+        context=context
     )
 
 
@@ -317,10 +319,11 @@ async def test_processor_handles_missing_deleted_at_ms(context, mock_document_in
 
     assert result.handled is True
 
-    # Verify restore was called with None for deleted_at_ms
+    # Verify restore was called with None for deleted_at_ms (context forwarded)
     mock_document_index.restore_document.assert_called_once_with(
         doc_id="old-doc-123",
         namespace="test-ns",
         deleted_at_ms=None,
-        restored_by="system_auto_recovery"
+        restored_by="system_auto_recovery",
+        context=context
     )

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from stache_ai.config import Settings
-from stache_ai.ingestion.base import JobStatus
+from stache_ai.ingestion.base import IngestTextTooLargeError, JobStatus
 from stache_ai.ingestion.factory import IngestionServiceFactory
 
 
@@ -104,3 +104,21 @@ def test_submit_requires_text_or_data():
         asyncio.run(service.submit(
             namespace="default", content_type="text", requested_by="alice",
         ))
+
+
+def test_submit_honors_jobstore_inline_payload_cap():
+    # A jobstore that declares a per-item cap (e.g. DynamoDB's 400KB) must reject
+    # oversized text at submit (mapped to 413) instead of 500ing on the backend
+    # write. The effective cap is the smaller of the config and jobstore limits.
+    service = IngestionServiceFactory.build(Settings(), _mock_pipeline())
+    service.jobstore.max_inline_payload_bytes = 16
+    with pytest.raises(IngestTextTooLargeError, match="16-byte"):
+        asyncio.run(service.submit(
+            namespace="default", content_type="text", requested_by="alice",
+            text="x" * 32,
+        ))
+    # Text within the cap still submits normally.
+    job = asyncio.run(service.submit(
+        namespace="default", content_type="text", requested_by="alice", text="ok",
+    ))
+    assert job.status == JobStatus.DONE

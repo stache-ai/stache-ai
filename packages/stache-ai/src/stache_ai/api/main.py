@@ -48,6 +48,7 @@ from fastapi.responses import JSONResponse as _JSONResponse
 from stache_ai.identity import (
     AuthenticationError,
     ForbiddenError,
+    LimitExceededError,
     build_extractor,
     get_authorizer,
 )
@@ -74,6 +75,19 @@ async def _identity_middleware(request, call_next):
 async def _forbidden_handler(request, exc: ForbiddenError):
     # Authorizer denial (identity seam, S1) -> 403, same JSON shape as the 401.
     return _JSONResponse(status_code=403, content={"detail": str(exc) or "Forbidden"})
+
+
+@app.exception_handler(LimitExceededError)
+async def _limit_exceeded_handler(request, exc: LimitExceededError):
+    # A configured rate/resource limit rejected the operation -> 429 with a
+    # Retry-After header (the correct "try again later" semantics; SDKs and
+    # proxies honor it). Mirrors the ForbiddenError -> 403 handler; OSS attaches
+    # no meaning to which limit was hit and passes the detail through.
+    return _JSONResponse(
+        status_code=429,
+        content={"detail": str(exc) or "Limit exceeded"},
+        headers={"Retry-After": "60"},
+    )
 
 
 # CORS middleware - configure via environment for production

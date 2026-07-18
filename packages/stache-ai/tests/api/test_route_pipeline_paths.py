@@ -385,11 +385,11 @@ def test_update_document_passes_principal_context(documents_client, documents_pi
 @pytest.fixture
 def insights_pipeline():
     pipeline = MagicMock()
-    pipeline.create_insight = MagicMock(return_value={
+    pipeline.create_insight = AsyncMock(return_value={
         "insight_id": "i-1", "success": True, "namespace": "ns1",
         "created_at": "2026-01-01T00:00:00Z", "tags": None,
     })
-    pipeline.search_insights = MagicMock(return_value={"insights": [], "count": 0})
+    pipeline.search_insights = AsyncMock(return_value={"insights": [], "count": 0})
     pipeline.delete_insight = MagicMock(return_value={
         "success": True, "insight_id": "i-1", "namespace": "ns1",
     })

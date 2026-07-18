@@ -441,7 +441,7 @@ class MongoDBDocumentIndex(DocumentIndexProvider):
             List of chunk IDs from the vector database
         """
         try:
-            doc = self.get_document(doc_id, namespace)
+            doc = self.get_document(doc_id, namespace, context=context)
             if doc:
                 return doc.get('chunk_ids', [])
             return []

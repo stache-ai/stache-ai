@@ -6,33 +6,47 @@ import { getConfig } from '../config.js'
 // Falls back to relative paths for same-origin deployment
 const getApiUrl = () => getConfig('API_URL', '')
 
-// Create axios instance lazily to pick up runtime config
+// An extension deployment serves its own routes from a SEPARATE HTTP API with
+// its own base URL -- it is not merely a path on API_URL. Empty on a core-only
+// deployment, which is the normal case: callers must treat "" as "no extension"
+// rather than falling back to API_URL, or every request 404s against a core API
+// that does not serve those routes.
+const getExtensionApiUrl = () => getConfig('ENTERPRISE_API_URL', '')
+
+//: True when this deployment has an extension API to talk to at all.
+export const hasExtensionApi = () => Boolean(getExtensionApiUrl())
+
+// Raised instead of firing a request we know cannot succeed.
+export class ExtensionApiUnavailableError extends Error {
+  constructor() {
+    super('This deployment has no extension API configured.')
+    this.name = 'ExtensionApiUnavailableError'
+    this.isExtensionUnavailable = true
+  }
+}
+
+// Create axios instances lazily to pick up runtime config
 let clientInstance = null
+let extensionInstance = null
 
 // Only kick off one login redirect even if several requests 401 at once
 let redirectingToLogin = false
 
-function getClient() {
-  if (!clientInstance) {
-    clientInstance = axios.create({
-      baseURL: getApiUrl(),
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      timeout: 30000, // 30 second timeout
-    })
+// Both instances get the SAME auth behaviour: the request interceptor attaches
+// the Cognito JWT, and a 401 triggers the one-shot re-login redirect. Factored
+// out so the extension client can never drift from the core one.
+function attachInterceptors(instance) {
+  // Request interceptor to add auth headers
+  instance.interceptors.request.use(async (config) => {
+    const authHeaders = getAuthHeader()
+    Object.assign(config.headers, authHeaders)
+    return config
+  })
 
-    // Request interceptor to add auth headers
-    clientInstance.interceptors.request.use(async (config) => {
-      const authHeaders = getAuthHeader()
-      Object.assign(config.headers, authHeaders)
-      return config
-    })
-
-    // Response interceptor for error handling
-    clientInstance.interceptors.response.use(
-      (response) => response,
-      (error) => {
+  // Response interceptor for error handling
+  instance.interceptors.response.use(
+    (response) => response,
+    (error) => {
         // Handle 401 Unauthorized - the token expired mid-session; without
         // this redirect every action fails silently until the next navigation
         if (error.response?.status === 401 && getAuthProvider() !== 'none') {
@@ -57,9 +71,44 @@ function getClient() {
         enhancedError.originalError = error
         return Promise.reject(enhancedError)
       }
-    )
+  )
+  return instance
+}
+
+function getClient() {
+  if (!clientInstance) {
+    clientInstance = attachInterceptors(axios.create({
+      baseURL: getApiUrl(),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000, // 30 second timeout
+    }))
   }
   return clientInstance
+}
+
+// Client for the extension API. Returns null when this deployment has none --
+// callers must check, NOT fall back to the core client.
+function getExtensionClient() {
+  const baseURL = getExtensionApiUrl()
+  if (!baseURL) return null
+  if (!extensionInstance) {
+    extensionInstance = attachInterceptors(axios.create({
+      baseURL,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    }))
+  }
+  return extensionInstance
+}
+
+// Test seam: config is read once and cached in the instances above.
+export const _resetClientsForTest = () => {
+  clientInstance = null
+  extensionInstance = null
 }
 
 // Proxy object that delegates to lazily-created client
@@ -81,6 +130,23 @@ export const checkHealth = async () => {
     ? '/api/health'
     : '/api/ping'
   const response = await getClient().get(endpoint)
+  return response.data
+}
+
+// Account / usage API
+//
+// GET /account/usage is served by the EXTENSION API, not the core one -- a
+// different host entirely. Routing it through the core client (which this once
+// did) makes it 404 for every user on every deployment, which no backend test
+// can catch: the route exists and answers correctly, just not at the address the
+// browser was asking. Hence the separate client, and hence the regression test.
+//
+// Same auth as every other call: the shared interceptors attach the Cognito JWT
+// and turn a 401 into the usual re-login redirect.
+export const getAccountUsage = async () => {
+  const extension = getExtensionClient()
+  if (!extension) throw new ExtensionApiUnavailableError()
+  const response = await extension.get('/account/usage')
   return response.data
 }
 
@@ -119,13 +185,26 @@ export async function pollJob(jobId, { interval = 1000, maxInterval = 5000, time
 
 // Large-file path: ask for a presigned URL, PUT the file straight to S3, then poll.
 export const uploadViaPresign = async (file, { namespace = null, metadata = null, onUpdate } = {}) => {
-  const { job_id, upload_url, required_headers } = await submitIngest({
-    upload: true,
-    filename: file.name,
-    content_type: file.type || 'application/octet-stream',
-    namespace,
-    metadata,
-  })
+  let ticket
+  try {
+    ticket = await submitIngest({
+      upload: true,
+      filename: file.name,
+      content_type: file.type || 'application/octet-stream',
+      namespace,
+      metadata,
+    })
+  } catch (err) {
+    // Only a 400 from the presign REQUEST means the backend has no presigned
+    // intake (sync tier) and no job was created — safe for callers to fall back
+    // to the legacy upload. Errors after this point (S3 PUT, polling) must NOT
+    // be treated as fallback-able: the job already exists, and S3 itself
+    // returns 400s (RequestTimeout, EntityTooLarge) that would otherwise
+    // trigger a duplicate ingest alongside an orphaned UPLOADING job.
+    if (err.status === 400) err.presignUnsupported = true
+    throw err
+  }
+  const { job_id, upload_url, required_headers } = ticket
   // Use the RAW axios (not the `client` instance) so the auth interceptor and
   // baseURL don't apply to the direct S3 PUT.
   await axios.put(upload_url, file, {

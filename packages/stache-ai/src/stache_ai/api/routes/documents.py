@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from stache_ai.api import auth
-from stache_ai.identity import ForbiddenError
+from stache_ai.identity import ForbiddenError, LimitExceededError
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -43,6 +43,9 @@ async def list_documents(
     - next_key: Pagination token from previous response for loading more results
     """
     # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    # "read_document" deliberately unifies the document/trash/namespace-document
+    # read surfaces: they are all same-scope reads of stored content, so a
+    # policy author grants one read op rather than a verb per listing route.
     auth.authorize(http_request, "read_document",
                    {"namespace": namespace} if namespace else None)
 
@@ -100,6 +103,8 @@ async def list_documents(
                 return response
 
             except ForbiddenError:
+                raise
+            except LimitExceededError:
                 raise
             except Exception as e:
                 logger.warning(f"Document index provider error, falling back to summary search: {e}")
@@ -172,6 +177,8 @@ async def list_documents(
     except HTTPException:
         raise
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to list documents: {e}")
@@ -266,6 +273,8 @@ async def _list_documents_legacy(pipeline, namespace: str | None, extension: str
 
     except ForbiddenError:
         raise
+    except LimitExceededError:
+        raise
     except Exception as e:
         logger.error(f"Legacy document listing failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -328,6 +337,8 @@ async def discover_documents(
 
     except ForbiddenError:
         raise
+    except LimitExceededError:
+        raise
     except Exception as e:
         logger.error(f"Failed to discover documents: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -381,6 +392,8 @@ async def get_chunks_by_ids(
             "reconstructed_text": "\n\n".join(c.get("text", "") for c in chunks)
         }
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to get chunks by IDs: {e}")
@@ -460,6 +473,8 @@ async def delete_orphaned_chunks(
         raise
     except ForbiddenError:
         raise
+    except LimitExceededError:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete orphaned chunks: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -516,6 +531,8 @@ async def get_document(
     except HTTPException:
         raise
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to get document: {e}")
@@ -581,6 +598,8 @@ async def delete_document_by_id(
         raise
     except ForbiddenError:
         raise
+    except LimitExceededError:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -625,6 +644,8 @@ async def delete_document_by_filename(
     except HTTPException:
         raise
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -684,8 +705,16 @@ async def update_document_metadata(
     {"metadata": {"author": "John Doe", "tags": ["important"]}}
     ```
     """
-    # S1 enforcement: check against the document's current namespace.
+    # S1 enforcement: authorize the document's CURRENT namespace (the source).
     auth.authorize(http_request, "update_document", {"namespace": current_namespace})
+    # A namespace change relocates the document, i.e. writes content INTO the
+    # destination namespace, so it must ALSO clear the canonical content-write
+    # op ("ingest") for that destination - otherwise a caller could move a doc
+    # into a namespace they may not write to by authorizing only the source
+    # (AUTHZ F1). The resource dict carries the destination so a plugged
+    # authorizer can scope on it.
+    if body.namespace is not None and body.namespace != current_namespace:
+        auth.authorize(http_request, "ingest", {"namespace": body.namespace})
 
     # Build updates dict from request body
     updates = {}
@@ -724,6 +753,8 @@ async def update_document_metadata(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to update document {doc_id}: {e}")
@@ -876,6 +907,8 @@ async def migrate_document_summaries(
 
             except ForbiddenError:
                 raise
+            except LimitExceededError:
+                raise
             except Exception as e:
                 errors.append({"doc_id": doc_id, "error": str(e)})
                 logger.error(f"Failed to create summary for {doc_id}: {e}")
@@ -892,6 +925,8 @@ async def migrate_document_summaries(
     except HTTPException:
         raise
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Migration failed: {e}")

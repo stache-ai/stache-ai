@@ -13,6 +13,7 @@ and is fail-closed: a configured-but-unloadable authorizer aborts startup.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -20,6 +21,45 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 ANONYMOUS = "anonymous"
+
+
+def _instantiate(cls, config):
+    """Construct a plugin, passing ``config`` iff its constructor accepts it.
+
+    Arity is decided by SIGNATURE INSPECTION, not by catching a TypeError from
+    the call. Catching ``TypeError`` around ``cls(config)`` was fail-open: a
+    ctor that DID accept ``config`` but raised ``TypeError`` from inside (a real
+    bug, a bad config value) was silently retried with no arguments, stripping
+    the plugin of its configuration. Here a genuine TypeError raised inside a
+    fully-entered ctor PROPAGATES and aborts startup (fail-closed), and only a
+    truly zero-arg ctor is called without ``config``.
+
+    Both positional (``def __init__(self, config=None)``) and keyword-only
+    (``def __init__(self, *, config=None)``) constructors are honored: arity is
+    probed with dry-run ``sig.bind`` calls that never enter the ctor, so a
+    keyword-only ``config`` parameter is no longer stripped and silently
+    dropped to a config-less ``cls()`` call.
+    """
+    try:
+        sig = inspect.signature(cls)
+    except (ValueError, TypeError):
+        # Non-introspectable callable (rare - some C-implemented types). Default
+        # to passing config; most plugins accept it, and a genuine arity error
+        # will still surface rather than being swallowed.
+        return cls(config)
+
+    def _accepts(*args, **kwargs) -> bool:
+        try:
+            sig.bind(*args, **kwargs)
+            return True
+        except TypeError:
+            return False
+
+    if _accepts(config):
+        return cls(config)
+    if _accepts(config=config):
+        return cls(config=config)
+    return cls()
 
 
 class AuthenticationError(Exception):
@@ -35,6 +75,19 @@ class ForbiddenError(Exception):
 
     The API layer maps this to a 403. The ingestion worker lets it fail the
     job. The core never catches-and-continues past a denial.
+    """
+
+
+class LimitExceededError(Exception):
+    """Raised when an operation is rejected by a configured limit.
+
+    A neutral rejection signal for any deployment-configured rate or resource
+    limit (a guard, processor, or provider raises it). The API layer maps this
+    to a 429 with a ``Retry-After`` header — the correct HTTP semantics for
+    "try again later", which SDKs and proxies honor. OSS attaches no meaning to
+    WHICH limit was hit; the message string is passthrough and core never
+    composes it. Mirrors ``ForbiddenError`` (which is 403): both are neutral
+    seams a deployment-specific layer raises and the app maps to HTTP.
     """
 
 
@@ -110,10 +163,7 @@ def build_authorizer(config) -> AuthorizationProvider:
             f"back to the allow-all authorizer."
         )
     cls = available[name]
-    try:
-        return cls(config)
-    except TypeError:
-        return cls()
+    return _instantiate(cls, config)
 
 
 _authorizer: AuthorizationProvider | None = None
@@ -141,6 +191,15 @@ def assert_can_write(principal: Principal, namespace: str) -> None:
     Delegates to the configured authorizer so route intake, the ingestion
     worker, and the producer-drop path all enforce through one seam. Raises
     ForbiddenError on denial.
+
+    Write-op vocabulary: ``"ingest"`` is the ONE canonical content-write op -
+    the verb for "add content to this namespace". Every path that submits
+    content through the ingestion service/worker (POST /ingest, POST /capture,
+    the producer-drop path) enforces it, and the worker re-checks it here so
+    intake and the async re-check never diverge (AUTHZ F4/F5). A document
+    relocation also clears "ingest" for its destination namespace. Structural
+    routes keep their own descriptive verbs (create/update/delete_namespace),
+    each enforced at a single site so route-op always equals enforced-op.
     """
     get_authorizer().authorize(principal, "ingest", {"namespace": namespace})
 
@@ -206,7 +265,4 @@ def build_extractor(config) -> PrincipalExtractor:
             f"back to the default extractor."
         )
     cls = available[name]
-    try:
-        return cls(config)
-    except TypeError:
-        return cls()
+    return _instantiate(cls, config)

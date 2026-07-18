@@ -55,13 +55,13 @@ dev = [
 aws = [
     "stache-ai-s3vectors>=0.2.0",
     "stache-ai-dynamodb>=0.2.0",
-    "stache-ai-bedrock>=0.1.0",
+    "stache-ai-bedrock>=0.2.0",
 ]
 ollama = [
     "stache-ai-ollama>=0.2.0",
 ]
 openai = [
-    "stache-ai-openai>=0.1.0",
+    "stache-ai-openai>=0.1.2",
 ]
 # Optional document loaders
 ocr = [
@@ -112,7 +112,7 @@ semantic = "stache_ai.chunking.semantic:SemanticChunkingStrategy"
 transcript = "stache_ai.chunking.transcript:TranscriptChunkingStrategy"
 hierarchical = "stache_ai.chunking.hierarchical:HierarchicalChunkingStrategy"
 
-[project.entry-points."stache.postingest_processor"]
+[project.entry-points."stache.post_ingest"]
 heuristic_summary = "stache_ai.middleware.postingest.summary:HeuristicSummaryGenerator"
 
 [project.entry-points."stache.ingest_guard"]

@@ -41,6 +41,18 @@ from stache_ai.utils.hashing import compute_hash_async
 
 logger = logging.getLogger(__name__)
 
+
+class _IngestionSkipped(Exception):
+    """Internal marker handed to ErrorProcessors when an ingestion returns a
+    SKIP (deduplication / guard block) instead of raising.
+
+    The exception path runs the ErrorProcessor cleanup seam so guards can
+    release anything they reserved; a normal SKIP return does not. Passing this
+    marker to the same seam on the SKIP path gives guards the symmetric release
+    hook. It is never propagated to callers.
+    """
+
+
 # Auto-select chunking strategy based on file extension
 CHUNKING_BY_EXTENSION = {
     'docx': 'hierarchical',
@@ -380,6 +392,69 @@ class RAGPipeline:
                     logger.info(f"Loaded {len(self._error_processors)} error processors")
         return self._error_processors
 
+    async def _run_error_processors(
+        self,
+        exception: Exception,
+        context: "RequestContext",
+        partial_state: dict[str, Any],
+    ) -> None:
+        """Run the ErrorProcessor cleanup seam (best-effort, never raises).
+
+        Shared by the exception path and the SKIP-return paths so guards can
+        release reserved state symmetrically. A failing processor is logged but
+        does not block the others (mirrors the exception-path contract).
+        """
+        for error_processor in self.error_processors:
+            try:
+                error_result = await error_processor.on_error(exception, context, partial_state)
+                if error_result.handled:
+                    logger.info(
+                        f"Error handled by processor: {error_processor.__class__.__name__}",
+                        extra=error_result.metadata or {}
+                    )
+            except Exception as handler_error:
+                # Log but don't block other processors
+                logger.error(
+                    f"Error processor {error_processor.__class__.__name__} failed: {handler_error}",
+                    exc_info=True
+                )
+
+    async def _apply_ingest_guards(
+        self,
+        content: str,
+        metadata: dict[str, Any],
+        context: "RequestContext",
+    ) -> None:
+        """Run the ingest-guard seam for operations that store a vector.
+
+        Used by paths (e.g. insights) that persist a vector like ingest but do
+        not carry ingest's deduplication/SKIP machinery. Mirrors ingest_text's
+        guard invocation: allow-metadata is merged in place, a guard exception
+        honors ``on_error`` (re-raised when ``on_error='reject'`` so a
+        LimitExceededError/ForbiddenError raised by a guard reaches the route
+        unchanged), and a ``reject`` GuardResult blocks the operation.
+        """
+        for guard in self.ingest_guards:
+            try:
+                guard_result = await guard.validate(content, metadata, context)
+            except Exception as e:
+                if guard.on_error == "reject":
+                    logger.error(f"Guard {guard.__class__.__name__} failed: {e}")
+                    raise
+                logger.warning(f"Guard {guard.__class__.__name__} failed (continuing): {e}")
+                continue
+
+            if guard_result.action == "reject":
+                logger.info(
+                    f"Operation blocked by guard: {guard.__class__.__name__}",
+                    extra={"reason": guard_result.reason}
+                )
+                from stache_ai.middleware.chain import MiddlewareRejection
+                raise MiddlewareRejection(guard.__class__.__name__, guard_result.reason)
+
+            if guard_result.metadata:
+                metadata.update(guard_result.metadata)
+
     async def ingest_text(
         self,
         text: str,
@@ -452,6 +527,22 @@ class RAGPipeline:
                         extra={"reason": guard_result.reason}
                     )
 
+                    # SKIP is a normal return, not an exception, so it would
+                    # bypass the ErrorProcessor cleanup seam. Run it here so any
+                    # guard that reserved state before this reject gets the same
+                    # release hook it gets on the exception path.
+                    await self._run_error_processors(
+                        _IngestionSkipped(guard_result.reason or "blocked by guard"),
+                        context,
+                        {
+                            "metadata": metadata,
+                            "doc_id": doc_id,
+                            "namespace": ns,
+                            "vectors_inserted": False,
+                            "chunk_ids": [],
+                        },
+                    )
+
                     return IngestionResult(
                         action=IngestionAction.SKIP,
                         doc_id=guard_result.metadata.get("existing_doc_id", doc_id) if guard_result.metadata else doc_id,
@@ -501,6 +592,23 @@ class RAGPipeline:
                     )
 
                     if existing:
+                        # Dedup SKIP is a normal return, not an exception, so it
+                        # would bypass the ErrorProcessor cleanup seam. Run it
+                        # here so any guard that reserved state (before Step 2
+                        # detected the concurrent duplicate) gets the same
+                        # release hook it gets on the exception path.
+                        await self._run_error_processors(
+                            _IngestionSkipped("duplicate detected during reservation"),
+                            context,
+                            {
+                                "metadata": metadata,
+                                "doc_id": doc_id,
+                                "namespace": ns,
+                                "vectors_inserted": False,
+                                "chunk_ids": [],
+                            },
+                        )
+
                         return IngestionResult(
                             action=IngestionAction.SKIP,
                             doc_id=existing["doc_id"],
@@ -629,7 +737,7 @@ class RAGPipeline:
                 )
 
                 # Use wrapper for embedding
-                results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding)
+                results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding, context=context)
 
                 # Extract embeddings and texts
                 embeddings = [r.embedding for r in results]
@@ -657,7 +765,7 @@ class RAGPipeline:
                 chunks_for_embedding = texts_to_store
             else:
                 # Auto-split disabled, use standard embed_batch
-                embeddings = self.embedding_provider.embed_batch(chunks_for_embedding)
+                embeddings = self.embedding_provider.embed_batch(chunks_for_embedding, context=context)
 
             # Insert into vector DB (store enriched chunks if metadata was prepended)
             ids = self.documents_provider.insert(
@@ -842,20 +950,7 @@ class RAGPipeline:
                 "chunk_ids": chunk_ids,
             }
 
-            for error_processor in self.error_processors:
-                try:
-                    error_result = await error_processor.on_error(e, context, partial_state)
-                    if error_result.handled:
-                        logger.info(
-                            f"Error handled by processor: {error_processor.__class__.__name__}",
-                            extra=error_result.metadata or {}
-                        )
-                except Exception as handler_error:
-                    # Log but don't block other processors
-                    logger.error(
-                        f"Error processor {error_processor.__class__.__name__} failed: {handler_error}",
-                        exc_info=True
-                    )
+            await self._run_error_processors(e, context, partial_state)
 
             # Release identifier reservation on failure
             if self.config.dedup_enabled and self.document_index_provider and content_hash:
@@ -1059,7 +1154,7 @@ class RAGPipeline:
             )
 
             # Use wrapper for embedding
-            results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding)
+            results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding, context=context)
 
             # Extract embeddings and texts
             embeddings = [r.embedding for r in results]
@@ -1091,7 +1186,7 @@ class RAGPipeline:
             chunks_for_embedding = texts_to_store
         else:
             # Auto-split disabled, use standard embed_batch
-            embeddings = self.embedding_provider.embed_batch(chunks_for_embedding)
+            embeddings = self.embedding_provider.embed_batch(chunks_for_embedding, context=context)
             metadatas = base_metadatas
             split_count = 0
 
@@ -1424,7 +1519,7 @@ class RAGPipeline:
         context: "RequestContext | None" = None
     ) -> list[dict[str, Any]]:
         """Semantic discovery over document summaries (embed query + search)."""
-        query_embedding = self.embedding_provider.embed(query)
+        query_embedding = self.embedding_provider.embed(query, context=context)
         return self.summaries_provider.search_summaries(
             query_vector=query_embedding,
             top_k=top_k,
@@ -1626,7 +1721,7 @@ class RAGPipeline:
         context: "RequestContext | None" = None
     ) -> str:
         """Embed and store a document summary record (summary migration)."""
-        summary_embedding = self.embedding_provider.embed(summary_text)
+        summary_embedding = self.embedding_provider.embed(summary_text, context=context)
         sid = summary_id or str(uuid.uuid4())
         self.vectordb_provider.insert(
             vectors=[summary_embedding],
@@ -1708,7 +1803,7 @@ class RAGPipeline:
         filter = current_filters
 
         # Generate query embedding (uses embed_query for providers that differentiate)
-        query_embedding = self.embedding_provider.embed_query(question)
+        query_embedding = self.embedding_provider.embed_query(question, context=context)
 
         # Sanitize filter: remove reserved keys that conflict with explicit parameters
         sanitized_filter = None
@@ -1801,13 +1896,15 @@ class RAGPipeline:
                 answer = self.llm_provider.generate_with_context_and_model(
                     query=question,
                     context=sources,
-                    model_id=model
+                    model_id=model,
+                    request_context=context
                 )
                 response["model"] = model
             else:
                 answer = self.llm_provider.generate_with_context(
                     query=question,
-                    context=sources
+                    context=sources,
+                    request_context=context
                 )
             response["answer"] = answer
 
@@ -1832,7 +1929,7 @@ class RAGPipeline:
         """
         return self.query(query, top_k=top_k, synthesize=False, namespace=namespace)
 
-    def create_insight(
+    async def create_insight(
         self,
         content: str,
         namespace: str,
@@ -1855,8 +1952,17 @@ class RAGPipeline:
         # Generate insight ID
         insight_id = str(uuid.uuid4())
 
-        # Generate embedding for the insight content
-        embedding = self.embedding_provider.embed(content)
+        # Create request context if not provided (guards need a context)
+        if context is None:
+            from datetime import datetime as _dt, timezone as _tz
+            from uuid import uuid4
+            from stache_ai.middleware.context import RequestContext
+            context = RequestContext(
+                request_id=str(uuid4()),
+                timestamp=_dt.now(_tz.utc),
+                namespace=namespace,
+                source="api"
+            )
 
         # Build metadata
         from datetime import datetime, timezone
@@ -1870,6 +1976,19 @@ class RAGPipeline:
         # Only include tags if provided and not empty
         if tags:
             metadata["tags"] = tags
+
+        # Honor the ingest-guard seam: creating an insight stores a vector, like
+        # ingest, so it must run the same guards (rate/resource limits, ACL, any
+        # deployment guard). A raised LimitExceededError/ForbiddenError
+        # propagates to the route's existing handlers.
+        context.custom["document_index"] = self.document_index_provider
+        context.custom["vectordb"] = self.insights_provider
+        context.custom["config"] = self.config
+        context.custom["namespace_provider"] = self._get_namespace_provider()
+        await self._apply_ingest_guards(content, metadata, context)
+
+        # Generate embedding for the insight content
+        embedding = self.embedding_provider.embed(content, context=context)
 
         # Insert into insights provider
         ids = self.insights_provider.insert(
@@ -1891,7 +2010,7 @@ class RAGPipeline:
             "tags": tags
         }
 
-    def search_insights(
+    async def search_insights(
         self,
         query: str,
         namespace: str,
@@ -1911,15 +2030,54 @@ class RAGPipeline:
         """
         logger.info(f"Searching insights in namespace: {namespace} with query: {query}")
 
+        # Create request context if not provided (query processors need one)
+        if context is None:
+            from datetime import datetime, timezone
+            from uuid import uuid4
+            from stache_ai.middleware.context import RequestContext
+            context = RequestContext(
+                request_id=str(uuid4()),
+                timestamp=datetime.now(timezone.utc),
+                namespace=namespace,
+                source="api"
+            )
+
+        # Honor the query-processor seam: searching insights is a query, like
+        # query(), so it must run the same processors (rate limits, ACL filter
+        # injection, any deployment processor). A raised
+        # LimitExceededError/ForbiddenError propagates to the route's handlers.
+        from stache_ai.middleware.context import QueryContext
+        query_context = QueryContext.from_request_context(
+            context=context,
+            query=query,
+            top_k=top_k,
+            filters={"_type": "insight"},
+        )
+
+        current_query = query
+        current_filters = {"_type": "insight"}
+        for processor in self.query_processors:
+            from stache_ai.middleware.chain import MiddlewareRejection
+            result = await processor.process(current_query, current_filters, query_context)
+            if result.action == "reject":
+                raise MiddlewareRejection(processor.__class__.__name__, result.reason)
+            if result.action == "transform":
+                current_query = result.query or current_query
+                if result.filters is not None:
+                    # Keep the insight scope regardless of processor filters so a
+                    # processor cannot widen the search beyond insights.
+                    current_filters = {**result.filters, "_type": "insight"}
+        query = current_query
+
         # Generate embedding for the query
-        query_embedding = self.embedding_provider.embed(query)
+        query_embedding = self.embedding_provider.embed(query, context=context)
 
         # Search insights provider
         results = self.insights_provider.search(
             query_vector=query_embedding,
             top_k=top_k,
             namespace=namespace,
-            filter={"_type": "insight"},
+            filter=current_filters,
             context=context
         )
 

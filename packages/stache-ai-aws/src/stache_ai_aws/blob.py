@@ -6,11 +6,13 @@ import boto3
 
 from stache_ai.ingestion.base import BlobStore
 
+from .settings import resolve
+
 
 class S3BlobStore(BlobStore):
     def __init__(self, config):
-        self._bucket = config.ingest_blob_s3_bucket
-        self._prefix = (config.ingest_blob_s3_prefix or "").strip("/")
+        self._bucket = resolve(config, "ingest_blob_s3_bucket")
+        self._prefix = (resolve(config, "ingest_blob_s3_prefix") or "").strip("/")
         self._s3 = boto3.client("s3", region_name=config.aws_region)
 
     def _full(self, key: str) -> str:

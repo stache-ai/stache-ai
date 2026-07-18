@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from stache_ai.api import auth
-from stache_ai.identity import ForbiddenError
+from stache_ai.identity import ForbiddenError, LimitExceededError
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
 
@@ -109,6 +109,8 @@ def get_namespace_stats(namespace_id: str, context: RequestContext | None = None
         return {"doc_count": 0, "chunk_count": 0}
     except ForbiddenError:
         raise
+    except LimitExceededError:
+        raise
     except Exception as e:
         logger.warning(f"Could not get stats for namespace {namespace_id}: {e}")
         return {"doc_count": 0, "chunk_count": 0}
@@ -136,7 +138,17 @@ async def create_namespace(data: NamespaceCreate, http_request: Request):
     Use hierarchical IDs like 'mba/finance/corporate-finance' for nested organization.
     """
     # S1 enforcement (before the broad try so a denial is a 403, not a 500).
-    auth.authorize(http_request, "create_namespace", {"namespace": data.id})
+    # Authorize creation of the new id; the resource carries the destination
+    # parent so a plugged authorizer sees where the namespace will be nested.
+    auth.authorize(http_request, "create_namespace",
+                   {"namespace": data.id, "parent_id": data.parent_id})
+    # Nesting under a parent also writes into that parent's subtree, so it must
+    # ALSO be authorized against the parent - otherwise a caller could graft a
+    # child under a namespace they don't control by authorizing only the new id
+    # (AUTHZ F1).
+    if data.parent_id:
+        auth.authorize(http_request, "create_namespace",
+                       {"namespace": data.parent_id, "child_id": data.id})
 
     try:
         context = RequestContext.from_fastapi_request(http_request, data.id)
@@ -155,6 +167,8 @@ async def create_namespace(data: NamespaceCreate, http_request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to create namespace: {e}")
@@ -193,6 +207,8 @@ async def list_namespaces(
             "count": len(namespaces)
         }
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to list namespaces: {e}")
@@ -237,6 +253,8 @@ async def get_namespace_tree(
         }
     except ForbiddenError:
         raise
+    except LimitExceededError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get namespace tree: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -273,6 +291,8 @@ async def get_namespace(
         raise
     except ForbiddenError:
         raise
+    except LimitExceededError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get namespace: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -291,6 +311,14 @@ async def update_namespace(
     """
     # S1 enforcement (before the broad try so a denial is a 403, not a 500).
     auth.authorize(http_request, "update_namespace", {"namespace": namespace_id})
+    # Reparenting to a NEW parent (a non-empty parent_id) moves this namespace
+    # into that parent's subtree, so it must ALSO be authorized against the
+    # destination parent (AUTHZ F1). An empty string ("make root") or None
+    # ("no change") has no destination parent to authorize. The resource dict
+    # carries the moved namespace so a plugged authorizer can scope on it.
+    if data.parent_id:
+        auth.authorize(http_request, "update_namespace",
+                       {"namespace": data.parent_id, "child_id": namespace_id})
 
     try:
         context = RequestContext.from_fastapi_request(http_request, namespace_id)
@@ -321,6 +349,8 @@ async def update_namespace(
     except HTTPException:
         raise
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to update namespace: {e}")
@@ -371,6 +401,8 @@ async def delete_namespace(
                 logger.info(f"Deleted {result['deleted']} chunks from documents provider for namespace: {namespace_id}")
             except ForbiddenError:
                 raise
+            except LimitExceededError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to delete from documents provider for namespace {namespace_id}: {e}")
                 raise HTTPException(
@@ -388,6 +420,8 @@ async def delete_namespace(
                 total_deleted += result.get('deleted', 0)
                 logger.info(f"Deleted {result['deleted']} summaries from summaries provider for namespace: {namespace_id}")
             except ForbiddenError:
+                raise
+            except LimitExceededError:
                 raise
             except Exception as e:
                 logger.error(f"Failed to delete from summaries provider for namespace {namespace_id}: {e}")
@@ -412,6 +446,8 @@ async def delete_namespace(
     except HTTPException:
         raise
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to delete namespace: {e}")
@@ -487,6 +523,8 @@ async def list_namespace_documents(
     except HTTPException:
         raise
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to list namespace documents: {e}")

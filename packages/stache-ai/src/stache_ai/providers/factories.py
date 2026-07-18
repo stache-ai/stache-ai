@@ -21,6 +21,49 @@ from .reranker.base import RerankerProvider
 logger = logging.getLogger(__name__)
 
 
+def _resolve_provider_class(provider_type: str, name: str, label: str):
+    """Look up a provider class by name, or raise saying why it is not there
+
+    "Unknown provider: X. Available: ..." is only true when X was never
+    registered. When X IS registered but its import blew up, discovery skipped
+    it (deliberately -- see plugin_loader.discover_providers) and the registry
+    simply does not contain it, so the same message would be a lie: it would
+    send the operator hunting for a typo when the real problem is a broken or
+    version-skewed install, and the provider they configured is just gone.
+
+    So: registry first, then the recorded import failures, and only then
+    "Unknown".
+
+    Args:
+        provider_type: Provider type key ('embeddings', 'llm', ...)
+        name: Configured provider name
+        label: Human-readable type name for the "Unknown ..." message
+
+    Returns:
+        The provider class
+
+    Raises:
+        ValueError: If the provider failed to import (chained to the original
+                    exception) or is genuinely unknown.
+    """
+    provider_class = plugin_loader.get_provider_class(provider_type, name)
+    if provider_class is not None:
+        return provider_class
+
+    exc = plugin_loader.get_load_failures(provider_type).get(name)
+    if exc is not None:
+        raise ValueError(
+            f"Provider '{name}' (group '{provider_type}') failed to load: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    available = ', '.join(plugin_loader.get_available_providers(provider_type))
+    raise ValueError(
+        f"Unknown {label} provider: {name}. "
+        f"Available: {available or 'none (check dependencies)'}"
+    )
+
+
 class EmbeddingProviderFactory:
     """Factory for creating embedding providers
 
@@ -49,14 +92,7 @@ class EmbeddingProviderFactory:
             ValueError: If provider not found or dependencies missing
         """
         provider_name = settings.embedding_provider
-        provider_class = plugin_loader.get_provider_class('embeddings', provider_name)
-
-        if not provider_class:
-            available = ', '.join(cls.get_available_providers())
-            raise ValueError(
-                f"Unknown embedding provider: {provider_name}. "
-                f"Available: {available or 'none (check dependencies)'}"
-            )
+        provider_class = _resolve_provider_class('embeddings', provider_name, 'embedding')
 
         logger.info(f"Creating embedding provider: {provider_name}")
         return provider_class(settings)
@@ -99,14 +135,7 @@ class LLMProviderFactory:
             ValueError: If provider not found or dependencies missing
         """
         provider_name = settings.llm_provider
-        provider_class = plugin_loader.get_provider_class('llm', provider_name)
-
-        if not provider_class:
-            available = ', '.join(cls.get_available_providers())
-            raise ValueError(
-                f"Unknown LLM provider: {provider_name}. "
-                f"Available: {available or 'none (check dependencies)'}"
-            )
+        provider_class = _resolve_provider_class('llm', provider_name, 'LLM')
 
         logger.info(f"Creating LLM provider: {provider_name}")
         return provider_class(settings)
@@ -155,14 +184,7 @@ class VectorDBProviderFactory:
         if provider_name == "s3vectors":
             return S3VectorsProviderFactory.get_provider(settings, "documents")
 
-        provider_class = plugin_loader.get_provider_class('vectordb', provider_name)
-
-        if not provider_class:
-            available = ', '.join(cls.get_available_providers())
-            raise ValueError(
-                f"Unknown vector DB provider: {provider_name}. "
-                f"Available: {available or 'none (check dependencies)'}"
-            )
+        provider_class = _resolve_provider_class('vectordb', provider_name, 'vector DB')
 
         logger.info(f"Creating vector DB provider: {provider_name}")
         return provider_class(settings)
@@ -217,6 +239,14 @@ class S3VectorsProviderFactory:
         # Get the S3VectorsProvider class via entry points
         provider_class = plugin_loader.get_provider_class('vectordb', 's3vectors')
         if not provider_class:
+            # Registered but broken beats "not available": say what actually
+            # failed to import instead of sending the operator to check boto3.
+            exc = plugin_loader.get_load_failures('vectordb').get('s3vectors')
+            if exc is not None:
+                raise ValueError(
+                    f"Provider 's3vectors' (group 'vectordb') failed to load: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
             raise ValueError(
                 "s3vectors provider not available. "
                 "Ensure boto3 is installed and the package is properly installed."
@@ -301,14 +331,7 @@ class NamespaceProviderFactory:
             ValueError: If provider not found or dependencies missing
         """
         provider_name = settings.namespace_provider
-        provider_class = plugin_loader.get_provider_class('namespace', provider_name)
-
-        if not provider_class:
-            available = ', '.join(cls.get_available_providers())
-            raise ValueError(
-                f"Unknown namespace provider: {provider_name}. "
-                f"Available: {available or 'none (check dependencies)'}"
-            )
+        provider_class = _resolve_provider_class('namespace', provider_name, 'namespace')
 
         logger.info(f"Creating namespace provider: {provider_name}")
         return provider_class(settings)
@@ -359,14 +382,7 @@ class RerankerProviderFactory:
             logger.info("Reranking disabled")
             return None
 
-        provider_class = plugin_loader.get_provider_class('reranker', provider_name)
-
-        if not provider_class:
-            available = ', '.join(cls.get_available_providers())
-            raise ValueError(
-                f"Unknown reranker provider: {provider_name}. "
-                f"Available: {available or 'none (check dependencies)'}"
-            )
+        provider_class = _resolve_provider_class('reranker', provider_name, 'reranker')
 
         # Special handling for different reranker types
         if provider_name == "simple":
@@ -427,14 +443,9 @@ class DocumentIndexProviderFactory:
             ValueError: If provider not found or dependencies missing
         """
         provider_name = settings.document_index_provider
-        provider_class = plugin_loader.get_provider_class('document_index', provider_name)
-
-        if not provider_class:
-            available = ', '.join(cls.get_available_providers())
-            raise ValueError(
-                f"Unknown document index provider: {provider_name}. "
-                f"Available: {available or 'none (check dependencies)'}"
-            )
+        provider_class = _resolve_provider_class(
+            'document_index', provider_name, 'document index'
+        )
 
         logger.info(f"Creating document index provider: {provider_name}")
         return provider_class(settings)

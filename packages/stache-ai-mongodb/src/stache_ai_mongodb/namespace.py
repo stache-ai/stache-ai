@@ -94,7 +94,7 @@ class MongoDBNamespaceProvider(NamespaceProvider):
         now = datetime.now(timezone.utc).isoformat()
 
         # Validate parent exists if specified
-        if parent_id and not self.exists(parent_id):
+        if parent_id and not self.exists(parent_id, context=context):
             raise ValueError(f"Parent namespace not found: {parent_id}")
 
         doc = {
@@ -114,7 +114,7 @@ class MongoDBNamespaceProvider(NamespaceProvider):
         except DuplicateKeyError:
             raise ValueError(f"Namespace already exists: {id}")
 
-        return self.get(id)
+        return self.get(id, context=context)
 
     def get(self, id: str, context=None) -> Optional[Dict[str, Any]]:
         """Get a namespace by ID"""
@@ -151,7 +151,7 @@ class MongoDBNamespaceProvider(NamespaceProvider):
         context=None
     ) -> Optional[Dict[str, Any]]:
         """Update a namespace"""
-        existing = self.get(id)
+        existing = self.get(id, context=context)
         if not existing:
             return None
 
@@ -166,7 +166,7 @@ class MongoDBNamespaceProvider(NamespaceProvider):
 
         if parent_id is not None:
             # Validate parent exists
-            if parent_id and not self.exists(parent_id):
+            if parent_id and not self.exists(parent_id, context=context):
                 raise ValueError(f"Parent namespace not found: {parent_id}")
             # Prevent circular reference
             if parent_id == id:
@@ -192,11 +192,11 @@ class MongoDBNamespaceProvider(NamespaceProvider):
         )
         logger.info(f"Updated namespace: {id}")
 
-        return self.get(id)
+        return self.get(id, context=context)
 
     def delete(self, id: str, cascade: bool = False, context=None) -> bool:
         """Delete a namespace"""
-        if not self.exists(id):
+        if not self.exists(id, context=context):
             return False
 
         # Check for children
@@ -211,7 +211,7 @@ class MongoDBNamespaceProvider(NamespaceProvider):
             # Delete children recursively
             children = self.collection.find({"parent_id": id})
             for child_doc in children:
-                self.delete(child_doc["_id"], cascade=True)
+                self.delete(child_doc["_id"], cascade=True, context=context)
 
         self.collection.delete_one({"_id": id})
         logger.info(f"Deleted namespace: {id}")
@@ -220,7 +220,7 @@ class MongoDBNamespaceProvider(NamespaceProvider):
 
     def get_tree(self, root_id: Optional[str] = None, context=None) -> List[Dict[str, Any]]:
         """Get namespace hierarchy as a tree"""
-        all_namespaces = self.list(include_children=True)
+        all_namespaces = self.list(include_children=True, context=context)
 
         # Build lookup dict
         by_id = {ns["id"]: {**ns, "children": []} for ns in all_namespaces}

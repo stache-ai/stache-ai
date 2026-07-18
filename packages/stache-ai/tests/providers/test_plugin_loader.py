@@ -72,9 +72,12 @@ class TestPluginLoaderDiscovery:
         assert 'broken_provider' not in providers
 
     @patch('importlib.metadata.entry_points')
-    def test_broken_installed_plugin_raises(self, mock_eps):
-        """An installed plugin that errors on load must abort (fail-closed),
-        not vanish with a warning - it may be an access-control layer."""
+    def test_broken_installed_plugin_recorded_not_raised(self, mock_eps):
+        """An installed plugin that errors on load must NOT abort discovery for
+        the whole group - an unconfigured broken third-party plugin can't be
+        allowed to brick startup for the providers that DO work. The failure is
+        recorded so the factory raises the real cause only when THAT provider is
+        the one configured (see test_provider_load_failures)."""
         mock_ep = MagicMock()
         mock_ep.name = 'error_provider'
         mock_ep.load.side_effect = RuntimeError("Unexpected error")
@@ -82,8 +85,14 @@ class TestPluginLoaderDiscovery:
         mock_eps.return_value.select.return_value = [mock_ep]
 
         plugin_loader.reset()
-        with pytest.raises(RuntimeError, match="failed to load"):
-            plugin_loader.discover_providers('stache.llm')
+        providers = plugin_loader.discover_providers('stache.llm')
+
+        # Discovery did not raise; the broken provider is simply absent...
+        assert 'error_provider' not in providers
+        # ...but its real cause is recorded for the factory to surface on demand.
+        failures = plugin_loader.get_load_failures('stache.llm')
+        assert 'error_provider' in failures
+        assert isinstance(failures['error_provider'], RuntimeError)
 
 
 

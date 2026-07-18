@@ -82,6 +82,29 @@ def test_ingest_rejects_bad_base64(client):
     assert resp.status_code == 400
 
 
+def _small_cap_client(pipeline, route):
+    cfg = Settings(max_ingest_text_bytes=10)
+    svc = IngestionServiceFactory.build(cfg, pipeline)
+    from stache_ai.api.main import app
+    return TestClient(app), patch(
+        f"stache_ai.api.routes.{route}.get_ingestion_service", return_value=svc
+    )
+
+
+def test_ingest_oversized_text_413(pipeline):
+    client_, patcher = _small_cap_client(pipeline, "ingest")
+    with patcher:
+        resp = client_.post("/api/ingest", json={"text": "x" * 50})
+    assert resp.status_code == 413
+
+
+def test_capture_oversized_text_413(pipeline):
+    client_, patcher = _small_cap_client(pipeline, "capture")
+    with patcher:
+        resp = client_.post("/api/capture", json={"text": "x" * 50})
+    assert resp.status_code == 413
+
+
 # ---- GET /api/jobs ----
 
 def test_get_job_owner(client):
@@ -119,6 +142,19 @@ def test_list_jobs_invalid_status_400(client):
     assert client.get("/api/jobs?status=bogus").status_code == 400
 
 
+def test_list_jobs_invalid_limit_422(client):
+    # limit=0 previously reached DynamoDB and 500'd; now rejected by validation.
+    assert client.get("/api/jobs?limit=0").status_code == 422
+    assert client.get("/api/jobs?limit=500").status_code == 422
+
+
+def test_list_jobs_accepts_cursor(client):
+    client.post("/api/ingest", json={"text": "one"})
+    resp = client.get("/api/jobs", params={"limit": 1, "cursor": "abc"})
+    assert resp.status_code == 200
+    assert "cursor" in resp.json()
+
+
 # ---- /api/capture shim ----
 
 def test_capture_shim_legacy_shape(client):
@@ -136,3 +172,24 @@ def test_capture_shim_shares_service_path(client, pipeline):
     # Worker called the same pipeline through the service.
     pipeline.ingest_text.assert_awaited()
     assert pipeline.ingest_text.call_args.kwargs["metadata"] == {"topic": "x"}
+
+
+def test_capture_wait_timeout_reports_processing():
+    # When wait-mode times out with a still-non-terminal job, capture must report
+    # action "processing" (request accepted) rather than a fake "ingested_new".
+    stub = AsyncMock()
+    stub.submit.return_value = Job(
+        job_id="jX", status=JobStatus.QUEUED, namespace="default", source="web",
+        filename="text", content_type="text", requested_by="anonymous",
+        created_at="t", updated_at="t",
+    )
+    from stache_ai.api.main import app
+    with patch("stache_ai.api.routes.capture.get_ingestion_service", return_value=stub):
+        resp = TestClient(app).post("/api/capture", json={"text": "still cooking"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["action"] == "processing"
+    assert data["status"] == "queued"
+    assert data["job_id"] == "jX"
+    assert data["doc_id"] is None

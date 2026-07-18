@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai-documents"
-version = "0.1.0"
+version = "0.1.1"
 readme = "README.md"
 description = "Document format loaders for Stache AI (EPUB, DOCX, PPTX)"
 license = {text = "MIT"}

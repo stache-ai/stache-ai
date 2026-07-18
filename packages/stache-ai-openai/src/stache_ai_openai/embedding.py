@@ -15,16 +15,22 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self.model = settings.get_embedding_model()
         self._dimensions = settings.embedding_dimension
 
-    def embed(self, text: str) -> List[float]:
-        """Generate embedding for single text"""
+    def embed(self, text: str, *, context=None) -> List[float]:
+        """Generate embedding for single text.
+
+        ``context`` (keyword-only request context) is accepted and ignored.
+        """
         response = self.client.embeddings.create(
             model=self.model,
             input=text
         )
         return response.data[0].embedding
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings for multiple texts"""
+    def embed_batch(self, texts: List[str], *, context=None) -> List[List[float]]:
+        """Generate embeddings for multiple texts.
+
+        ``context`` (keyword-only request context) is accepted and ignored.
+        """
         response = self.client.embeddings.create(
             model=self.model,
             input=texts

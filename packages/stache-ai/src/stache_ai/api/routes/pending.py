@@ -12,10 +12,11 @@ from pydantic import BaseModel
 
 from stache_ai.api import auth
 from stache_ai.config import settings
-from stache_ai.identity import ForbiddenError
+from stache_ai.identity import ForbiddenError, LimitExceededError
 from stache_ai.loaders import load_document
 from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
+from stache_ai.sanitize import strip_reserved_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,10 @@ def get_queue_dir() -> Path:
 async def list_pending(http_request: Request) -> list[PendingItem]:
     """List all pending items in the queue"""
     # S1 enforcement (no namespace: items span namespaces until approved).
-    auth.authorize(http_request, "read_pending")
+    # Scope to the caller so a plugged authorizer CAN enforce per-item reads;
+    # true per-object isolation ALSO requires a partitioning queue/jobstore
+    # (the OSS queue is a shared directory, so the seam alone can't isolate).
+    auth.authorize(http_request, "read_pending", {"owner": auth.principal(http_request).user_id})
 
     queue_dir = get_queue_dir()
 
@@ -76,8 +80,10 @@ async def list_pending(http_request: Request) -> list[PendingItem]:
 @router.get("/pending/{item_id}")
 async def get_pending(item_id: str, http_request: Request) -> PendingItem:
     """Get a specific pending item"""
-    # S1 enforcement (before the read: namespace isn't known until the file is loaded).
-    auth.authorize(http_request, "read_pending")
+    # S1 enforcement (before the read: namespace isn't known until the file is
+    # loaded). Scope to the caller; per-object isolation also needs a
+    # partitioning queue/jobstore (see list_pending).
+    auth.authorize(http_request, "read_pending", {"owner": auth.principal(http_request).user_id})
 
     queue_dir = get_queue_dir()
     json_path = queue_dir / f"{item_id}.json"
@@ -94,8 +100,9 @@ async def get_pending(item_id: str, http_request: Request) -> PendingItem:
 @router.get("/pending/{item_id}/thumbnail")
 async def get_thumbnail(item_id: str, http_request: Request):
     """Get the thumbnail image for a pending item"""
-    # S1 enforcement (no namespace: pending items aren't namespaced yet).
-    auth.authorize(http_request, "read_pending")
+    # S1 enforcement (no namespace: pending items aren't namespaced yet). Scope
+    # to the caller; per-object isolation also needs a partitioning queue.
+    auth.authorize(http_request, "read_pending", {"owner": auth.principal(http_request).user_id})
 
     queue_dir = get_queue_dir()
     thumb_path = queue_dir / f"{item_id}.jpg"
@@ -109,8 +116,9 @@ async def get_thumbnail(item_id: str, http_request: Request):
 @router.get("/pending/{item_id}/pdf")
 async def get_pdf(item_id: str, http_request: Request):
     """Get the PDF file for a pending item"""
-    # S1 enforcement (no namespace: pending items aren't namespaced yet).
-    auth.authorize(http_request, "read_pending")
+    # S1 enforcement (no namespace: pending items aren't namespaced yet). Scope
+    # to the caller; per-object isolation also needs a partitioning queue.
+    auth.authorize(http_request, "read_pending", {"owner": auth.principal(http_request).user_id})
 
     queue_dir = get_queue_dir()
     pdf_path = queue_dir / f"{item_id}.pdf"
@@ -149,8 +157,12 @@ async def approve_pending(item_id: str, request: ApproveRequest, http_request: R
         # Load the PDF document
         text = load_document(str(pdf_path), f"{filename}.pdf")
 
-        # Prepare metadata
-        metadata = request.metadata or {}
+        # Prepare metadata. Approve is a web-originated ingress: strip caller
+        # -supplied reserved/control keys (and forgeable source-identity keys)
+        # so this path can't smuggle dedup/error-recovery state into the
+        # pipeline the way the other ingress points already prevent
+        # (SANITIZER F1).
+        metadata = strip_reserved_metadata(request.metadata)
         metadata["filename"] = f"{filename}.pdf"
 
         # Ingest into pipeline
@@ -189,6 +201,8 @@ async def approve_pending(item_id: str, request: ApproveRequest, http_request: R
     except HTTPException:
         raise
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to approve {item_id}: {e}")

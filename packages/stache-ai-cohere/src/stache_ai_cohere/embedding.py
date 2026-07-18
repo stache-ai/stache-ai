@@ -21,8 +21,11 @@ class CohereEmbeddingProvider(EmbeddingProvider):
         self.model = settings.get_embedding_model()
         self._dimensions = 1024  # Cohere embed-english-v3.0 is 1024
 
-    def embed(self, text: str) -> List[float]:
-        """Generate embedding for single text (for documents)"""
+    def embed(self, text: str, *, context=None) -> List[float]:
+        """Generate embedding for single text (for documents).
+
+        ``context`` (keyword-only request context) is accepted and ignored.
+        """
         response = self.client.embed(
             texts=[text],
             model=self.model,
@@ -30,8 +33,11 @@ class CohereEmbeddingProvider(EmbeddingProvider):
         )
         return response.embeddings[0]
 
-    def embed_query(self, text: str) -> List[float]:
-        """Generate embedding for search query"""
+    def embed_query(self, text: str, *, context=None) -> List[float]:
+        """Generate embedding for search query.
+
+        ``context`` (keyword-only request context) is accepted and ignored.
+        """
         response = self.client.embed(
             texts=[text],
             model=self.model,
@@ -39,8 +45,11 @@ class CohereEmbeddingProvider(EmbeddingProvider):
         )
         return response.embeddings[0]
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings for multiple texts (for documents)"""
+    def embed_batch(self, texts: List[str], *, context=None) -> List[List[float]]:
+        """Generate embeddings for multiple texts (for documents).
+
+        ``context`` (keyword-only request context) is accepted and ignored.
+        """
         response = self.client.embed(
             texts=texts,
             model=self.model,

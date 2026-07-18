@@ -139,7 +139,8 @@ class BaseAIEnricher(Enricher):
                 prompt=prompt,
                 schema=schema,
                 max_tokens=self.config.ai_enrichment_max_tokens,
-                temperature=self.config.ai_enrichment_temperature
+                temperature=self.config.ai_enrichment_temperature,
+                context=context
             )
 
             # Apply enrichment to metadata

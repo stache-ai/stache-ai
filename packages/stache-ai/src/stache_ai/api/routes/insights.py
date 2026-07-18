@@ -6,7 +6,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from stache_ai.api import auth
-from stache_ai.identity import ForbiddenError
+from stache_ai.identity import ForbiddenError, LimitExceededError
+from stache_ai.middleware.chain import MiddlewareRejection
 from stache_ai.middleware.context import RequestContext
 from stache_ai.models.insight import InsightCreate
 from stache_ai.rag.pipeline import get_pipeline
@@ -52,7 +53,7 @@ async def create_insight(request: InsightCreate, http_request: Request):
         pipeline = get_pipeline()
 
         context = RequestContext.from_fastapi_request(http_request, request.namespace)
-        result = pipeline.create_insight(
+        result = await pipeline.create_insight(
             content=request.content,
             namespace=request.namespace,
             tags=request.tags,
@@ -64,7 +65,13 @@ async def create_insight(request: InsightCreate, http_request: Request):
             "message": "Insight created successfully",
             **result
         }
+    except MiddlewareRejection as e:
+        # A guard/processor policy rejection (e.g. a dedup duplicate) is a
+        # client-visible decision, not a server error -- 409, not 500.
+        raise HTTPException(status_code=409, detail=e.reason or str(e))
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to create insight: {e}")
@@ -94,7 +101,7 @@ async def search_insights(
         pipeline = get_pipeline()
 
         context = RequestContext.from_fastapi_request(http_request, namespace)
-        results = pipeline.search_insights(
+        results = await pipeline.search_insights(
             query=query,
             namespace=namespace,
             top_k=top_k,
@@ -115,7 +122,13 @@ async def search_insights(
             results=formatted_results,
             total=len(formatted_results)
         )
+    except MiddlewareRejection as e:
+        # A guard/processor policy rejection (e.g. a dedup duplicate) is a
+        # client-visible decision, not a server error -- 409, not 500.
+        raise HTTPException(status_code=409, detail=e.reason or str(e))
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to search insights: {e}")
@@ -155,7 +168,13 @@ async def delete_insight(
             "message": f"Insight {insight_id} deleted successfully",
             **result
         }
+    except MiddlewareRejection as e:
+        # A guard/processor policy rejection (e.g. a dedup duplicate) is a
+        # client-visible decision, not a server error -- 409, not 500.
+        raise HTTPException(status_code=409, detail=e.reason or str(e))
     except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Failed to delete insight {insight_id}: {e}")

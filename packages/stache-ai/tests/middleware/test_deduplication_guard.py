@@ -129,18 +129,20 @@ async def test_guard_allows_reingest_version(context, mock_document_index, mock_
     assert result.metadata["_deleted_at_ms"] == 1234567890
     assert result.metadata["content_hash"] == new_hash
 
-    # Verify soft delete was called
+    # Verify soft delete was called with context forwarded
     mock_document_index.soft_delete_document.assert_called_once_with(
         doc_id="old-doc-123",
         namespace="test-ns",
-        delete_reason="reingest_version"
+        delete_reason="reingest_version",
+        context=context
     )
 
-    # Verify vector status update
+    # Verify vector status update with context forwarded
     mock_vectordb.update_status.assert_called_once_with(
         ids=["chunk-1", "chunk-2"],
         namespace="test-ns",
-        status="deleting"
+        status="deleting",
+        context=context
     )
 
 
@@ -228,11 +230,12 @@ async def test_guard_handles_fingerprint_identifier(context, mock_document_index
     assert result.action == "allow"
     assert result.metadata["content_hash"] == content_hash
 
-    # Verify lookup was called without source_path
+    # Verify lookup was called without source_path (context forwarded)
     mock_document_index.get_document_by_source_path.assert_called_once_with(
         namespace="test-ns",
         source_path=None,
-        filename="text"
+        filename="text",
+        context=context
     )
 
 

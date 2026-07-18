@@ -253,8 +253,11 @@ class TestMiddlewareIntegration:
         assert len(processor.calls) == 1
         assert processor.calls[0]["query"] == "simple query"
 
-        # Verify transformed query was used for embedding
-        mock_pipeline._embedding_provider.embed_query.assert_called_with("expanded query with synonyms")
+        # Verify transformed query was used for embedding (context is now
+        # threaded through as a keyword arg, so assert on the positional query).
+        assert mock_pipeline._embedding_provider.embed_query.call_args.args == (
+            "expanded query with synonyms",
+        )
 
     async def test_query_processor_reject(self, mock_pipeline):
         """Test query processor that rejects query"""

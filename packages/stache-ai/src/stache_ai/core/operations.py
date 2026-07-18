@@ -1,13 +1,18 @@
 """Shared operations for common RAG tasks"""
+from __future__ import annotations
 
 import asyncio
 import logging
 import uuid
+from typing import TYPE_CHECKING
 
 from stache_ai.config import settings
 from stache_ai.providers import NamespaceProviderFactory
 from stache_ai.sanitize import strip_reserved_metadata
 from stache_ai.rag.pipeline import get_pipeline
+
+if TYPE_CHECKING:
+    from stache_ai.middleware.context import RequestContext
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +40,8 @@ def _run_async(coro):
 
 
 def do_search(query: str, namespace: str = None, top_k: int = 20,
-              rerank: bool = True, filter: dict = None, request_id: str = None) -> dict:
+              rerank: bool = True, filter: dict = None, request_id: str = None,
+              *, context: "RequestContext | None" = None) -> dict:
     """Search knowledge base - shared by HTTP routes and external integrations
 
     Args:
@@ -66,7 +72,8 @@ def do_search(query: str, namespace: str = None, top_k: int = 20,
             synthesize=False,  # ALWAYS disable synthesis
             namespace=namespace,
             rerank=rerank,
-            filter=filter
+            filter=filter,
+            context=context
         ))
         return {"request_id": request_id, **result}
     except Exception as e:
@@ -81,7 +88,8 @@ def do_search(query: str, namespace: str = None, top_k: int = 20,
 
 def do_ingest_text(text: str, metadata: dict = None, namespace: str = None,
                    chunking_strategy: str = "recursive", prepend_metadata: list = None,
-                   request_id: str = None) -> dict:
+                   request_id: str = None,
+                   *, context: "RequestContext | None" = None) -> dict:
     """Ingest text - shared by HTTP routes and external integrations
 
     Args:
@@ -121,7 +129,8 @@ def do_ingest_text(text: str, metadata: dict = None, namespace: str = None,
             metadata=metadata,
             namespace=namespace,
             chunking_strategy=chunking_strategy,
-            prepend_metadata=prepend_metadata
+            prepend_metadata=prepend_metadata,
+            context=context
         ))
         return {"request_id": request_id, **result}
     except ValueError:
@@ -135,7 +144,8 @@ def do_ingest_text(text: str, metadata: dict = None, namespace: str = None,
         }
 
 
-def do_list_namespaces(request_id: str = None) -> dict:
+def do_list_namespaces(request_id: str = None,
+                       *, context: "RequestContext | None" = None) -> dict:
     """List namespaces - shared by HTTP routes and external integrations
 
     Args:
@@ -150,7 +160,7 @@ def do_list_namespaces(request_id: str = None) -> dict:
     try:
         provider = NamespaceProviderFactory.create(settings)
         # include_children=True to get ALL namespaces, not just root level
-        namespaces = provider.list(include_children=True)
+        namespaces = provider.list(include_children=True, context=context)
         return {
             "request_id": request_id,
             "namespaces": namespaces,
@@ -167,7 +177,8 @@ def do_list_namespaces(request_id: str = None) -> dict:
 
 
 def do_list_documents(namespace: str = None, limit: int = 50,
-                      next_key: str = None, request_id: str = None) -> dict:
+                      next_key: str = None, request_id: str = None,
+                      *, context: "RequestContext | None" = None) -> dict:
     """List documents - shared by HTTP routes and external integrations
 
     Args:
@@ -204,7 +215,8 @@ def do_list_documents(namespace: str = None, limit: int = 50,
         result = pipeline.document_index_provider.list_documents(
             namespace=namespace,
             limit=limit,
-            last_evaluated_key=next_key
+            last_evaluated_key=next_key,
+            context=context
         )
         return {"request_id": request_id, **result}
     except Exception as e:
@@ -218,7 +230,8 @@ def do_list_documents(namespace: str = None, limit: int = 50,
 
 
 def do_get_document(doc_id: str, namespace: str = "default",
-                    request_id: str = None) -> dict:
+                    request_id: str = None,
+                    *, context: "RequestContext | None" = None) -> dict:
     """Get document - shared by HTTP routes and external integrations
 
     Args:
@@ -245,7 +258,8 @@ def do_get_document(doc_id: str, namespace: str = "default",
 
         doc = pipeline.document_index_provider.get_document(
             doc_id=doc_id,
-            namespace=namespace
+            namespace=namespace,
+            context=context
         )
 
         if not doc:
@@ -268,7 +282,8 @@ def do_get_document(doc_id: str, namespace: str = "default",
 
 def do_create_namespace(id: str, name: str, description: str = "",
                         parent_id: str = None, metadata: dict = None,
-                        filter_keys: list = None, request_id: str = None) -> dict:
+                        filter_keys: list = None, request_id: str = None,
+                        *, context: "RequestContext | None" = None) -> dict:
     """Create a namespace
 
     Args:
@@ -294,7 +309,8 @@ def do_create_namespace(id: str, name: str, description: str = "",
             description=description,
             parent_id=parent_id,
             metadata=metadata,
-            filter_keys=filter_keys
+            filter_keys=filter_keys,
+            context=context
         )
         return {"request_id": request_id, "namespace": namespace, "success": True}
     except Exception as e:
@@ -302,7 +318,8 @@ def do_create_namespace(id: str, name: str, description: str = "",
         return {"request_id": request_id, "error": str(e), "success": False}
 
 
-def do_get_namespace(id: str, request_id: str = None) -> dict:
+def do_get_namespace(id: str, request_id: str = None,
+                     *, context: "RequestContext | None" = None) -> dict:
     """Get a namespace by ID
 
     Args:
@@ -317,7 +334,7 @@ def do_get_namespace(id: str, request_id: str = None) -> dict:
 
     try:
         provider = NamespaceProviderFactory.create(settings)
-        namespace = provider.get(id)
+        namespace = provider.get(id, context=context)
 
         if not namespace:
             return {"request_id": request_id, "error": f"Namespace not found: {id}"}
@@ -329,7 +346,8 @@ def do_get_namespace(id: str, request_id: str = None) -> dict:
 
 
 def do_update_namespace(id: str, name: str = None, description: str = None,
-                        metadata: dict = None, request_id: str = None) -> dict:
+                        metadata: dict = None, request_id: str = None,
+                        *, context: "RequestContext | None" = None) -> dict:
     """Update a namespace
 
     Args:
@@ -351,7 +369,8 @@ def do_update_namespace(id: str, name: str = None, description: str = None,
             id=id,
             name=name,
             description=description,
-            metadata=metadata
+            metadata=metadata,
+            context=context
         )
 
         if not namespace:
@@ -363,7 +382,8 @@ def do_update_namespace(id: str, name: str = None, description: str = None,
         return {"request_id": request_id, "error": str(e), "success": False}
 
 
-def do_delete_namespace(id: str, cascade: bool = False, request_id: str = None) -> dict:
+def do_delete_namespace(id: str, cascade: bool = False, request_id: str = None,
+                        *, context: "RequestContext | None" = None) -> dict:
     """Delete a namespace
 
     Args:
@@ -379,7 +399,7 @@ def do_delete_namespace(id: str, cascade: bool = False, request_id: str = None) 
 
     try:
         provider = NamespaceProviderFactory.create(settings)
-        deleted = provider.delete(id=id, cascade=cascade)
+        deleted = provider.delete(id=id, cascade=cascade, context=context)
 
         if not deleted:
             return {"request_id": request_id, "error": f"Namespace not found: {id}", "success": False}
@@ -392,7 +412,8 @@ def do_delete_namespace(id: str, cascade: bool = False, request_id: str = None) 
 
 # ===== Document Operations =====
 
-def do_delete_document(doc_id: str, namespace: str = "default", request_id: str = None) -> dict:
+def do_delete_document(doc_id: str, namespace: str = "default", request_id: str = None,
+                       *, context: "RequestContext | None" = None) -> dict:
     """Delete a document and all its chunks
 
     Args:
@@ -412,7 +433,7 @@ def do_delete_document(doc_id: str, namespace: str = "default", request_id: str 
         # Use document index if available (preferred method)
         if pipeline.document_index_provider:
             # Get chunk IDs from document index
-            chunk_ids = pipeline.document_index_provider.get_chunk_ids(doc_id, namespace)
+            chunk_ids = pipeline.document_index_provider.get_chunk_ids(doc_id, namespace, context=context)
 
             if not chunk_ids:
                 return {
@@ -423,10 +444,10 @@ def do_delete_document(doc_id: str, namespace: str = "default", request_id: str 
 
             # Delete from vector database first (atomic operation pattern)
             vectordb = pipeline.vectordb_provider
-            vectordb.delete(chunk_ids, namespace=namespace)
+            vectordb.delete(chunk_ids, namespace=namespace, context=context)
 
             # Delete from document index
-            pipeline.document_index_provider.delete_document(doc_id, namespace)
+            pipeline.document_index_provider.delete_document(doc_id, namespace, context=context)
 
             logger.info(f"[{request_id}] Deleted document {doc_id} ({len(chunk_ids)} chunks) from {namespace}")
 
@@ -442,13 +463,14 @@ def do_delete_document(doc_id: str, namespace: str = "default", request_id: str 
         vectordb = pipeline.vectordb_provider
         result = vectordb.delete_by_metadata(
             field="doc_id",
-            value=doc_id
+            value=doc_id,
+            context=context
         )
 
         # Also explicitly delete the summary record by its ID
         summary_id = f"summary_{doc_id}"
         try:
-            vectordb.delete(ids=[summary_id])
+            vectordb.delete(ids=[summary_id], context=context)
         except Exception:
             pass  # Summary may not exist for older documents
 

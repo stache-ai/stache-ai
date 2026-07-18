@@ -451,16 +451,18 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
 
         # Special case: namespace migration requires PK change (delete + recreate)
         if "namespace" in updates:
-            return self._migrate_namespace(doc_id, namespace, updates)
+            return self._migrate_namespace(doc_id, namespace, updates, context=context)
 
         # Standard update: use UpdateExpression for atomic updates
-        return self._update_in_place(doc_id, namespace, updates)
+        return self._update_in_place(doc_id, namespace, updates, context=context)
 
     def _migrate_namespace(
         self,
         doc_id: str,
         old_namespace: str,
-        updates: dict[str, Any]
+        updates: dict[str, Any],
+        *,
+        context=None
     ) -> bool:
         """Migrate document to new namespace using atomic DynamoDB transaction.
 
@@ -561,7 +563,9 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         self,
         doc_id: str,
         namespace: str,
-        updates: dict[str, Any]
+        updates: dict[str, Any],
+        *,
+        context=None
     ) -> bool:
         """Update document fields in-place using UpdateExpression"""
         update_parts = []
@@ -613,7 +617,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             List of chunk IDs from the vector database
         """
         try:
-            doc = self.get_document(doc_id, namespace)
+            doc = self.get_document(doc_id, namespace, context=context)
             if doc:
                 return doc.get('chunk_ids', [])
             return []

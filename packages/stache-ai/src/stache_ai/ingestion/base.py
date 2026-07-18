@@ -2,9 +2,10 @@
 
 Phase 1 defines five seams - Intake, Queue, JobStore, BlobStore, Notifier -
 plus the data models that flow through them. The synchronous tier wires these
-to inline/null implementations that run the existing pipeline in-process; the
-async (AWS) tiers slot S3/SQS/DynamoDB implementations behind the same seams
-without touching routes or the worker.
+to inline/null implementations that run the existing pipeline in-process; async
+tiers slot durable queue/blob/jobstore implementations (registered by plugin
+packages via entry points) behind the same seams without touching routes or
+the worker.
 """
 
 from __future__ import annotations
@@ -15,6 +16,26 @@ from enum import Enum
 from typing import Optional
 
 from stache_ai.identity import Principal
+
+
+class IngestTextTooLargeError(ValueError):
+    """Raised when submitted text exceeds ``max_ingest_text_bytes``.
+
+    A dedicated subclass so routes can map the size cap to HTTP 413 while other
+    ``ValueError`` submit failures stay 400.
+    """
+
+
+# Transport-only metadata keys that must never reach enrichers / the vector
+# store, nor be persisted on the terminal job record (``_text`` can be hundreds
+# of KB and would otherwise leak into GET /jobs responses and strain the
+# jobstore item-size cap). Shared by the worker and reaper terminal updates.
+_TRANSPORT_KEYS = {"_text", "_chunking", "_prepend_metadata"}
+
+
+def strip_transport(metadata: dict) -> dict:
+    """Metadata with transport-only keys removed (for terminal job records)."""
+    return {k: v for k, v in (metadata or {}).items() if k not in _TRANSPORT_KEYS}
 
 
 class JobStatus(str, Enum):
@@ -72,6 +93,11 @@ class IntakeTicket:
     upload_url: Optional[str] = None       # None => inline (bytes already delivered)
     required_headers: dict = field(default_factory=dict)
     expires_at: Optional[str] = None
+    # The storage key the bytes will land at, computed ONCE by the intake via
+    # BlobStore.make_key. The caller records it as job.blob_key so the two never
+    # disagree (a mismatch would guarantee a FAILED job); the worker inverts it
+    # with BlobStore.parse_job_id. None for inline tickets that carry no upload.
+    blob_key: Optional[str] = None
 
 
 @dataclass
@@ -90,8 +116,23 @@ class BlobStore(ABC):
 
         Overridable seam: deployment-specific stores may prefix keys (e.g. for
         per-prefix IAM policies or retention rules) using the opaque principal.
+
+        MUST be pure and deterministic in (job_id, filename, principal): the
+        async worker recovers job_id by inverting this via ``parse_job_id``, and
+        an override that prefixes keys MUST override ``parse_job_id`` to match.
         """
         return f"{job_id}/{filename}"
+
+    def parse_job_id(self, key: str) -> str:
+        """Recover the job_id from a storage key -- the inverse of ``make_key``.
+
+        The async ingestion path (an object-created event) knows only the key
+        the bytes landed at; this returns the job it belongs to. The default
+        pairs with the default ``make_key`` (``"{job_id}/{filename}"``). A store
+        that overrides ``make_key`` to prefix keys MUST override this too so the
+        round-trip ``parse_job_id(make_key(job_id, f)) == job_id`` holds.
+        """
+        return key.split("/")[0]
 
     @abstractmethod
     def put(self, key: str, data: bytes, metadata: dict) -> str: ...
@@ -100,7 +141,7 @@ class BlobStore(ABC):
     def get(self, key: str) -> tuple[bytes, dict]: ...
 
     def head(self, key: str) -> dict:
-        """Return blob metadata only. Default reads the full object; S3 overrides efficiently."""
+        """Return blob metadata only. Default reads the full object; object-store providers override efficiently."""
         return self.get(key)[1]
 
     def presign_put(self, key: str, *, headers: dict, expiry: int) -> Optional[str]:
@@ -108,6 +149,12 @@ class BlobStore(ABC):
 
 
 class JobStore(ABC):
+    # Largest inline payload (notably ``_text``) a single job record can hold,
+    # or None for no store-imposed limit. Durable stores with a per-item cap
+    # (e.g. DynamoDB's 400KB) set this so submit rejects oversized text with 413
+    # instead of failing the backend write with a 500.
+    max_inline_payload_bytes: "Optional[int]" = None
+
     @abstractmethod
     def create(self, job: Job, *, principal: Optional[Principal] = None) -> None:
         """Persist a new job. ``principal`` is the opaque caller identity; the
@@ -143,6 +190,14 @@ class JobStore(ABC):
         depth), which needs the caller's identity - not just the bare user id.
         Default rebuilds an id-only principal; deployment-specific stores may
         rehydrate claims from attributes they stamped at ``create`` time.
+
+        OVERRIDE OBLIGATION (frozen ABI): a deployment whose authorizer keys on
+        CLAIMS (roles/orgs/plans) MUST override this to restore those claims
+        from the persisted job. The default returns an id-only principal with
+        an EMPTY claims dict, so an intake decision that passed on the caller's
+        claims would be re-evaluated here against no claims and diverge from
+        intake (typically fail-closed, stalling the job). Overriding it is the
+        only way to keep the worker's re-check consistent with intake.
         """
         return Principal(user_id=job.requested_by)
 
@@ -154,12 +209,13 @@ class JobStore(ABC):
         duplicate then no-ops).
 
         Idempotent-consumer guard. The async tier delivers the same job more than
-        once by design - SQS is at-least-once, and a blob-backed job is triggered
-        by both a direct enqueue and the bucket's S3 ObjectCreated event - so
-        processing MUST be gated on winning this claim, not on a bare status read.
-        This default is a non-atomic get+update, adequate for the single-process
-        sync tier (ephemeral/sqlite); DynamoDB overrides it with a conditional
-        write that is safe under real concurrency.
+        once by design - queues deliver at-least-once, and a blob-backed job is
+        triggered by both a direct enqueue and the blob store's object-created
+        event - so processing MUST be gated on winning this claim, not on a bare
+        status read. This default is a non-atomic get+update, adequate for the
+        single-process sync tier (ephemeral/sqlite); durable jobstore providers
+        override it with an atomic conditional write that is safe under real
+        concurrency.
         """
         from datetime import datetime, timezone
         to_status = to_status or JobStatus.PROCESSING

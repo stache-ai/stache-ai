@@ -73,8 +73,11 @@ class MixedbreadEmbeddingProvider(EmbeddingProvider):
         embeddings = [item["embedding"] for item in data["data"]]
         return embeddings
 
-    def embed(self, text: str) -> List[float]:
-        """Generate embedding for single text"""
+    def embed(self, text: str, *, context=None) -> List[float]:
+        """Generate embedding for single text.
+
+        ``context`` (keyword-only request context) is accepted and ignored.
+        """
         try:
             result = self._call_api([text])
             return result[0]
@@ -82,8 +85,11 @@ class MixedbreadEmbeddingProvider(EmbeddingProvider):
             logger.error(f"Mixedbread embedding failed: {e}")
             raise
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings for multiple texts"""
+    def embed_batch(self, texts: List[str], *, context=None) -> List[List[float]]:
+        """Generate embeddings for multiple texts.
+
+        ``context`` (keyword-only request context) is accepted and ignored.
+        """
         try:
             return self._call_api(texts)
         except Exception as e:

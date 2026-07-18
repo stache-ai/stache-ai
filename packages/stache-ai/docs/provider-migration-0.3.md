@@ -138,6 +138,27 @@ e.g. prefixing by something derived from `principal` for per-prefix IAM
 policies or retention rules. `principal` is opaque; core does not interpret
 it, so any prefixing scheme is entirely up to your override.
 
+**If you override `make_key`, you MUST also override its inverse,
+`parse_job_id`** — the async ingestion path (a blob object-created event) knows
+only the storage key and recovers the job it belongs to by calling it:
+
+```python
+class BlobStore(ABC):
+    def parse_job_id(self, key: str) -> str:   # inverse of make_key
+        return key.split("/")[0]
+```
+
+The round-trip `parse_job_id(make_key(job_id, filename)) == job_id` must hold.
+Two further constraints, because this seam is stable from 0.3.0 on:
+
+- `make_key` must be **pure and deterministic** in `(job_id, filename, principal)`
+  — the presign intake and the job record derive the key independently and must
+  agree, so no `uuid`/timestamp/clock in the key.
+- If your override **prefixes** keys, ensure the blob store's object-created
+  event notification is configured to cover that prefix, or uploads never reach
+  the worker. (Core strips the configured blob-store prefix before calling
+  `parse_job_id`, so your override sees the post-strip key.)
+
 ## 4. New entry-point groups: `stache.principal_extractor` and `stache.authorizer`
 
 Two new pluggable seams, both fail-closed when configured (see §5).
@@ -221,6 +242,16 @@ explicitly configured:
 - Entry points backed by a package that simply **isn't installed**
   (`ModuleNotFoundError`/missing optional dependency) still skip normally —
   that's expected and unchanged.
+- A named provider that is installed and broken but **not the one you
+  configured** no longer aborts startup — it is recorded and skipped so an
+  unrelated third-party plugin can't brick a working deployment. You only see
+  the abort when the *configured* name is the broken one (and then with its
+  real load error).
+- **Middleware groups are stricter**: middleware (`stache.enrichment`,
+  `stache.result_processor`, `stache.chunk_observer`, …) runs as a discovered
+  *set* with no name selection, so *any* installed-but-broken middleware aborts
+  startup — a silently-dropped result filter or isolation middleware would
+  otherwise fail open. Don't ship a middleware entry point you can't load.
 
 Practically: if you ship a `stache.principal_extractor` or `stache.authorizer`
 plugin, an exception in your `__init__` or first use will now stop the app
@@ -319,6 +350,127 @@ subclass it now (the worker calls both methods).
 before, add the keyword-only `context=None` parameter and forward it to any
 `get` calls you make.
 
+## 10. `context=` on `LLMProvider` and `EmbeddingProvider`
+
+The 0.3 `context=` pass (§1) deferred the LLM and embedding provider families;
+they are now threaded too, closing the loop so *every* provider data call can
+see the optional request context.
+
+`EmbeddingProvider` gained a **keyword-only** `context` on each data method:
+
+```python
+class EmbeddingProvider(ABC):
+    @abstractmethod
+    def embed(self, text: str, *, context: "RequestContext | None" = None) -> list[float]: ...
+
+    @abstractmethod
+    def embed_batch(self, texts: list[str], *, context: "RequestContext | None" = None) -> list[list[float]]: ...
+
+    def embed_query(self, text: str, *, context: "RequestContext | None" = None) -> list[float]:
+        return self.embed(text, context=context)
+```
+
+`LLMProvider` gained the same keyword-only `context` on `generate`,
+`generate_with_model`, `generate_structured`, and `generate_with_tools`. The
+two methods that already take a positional `context` — the RAG chunk list —
+instead gained a keyword-only **`request_context`** so the two never collide:
+
+```python
+class LLMProvider(ABC):
+    @abstractmethod
+    def generate(self, prompt: str, *, context: "RequestContext | None" = None, **kwargs) -> str: ...
+
+    @abstractmethod
+    def generate_with_context(
+        self, query: str, context: list[dict[str, Any]],
+        *, request_context: "RequestContext | None" = None, **kwargs,
+    ) -> str: ...
+
+    def generate_with_model(
+        self, prompt: str, model_id: str,
+        *, context: "RequestContext | None" = None, **kwargs,
+    ) -> str: ...
+
+    def generate_with_context_and_model(
+        self, query: str, context: list[dict[str, Any]], model_id: str,
+        *, request_context: "RequestContext | None" = None, **kwargs,
+    ) -> str: ...
+```
+
+**Contract** — identical in spirit to §1, with two specifics:
+
+- **Keyword-only.** Unlike the four ABCs in §1 (where `context` is
+  positional-or-keyword), these are behind a `*` because the methods already
+  carry `**kwargs`; a bare `context=None` before `**kwargs` would be
+  swallowable and ambiguous. Core always calls `context=`/`request_context=`.
+- **`request_context`, not `context`, on the two RAG methods.** On
+  `generate_with_context`/`generate_with_context_and_model`, `context` is the
+  retrieved chunk list and is unchanged; the request context is
+  `request_context`.
+- **Accept, default `None`, ignore is fine.** All first-party providers accept
+  it and do nothing with it — the per-package providers (Bedrock, Anthropic,
+  OpenAI, Cohere, Ollama, Mixedbread) as well as the `fallback`/`none`
+  providers shipped in core (`stache_ai.providers.llm`/
+  `stache_ai.providers.embeddings`) — except that where one method delegates
+  to another (`generate_with_context` → `generate`,
+  `generate_with_context_and_model` → `generate_with_model`, or the embedding
+  fallback provider's `embed`/`embed_batch` → its wrapped primary/secondary
+  provider), they **forward** the request context so a wrapping provider that
+  *does* act on it sees it at the leaf call. If your override makes a nested
+  call, forward it the same way.
+
+**Why keyword-only matters for the drift guard.** A signature-presence test
+proves the parameter exists; it does NOT prove a method forwards it on a nested
+call. The test suite therefore also asserts propagation by object identity
+through the known nested sites (the base `generate_with_model` /
+`generate_with_context_and_model` defaults and the auto-split embedding
+wrapper), and separately enumerates every concrete first-party subclass
+shipped in-tree (`FallbackEmbeddingProvider`, `NoneLLMProvider`,
+`FallbackLLMProvider`) so a subclass override that drops the kwarg — not just
+an ABC that never declared it — gets caught too. Per-provider-package
+concretes (Bedrock, Anthropic, etc.) are covered by their own package test
+suites. If you add a provider method that makes a nested data call, add an
+identity-propagation assertion for it — do not rely on the signature check
+alone.
+
+The pipeline threads its request context through every embed/generate call
+site (ingest, query synthesis, summary regeneration), and the auto-split
+embedding wrapper (`AutoSplitEmbeddingWrapper`) forwards it into the wrapped
+provider's `embed`/`embed_batch`.
+
+## 11. `LimitExceededError` → 429 (with `Retry-After`)
+
+A new neutral exception in `stache_ai.identity`, alongside `ForbiddenError`:
+
+```python
+from stache_ai.identity import LimitExceededError
+
+# Raise from anywhere a configured limit rejects an operation — an IngestGuard,
+# a QueryProcessor, a provider, or an authorizer:
+raise LimitExceededError("try again shortly")
+```
+
+The API layer maps it to **`429 Too Many Requests`** with a `Retry-After: 60`
+header, the same JSON `{"detail": ...}` shape as the 401/403 handlers. This
+mirrors the existing `ForbiddenError` → 403 seam exactly:
+
+- Core attaches **no meaning** to *which* limit was hit. There are no fields
+  and no message contract — the `detail` string is passed through verbatim; OSS
+  never composes it.
+- Routes with a blanket `except Exception` re-raise it (`except
+  LimitExceededError: raise`) ahead of the catch-all, so a rejection raised
+  mid-request reaches the app's 429 handler instead of being rewritten into a
+  500. A static AST sweep test enforces this re-raise (next to the
+  `ForbiddenError` one) on every route module.
+
+Use it when you want correct "try again later" HTTP semantics — `429` is what
+SDKs and proxies honor for backoff, unlike `403`. Non-HTTP front ends (CLI,
+MCP, worker) don't map it; the exception propagates and each maps as it sees
+fit, exactly as with `ForbiddenError`. Because a `stache.routes` plugin only
+contributes an `APIRouter` and never receives the `app`, this handler must live
+in core — a proprietary package cannot register a global exception handler
+itself.
+
 ## Summary of signature changes for provider authors
 
 | ABC | Change |
@@ -327,9 +479,12 @@ before, add the keyword-only `context=None` parameter and forward it to any
 | `DocumentIndexProvider` | All 23 data methods gained `context=None` |
 | `NamespaceProvider` | All 7 methods gained `context=None` |
 | `RerankerProvider` | `rerank()` gained `context=None` |
+| `EmbeddingProvider` | `embed`/`embed_batch`/`embed_query` gained keyword-only `context=None` (§10) |
+| `LLMProvider` | `generate`/`generate_with_model`/`generate_structured`/`generate_with_tools` gained keyword-only `context=None`; `generate_with_context`/`generate_with_context_and_model` gained keyword-only `request_context=None` (§10) |
 | `JobStore` | `create()`, `list()` gained keyword-only `principal=None` |
 | `IntakeProvider` | `begin()` gained keyword-only `principal=None` |
-| `BlobStore` | `make_key()` is now overridable, gained keyword-only `principal=None` |
+| `BlobStore` | `make_key()` is now overridable (keyword-only `principal=None`); new paired inverse `parse_job_id()` — override both or neither (§3) |
+| `IntakeTicket` | new optional `blob_key` field — the intake reports the key it presigned so the job record uses the identical one |
 
 See also: `docs/middleware-plugin-guide.md` for the pre-existing middleware
 entry points (`stache.enrichment`, `stache.query_processor`, etc.) — the
