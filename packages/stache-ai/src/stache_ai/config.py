@@ -294,6 +294,21 @@ class Settings(BaseSettings):
         description="Enable scheduled trash purge job"
     )
 
+    # ===== Identity =====
+    principal_extractor: str = Field(
+        default="apigateway",
+        description="Principal extractor: apigateway (default) or an installed "
+                    "stache.principal_extractor entry point. Non-default values "
+                    "are fail-closed: load failure aborts startup."
+    )
+    authorization_provider: str | None = Field(
+        default=None,
+        description="Authorization provider: unset or 'allow-all' (default, no "
+                    "enforcement) or an installed stache.authorizer entry point. "
+                    "Non-default values are fail-closed: load failure aborts "
+                    "startup instead of degrading to allow-all."
+    )
+
     # ===== Ingestion Backbone (sync tier built in; async providers are
     # plugin-registered via entry points and carry their own settings) =====
     ingest_queue_provider: str = Field(
@@ -301,11 +316,13 @@ class Settings(BaseSettings):
         description="Ingestion queue provider: inline | plugin-registered async queue"
     )
     ingest_producer_drops_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Accept raw S3 producer drops (objects landing in the "
-                    "originals bucket without a pre-created job). The bucket "
-                    "policy is the auth boundary for this path; disable it in "
-                    "deployments that require verified callers."
+                    "originals bucket without a pre-created job). Secure-by-"
+                    "default OFF: this path has no per-request authorization "
+                    "seam (the bucket policy is its only auth boundary), so it "
+                    "is opt-in. Enable it only in deployments that trust every "
+                    "writer to the originals bucket."
     )
     ingest_jobstore_provider: str = Field(
         default="ephemeral",

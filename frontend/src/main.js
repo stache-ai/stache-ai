@@ -9,6 +9,7 @@ import Namespaces from './pages/Namespaces.vue'
 import PendingQueue from './pages/PendingQueue.vue'
 import Jobs from './pages/Jobs.vue'
 import Trash from './pages/Trash.vue'
+import Account from './pages/Account.vue'
 import { loadConfig } from './config.js'
 import { initAuth, getAuthProvider, handleCallback, isAuthenticated, login } from './api/auth.js'
 
@@ -21,6 +22,7 @@ const routes = [
   { path: '/pending', component: PendingQueue },
   { path: '/jobs', component: Jobs },
   { path: '/trash', component: Trash },
+  { path: '/account', component: Account },
 ]
 
 const router = createRouter({
@@ -57,6 +59,26 @@ async function init() {
 
   // Initialize auth with loaded config
   await initAuth()
+
+  // Decide about auth BEFORE mounting.
+  //
+  // The router's beforeEach guard blocks the ROUTE, but App.vue's shell (nav,
+  // layout, chrome) mounts regardless — so an unauthenticated visitor saw the
+  // whole app flash up and then vanish as the browser navigated away to the
+  // hosted login. Redirect first and never mount, so there is nothing to flash.
+  //
+  // The OAuth callback must be consumed first: on the way back from the hosted
+  // UI the token arrives in the URL hash, and handleCallback() is what turns it
+  // into a session. Skipping that would bounce the user straight back to login
+  // in an infinite loop.
+  if (window.location.hash.includes('id_token=')) {
+    handleCallback()
+  }
+
+  if (getAuthProvider() !== 'none' && !isAuthenticated()) {
+    login()
+    return // do NOT mount; the browser is on its way to the login page
+  }
 
   const app = createApp(App)
 

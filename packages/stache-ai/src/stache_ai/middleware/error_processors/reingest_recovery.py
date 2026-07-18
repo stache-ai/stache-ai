@@ -71,6 +71,7 @@ class ReingestRecoveryProcessor(ErrorProcessor):
                 namespace=context.namespace,
                 deleted_at_ms=deleted_at_ms,
                 restored_by="system_auto_recovery",
+                context=context,
             )
 
             # Restore vector status from "deleting" back to "active"
@@ -85,6 +86,7 @@ class ReingestRecoveryProcessor(ErrorProcessor):
                         ids=chunk_ids,
                         namespace=context.namespace,
                         status="active",
+                        context=context,
                     )
                     logger.info(
                         "Vector status restored to active",

@@ -1,42 +1,49 @@
-"""Request principal extraction + namespace write-authz hook.
+"""Request principal extraction and authorization for API routes.
 
-Phase 1 records *who* submitted a job (Cognito JWT ``sub`` from the API Gateway
-authorizer claims, surfaced by Mangum on the ASGI scope as ``aws.event``).
-Namespace write enforcement is deferred to finding S1 - ``assert_can_write`` is
-a clearly-marked no-op stub so S1 can fill it in without re-plumbing routes.
+Reads the authorizer claims injected by API Gateway (surfaced by Mangum on
+the ASGI scope as ``aws.event``) and returns a structured ``Principal``.
+Claims are passed through opaquely — the core attaches no meaning to any
+individual claim. ``assert_can_write`` re-exports the S1 authorization hook
+and ``authorize`` is the per-route enforcement call, so routes have a single
+import site.
 """
 
 import logging
 
+from stache_ai.identity import (  # noqa: F401
+    ANONYMOUS,
+    ApiGatewayClaimsExtractor,
+    ForbiddenError,
+    Principal,
+    assert_can_write,
+    get_authorizer,
+)
+
 logger = logging.getLogger(__name__)
 
-ANONYMOUS = "anonymous"
+_fallback_extractor = ApiGatewayClaimsExtractor()
 
 
-def principal(request) -> str:
-    """Return the authenticated user id (Cognito JWT ``sub``), or 'anonymous'.
+def principal(request) -> Principal:
+    """Return the authenticated caller as a Principal.
 
-    Never trust a client-supplied identity - read only the authorizer claims
-    injected by API Gateway. Supports both HTTP API v2 (``authorizer.jwt.claims``)
-    and REST API (``authorizer.claims``) event shapes.
+    The identity middleware extracts once per request and stashes the result
+    on ``request.state.principal``; fall back to direct extraction for callers
+    outside the ASGI app (tests, direct invocation).
     """
-    try:
-        event = request.scope.get("aws.event") or {}
-    except AttributeError:
-        event = {}
-    request_context = event.get("requestContext", {}) or {}
-    authorizer = request_context.get("authorizer", {}) or {}
-    # HTTP API v2 nests JWT claims under "jwt"; REST API puts them at "claims".
-    jwt = authorizer.get("jwt", {}) or {}
-    claims = jwt.get("claims") or authorizer.get("claims") or {}
-    sub = claims.get("sub")
-    return sub or ANONYMOUS
+    existing = getattr(getattr(request, "state", None), "principal", None)
+    if isinstance(existing, Principal):
+        return existing
+    return _fallback_extractor.extract(request)
 
 
-def assert_can_write(principal: str, namespace: str) -> None:
-    """Namespace write authorization hook.
+def authorize(request, operation: str, resource: dict | None = None) -> None:
+    """Enforce the pluggable authorization seam for a route (finding S1).
 
-    NO-OP in Phase 1. Enforcement is finding S1's responsibility; routes call
-    this so the check lands in one place when S1 implements it.
+    Call BEFORE performing any work, outside broad try/except blocks so a
+    denial surfaces as 403 rather than being swallowed into a 500.
+    ``operation`` is a neutral verb string; ``resource`` is an opaque dict
+    (include "namespace" when known, "owner" when cheaply available).
+    Raises ForbiddenError on denial — the app maps it to a 403 response.
     """
-    return None
+    get_authorizer().authorize(principal(request), operation, resource)

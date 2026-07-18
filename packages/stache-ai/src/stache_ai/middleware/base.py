@@ -90,7 +90,7 @@ class Enricher(MiddlewareBase):
         Args:
             content: Raw text content to process
             metadata: Document metadata
-            context: Request context with user/tenant info
+            context: Request context with caller info
 
         Returns:
             EnrichmentResult with action:
@@ -129,7 +129,7 @@ class QueryProcessor(MiddlewareBase):
         Args:
             query: The search query string
             filters: Optional metadata filters (can be None)
-            context: Query context with user/tenant info
+            context: Query context with caller info
 
         Returns:
             QueryProcessorResult with:
@@ -325,7 +325,7 @@ class ChunkObserver(MiddlewareBase):
     """Base class for post-storage observation.
 
     IMPORTANT: Advisory only in Phase 1. Rejection logs error but
-    does NOT rollback stored chunks. For quota enforcement, use
+    does NOT rollback stored chunks. For pre-flight limit enforcement, use
     pre-flight check in enrichment phase instead.
     """
 

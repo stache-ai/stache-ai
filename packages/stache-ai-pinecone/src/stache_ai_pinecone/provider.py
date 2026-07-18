@@ -50,7 +50,8 @@ class PineconeVectorDBProvider(VectorDBProvider):
         texts: List[str],
         metadatas: Optional[List[Dict[str, Any]]] = None,
         ids: Optional[List[str]] = None,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[str]:
         """Insert vectors into Pinecone"""
         if not ids:
@@ -81,7 +82,8 @@ class PineconeVectorDBProvider(VectorDBProvider):
         query_vector: List[float],
         top_k: int = 5,
         filter: Optional[Dict[str, Any]] = None,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """Search for similar vectors"""
         # Use provided namespace or default
@@ -105,14 +107,14 @@ class PineconeVectorDBProvider(VectorDBProvider):
             for match in results.matches
         ]
 
-    def delete(self, ids: List[str], namespace: Optional[str] = None) -> bool:
+    def delete(self, ids: List[str], namespace: Optional[str] = None, context=None) -> bool:
         """Delete vectors by IDs"""
         # Use provided namespace or default
         ns = namespace or self.default_namespace
         self.index.delete(ids=ids, namespace=ns)
         return True
 
-    def delete_by_metadata(self, field: str, value: str, namespace: Optional[str] = None) -> Dict[str, Any]:
+    def delete_by_metadata(self, field: str, value: str, namespace: Optional[str] = None, context=None) -> Dict[str, Any]:
         """
         Delete vectors by metadata field value
 
@@ -143,7 +145,8 @@ class PineconeVectorDBProvider(VectorDBProvider):
     def get_by_ids(
         self,
         ids: List[str],
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """
         Fetch vectors by IDs
@@ -173,7 +176,8 @@ class PineconeVectorDBProvider(VectorDBProvider):
     def get_vectors_with_embeddings(
         self,
         ids: List[str],
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[Dict[str, Any]]:
         """
         Fetch vectors by IDs with their embeddings
@@ -209,7 +213,7 @@ class PineconeVectorDBProvider(VectorDBProvider):
         """Maximum batch size for operations"""
         return 1000
 
-    def get_collection_info(self) -> Dict[str, Any]:
+    def get_collection_info(self, context=None) -> Dict[str, Any]:
         """Get index information"""
         stats = self.index.describe_index_stats()
         return {

@@ -27,10 +27,33 @@ Phase 2 Changes:
 - Legacy operations (orphaned chunks, migrations) properly isolated to Qdrant
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from stache_ai.rag.pipeline import RAGPipeline
+
+# Context-aware pipeline operations that routes now call instead of touching
+# providers directly. Bound onto the mock so tests exercise the REAL pipeline
+# method (which delegates to the mocked providers below).
+PIPELINE_ROUTE_METHODS = (
+    "list_documents",
+    "get_document_record",
+    "get_document_chunks",
+    "discover_documents",
+    "soft_delete_document",
+    "permanently_delete_document",
+    "_hard_delete_document",
+    "delete_documents_by_filename",
+    "regenerate_document_summary",
+)
+
+
+def bind_real_pipeline_methods(pipeline, names=PIPELINE_ROUTE_METHODS):
+    """Bind real RAGPipeline methods onto a MagicMock pipeline."""
+    for name in names:
+        setattr(pipeline, name, getattr(RAGPipeline, name).__get__(pipeline))
 
 
 @pytest.fixture
@@ -201,6 +224,10 @@ def mock_pipeline():
     embedding_provider.embed.return_value = [0.1] * 1536
     pipeline.embedding_provider = embedding_provider
 
+    # Routes call pipeline-level operations; bind the real implementations so
+    # the mocked providers above still receive the calls tests assert on.
+    bind_real_pipeline_methods(pipeline)
+
     return pipeline
 
 
@@ -357,23 +384,17 @@ def test_list_orphaned_chunks_returns_501_on_s3vectors(test_client_with_mock, mo
 
 def test_list_orphaned_chunks_works_on_qdrant(test_client_with_mock, mock_pipeline):
     """list_documents with orphaned=true should work on Qdrant"""
-    pytest.importorskip("qdrant_client")  # legacy Qdrant-only endpoint
-    # Simulate Qdrant provider with client attribute and capabilities
-    qdrant_client = MagicMock()
-
-    # Mock the scroll response for orphaned chunks
-    mock_point = MagicMock()
-    mock_point.id = "point-1"
-    mock_point.payload = {
-        "filename": "orphaned.txt",
-        "namespace": "default",
-        "_type": None,
-        "doc_id": None  # No doc_id means orphaned
-    }
-
-    qdrant_client.scroll.return_value = ([mock_point], None)
-    mock_pipeline.vectordb_provider.client = qdrant_client
-    mock_pipeline.vectordb_provider.collection_name = "documents"
+    # Simulate Qdrant provider via its metadata_scan capability and the
+    # provider-level scan method (no raw client access from routes)
+    mock_pipeline.vectordb_provider.scan_by_metadata.return_value = [
+        {
+            "id": "point-1",
+            "filename": "orphaned.txt",
+            "namespace": "default",
+            "_type": None,
+            "doc_id": None  # No doc_id means orphaned
+        }
+    ]
     mock_pipeline.vectordb_provider.capabilities = {"metadata_scan", "server_side_filtering", "export"}
 
     response = test_client_with_mock.get("/api/documents?orphaned=true")
@@ -412,19 +433,12 @@ def test_migrate_summaries_returns_501_on_s3vectors(test_client_with_mock, mock_
 
 def test_migrate_summaries_works_on_qdrant(test_client_with_mock, mock_pipeline):
     """migrate_summaries should work on Qdrant"""
-    pytest.importorskip("qdrant_client")  # legacy Qdrant-only endpoint
-    # Simulate Qdrant provider with client attribute and capabilities
-    qdrant_client = MagicMock()
-
-    # Mock the scroll responses
-    # First call: get existing summaries
-    qdrant_client.scroll.side_effect = [
-        ([], None),  # No existing summaries
-        ([], None),  # No chunks to migrate
+    # Simulate Qdrant provider via its metadata_scan capability and the
+    # provider-level scan method (no raw client access from routes)
+    mock_pipeline.vectordb_provider.scan_by_metadata.side_effect = [
+        [],  # No existing summaries
+        [],  # No chunks to migrate
     ]
-
-    mock_pipeline.vectordb_provider.client = qdrant_client
-    mock_pipeline.vectordb_provider.collection_name = "documents"
     mock_pipeline.vectordb_provider.capabilities = {"metadata_scan", "server_side_filtering", "export"}
     mock_pipeline.vectordb_provider.insert = MagicMock()
 
@@ -474,9 +488,9 @@ def test_delete_document_by_filename_uses_document_index_with_namespace(test_cli
     assert data["chunks_deleted"] == 3
     assert data["filename"] == "test.txt"
 
-    # Verify the direct lookup was used
+    # Verify the direct lookup was used (with the request context threaded)
     mock_pipeline.document_index_provider.get_document_by_source_path.assert_called_with(
-        namespace="default", filename="test.txt"
+        namespace="default", filename="test.txt", context=ANY
     )
 
 

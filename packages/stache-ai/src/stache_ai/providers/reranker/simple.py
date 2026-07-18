@@ -86,7 +86,8 @@ class SimpleReranker(RerankerProvider):
         self,
         query: str,
         results: list[dict[str, Any]],
-        top_k: int | None = None
+        top_k: int | None = None,
+        context=None
     ) -> list[dict[str, Any]]:
         """Rerank results using keyword matching and deduplication"""
         if not results:

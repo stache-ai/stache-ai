@@ -29,7 +29,7 @@ class _DictJobStore:
     def __init__(self):
         self.jobs = {}
 
-    def create(self, job):
+    def create(self, job, *, principal=None):
         self.jobs[job.job_id] = job
 
     def update(self, job_id, **fields):
@@ -48,7 +48,7 @@ class _DictJobStore:
         job.status = to_status or JobStatus.PROCESSING
         return True
 
-    def list(self, *, requested_by=None, status=None, limit=50, cursor=None):
+    def list(self, *, requested_by=None, status=None, limit=50, cursor=None, principal=None):
         items = list(self.jobs.values())
         return items, None
 
@@ -79,7 +79,12 @@ class _StubIntake:
 
     def begin(self, **kwargs):
         self.calls.append(kwargs)
-        return self.ticket
+        # Mirror the real intake: report the key it presigned so the factory
+        # records the identical blob_key (the worker inverts it via parse_job_id).
+        import os
+        from dataclasses import replace
+        key = f"{kwargs['job_id']}/{os.path.basename(kwargs['filename'])}"
+        return replace(self.ticket, blob_key=key)
 
 
 def _service(*, jobstore=None, queue=None, intake=None):
@@ -248,3 +253,29 @@ def test_route_ingest_upload_requires_filename(inline_service):
         resp = client.post("/api/ingest", json={"upload": True, "content_type": "application/pdf"})
     assert resp.status_code == 400
     assert "filename" in resp.json()["detail"]
+
+
+def test_default_make_key_parse_job_id_round_trip():
+    """make_key and parse_job_id are inverses -- the invariant the async worker
+    relies on to recover the job from an object-created event. A store that
+    overrides one MUST override both, or a prefixed key strands the job."""
+    from stache_ai.ingestion.base import BlobStore
+
+    class _Default(BlobStore):
+        def put(self, key, data, metadata): return key
+        def get(self, key): return b"", {}
+
+    s = _Default()
+    for job_id, filename in [("abc-123", "file.pdf"), ("j0", "notes.txt")]:
+        assert s.parse_job_id(s.make_key(job_id, filename)) == job_id
+
+    class _Prefixed(BlobStore):
+        def put(self, key, data, metadata): return key
+        def get(self, key): return b"", {}
+        def make_key(self, job_id, filename, *, principal=None):
+            return f"acme/{job_id}/{filename}"
+        def parse_job_id(self, key):
+            return key.split("/")[1]
+
+    p = _Prefixed()
+    assert p.parse_job_id(p.make_key("xyz", "f.pdf")) == "xyz"

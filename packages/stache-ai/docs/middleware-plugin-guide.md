@@ -37,7 +37,7 @@ class LanguageDetectionEnricher(Enricher):
         Args:
             content: The raw text to process
             metadata: Document metadata (can be modified)
-            context: Request context with user/tenant info
+            context: Request context with user info
 
         Returns:
             EnrichmentResult with action and optionally modified content/metadata
@@ -153,8 +153,8 @@ ChunkObservers run **after chunking and storage** for monitoring/auditing (advis
 from stache_ai.middleware.base import ChunkObserver, StorageResult
 from stache_ai.middleware.results import ObserverResult
 
-class QuotaEnforcer(ChunkObserver):
-    """Monitor storage quota usage."""
+class IngestionAuditor(ChunkObserver):
+    """Record what was stored, for monitoring/auditing."""
 
     on_error = "allow"  # Don't fail ingestion if observer fails
 
@@ -169,27 +169,21 @@ class QuotaEnforcer(ChunkObserver):
                 - embedding_model: Model used
             context: Request context
         """
-        # Check quota
-        quota = get_user_quota(context.user_id)
-        used = count_user_vectors(context.user_id)
-        new_total = used + storage_result.chunk_count
-
-        if new_total > quota:
-            # Advisory only - chunks already stored
-            return ObserverResult(
-                action="reject",
-                reason=f"Quota exceeded: {new_total} > {quota}"
-            )
-
+        # Record the storage event (advisory - chunks are already stored)
+        record_usage(
+            user_id=context.user_id,
+            namespace=context.namespace,
+            chunks=storage_result.chunk_count,
+        )
         return ObserverResult(action="allow")
 ```
 
 **Entry point**: `stache.chunk_observer`
 
 **Important**: Rejections are **advisory only**. Chunks are already stored, so:
-- Use for monitoring, auditing, quota enforcement
+- Use for monitoring and auditing after the fact
 - For strict pre-flight checks, use `Enricher` instead
-- For quota limits, check in enrichment phase
+- For limits that must block, enforce in the enrichment phase (before storage)
 
 **Actions**:
 - `allow`: Continue normally
@@ -364,7 +358,7 @@ class ACLEnforcer(QueryProcessor):
         Args:
             query: The search query string
             filters: Optional metadata filters (can be None)
-            context: QueryContext with user/tenant info
+            context: QueryContext with user info
         """
         # Get user's allowed namespaces
         allowed_ns = get_allowed_namespaces(context.user_id)
@@ -398,7 +392,6 @@ class QueryContext:
     @property
     def user_id(self) -> str | None: ...
     @property
-    def tenant_id(self) -> str | None: ...
     @property
     def namespace(self) -> str: ...
 ```
@@ -430,7 +423,7 @@ class ACLResultFilter(ResultProcessor):
 
         Args:
             results: List of SearchResult objects
-            context: QueryContext with user/tenant info
+            context: QueryContext with user info
 
         Returns:
             ResultProcessorResult with filtered results
@@ -567,7 +560,6 @@ class RequestContext:
 
     # Identity (populated by auth middleware)
     user_id: str | None = None
-    tenant_id: str | None = None
     roles: list[str] = []
 
     # Request metadata
@@ -646,7 +638,7 @@ class QuotaCheck(ChunkObserver):
         # If you return reject, it's advisory only (logged, not rolled back)
         # If you raise, it's caught and logged
 
-        return ObserverResult(action="reject", reason="quota exceeded")
+        return ObserverResult(action="reject", reason="rejected by policy")
         # -> Logs warning, ingestion continues
 ```
 
@@ -898,7 +890,7 @@ Here's what happens during a request with multiple middleware:
    └─ ingest_text(content, metadata, namespace)
 
 2. CONTEXT CREATION
-   └─ RequestContext created with user_id, tenant_id, roles
+   └─ RequestContext created with user_id, roles
 
 3. ENRICHMENT PHASE
    ├─ on_chain_start() called for all enrichers
@@ -1050,7 +1042,6 @@ async def process(self, chunks, storage_result, context):
             "request_id": context.request_id,  # Unique per request
             "trace_id": context.trace_id,      # Optional external trace ID
             "user_id": context.user_id,        # User identity
-            "tenant_id": context.tenant_id,    # Multi-tenant tracking
             "namespace": context.namespace,    # Document namespace
             "source": context.source,          # "api", "mcp", or "cli"
             "timestamp": context.timestamp.isoformat()
@@ -1274,7 +1265,7 @@ for plugin in plugins:
 
 ### Context Classes
 
-- `RequestContext`: user_id, tenant_id, roles, namespace, custom data
+- `RequestContext`: user_id, roles, namespace, custom data
 - `QueryContext`: RequestContext + query, top_k, filters
 
 ### Dataclasses

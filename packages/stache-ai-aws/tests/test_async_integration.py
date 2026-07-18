@@ -150,6 +150,9 @@ def test_producer_s3_drop_path(monkeypatch):
     """An object dropped under the originals prefix (producer path) is ingested
     via an S3-event SQS record."""
     monkeypatch.setenv("INGEST_BLOB_S3_PREFIX", "originals")
+    import stache_ai.config as cfg
+    from stache_ai.config import Settings
+    monkeypatch.setattr(cfg, "settings", Settings(ingest_producer_drops_enabled=True))
     queue_url = _provision()
     pipeline = _pipeline()
     service = IngestionServiceFactory.build(_config(queue_url), pipeline)

@@ -17,6 +17,7 @@ from stache_ai.api import auth
 from stache_ai.config import settings
 from stache_ai.ingestion import TERMINAL, IngestTextTooLargeError, JobStatus
 from stache_ai.ingestion.factory import get_ingestion_service
+from stache_ai.sanitize import strip_reserved_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,11 @@ def _status_code(status: JobStatus) -> int:
 async def ingest(request: IngestRequest, http_request: Request):
     principal = auth.principal(http_request)
     namespace = request.namespace or settings.default_namespace
-    auth.assert_can_write(principal, namespace)   # S1 hook (no-op in Phase 1)
+    # S1 enforcement: covers both direct submission and the upload-begin flow.
+    # "ingest" is the canonical content-write op: the same op the worker
+    # re-checks (identity.assert_can_write) so this route and its async worker
+    # never enforce different verbs for one request (findings AUTHZ F4/F5).
+    auth.authorize(http_request, "ingest", {"namespace": namespace})
 
     service = get_ingestion_service()
 
@@ -65,7 +70,10 @@ async def ingest(request: IngestRequest, http_request: Request):
                 requested_by=principal,
                 filename=request.filename,
                 source="api",
-                metadata=request.metadata,
+                # /ingest is the trusted CLI/API path: honor caller-supplied
+                # source-identity keys (source_path) so SOURCE-identifier smart
+                # updates work. Web ingress points strip them (SANITIZER F2).
+                metadata=strip_reserved_metadata(request.metadata, allow_source_identity=True),
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -97,7 +105,8 @@ async def ingest(request: IngestRequest, http_request: Request):
             requested_by=principal,
             filename=request.filename,
             source="api",
-            metadata=request.metadata,
+            # Trusted CLI/API path - honor source-identity keys (see above).
+            metadata=strip_reserved_metadata(request.metadata, allow_source_identity=True),
             text=request.text,
             data=data,
             chunking_strategy=request.chunking_strategy,
@@ -113,10 +122,16 @@ async def ingest(request: IngestRequest, http_request: Request):
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str, http_request: Request):
     principal = auth.principal(http_request)
+    # Scope the read to the caller so a plugged authorizer CAN enforce per-job
+    # visibility (the OSS allow-all ignores the resource). NOTE: the resource
+    # alone is not sufficient for true per-object isolation - that also requires
+    # a partitioning jobstore/queue (see JobStore.visible_to / principal_for).
+    auth.authorize(http_request, "read_job", {"owner": principal.user_id})
     service = get_ingestion_service()
-    job = service.get_job(job_id)
-    # Scope to the requester; 404 (not 403) on mismatch so we don't leak existence.
-    if job is None or job.requested_by != principal:
+    # Visibility is the jobstore's call (default: the requester themselves);
+    # an invisible job 404s identically to a missing one - no existence leak.
+    job = service.get_job(job_id, principal=principal)
+    if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job.to_dict()
 
@@ -129,6 +144,9 @@ async def list_jobs(
     cursor: str | None = None,
 ):
     principal = auth.principal(http_request)
+    # Scope the read to the caller (see get_job); a partitioning jobstore is
+    # still required for true per-object isolation.
+    auth.authorize(http_request, "read_job", {"owner": principal.user_id})
     status_filter = None
     if status is not None:
         try:
@@ -139,7 +157,8 @@ async def list_jobs(
     service = get_ingestion_service()
     try:
         jobs, next_cursor = service.list_jobs(
-            requested_by=principal, status=status_filter, limit=limit, cursor=cursor
+            requested_by=principal.user_id, status=status_filter, limit=limit,
+            cursor=cursor, principal=principal,
         )
     except ValueError as e:
         # A malformed pagination cursor is a client error, not a 500.

@@ -106,21 +106,21 @@ class FallbackEmbeddingProvider(EmbeddingProvider):
                 self.settings.embedding_provider = original
         return self._secondary
 
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, *, context=None) -> list[float]:
         """Generate embedding, with fallback"""
         try:
-            return self.primary.embed(text)
+            return self.primary.embed(text, context=context)
         except Exception as e:
             logger.warning(f"Primary embedding provider failed: {e}, trying secondary")
-            return self.secondary.embed(text)
+            return self.secondary.embed(text, context=context)
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], *, context=None) -> list[list[float]]:
         """Generate embeddings for batch, with fallback"""
         try:
-            return self.primary.embed_batch(texts)
+            return self.primary.embed_batch(texts, context=context)
         except Exception as e:
             logger.warning(f"Primary embedding provider failed: {e}, trying secondary")
-            return self.secondary.embed_batch(texts)
+            return self.secondary.embed_batch(texts, context=context)
 
     def get_dimensions(self) -> int:
         """Get embedding dimensions (from primary)"""

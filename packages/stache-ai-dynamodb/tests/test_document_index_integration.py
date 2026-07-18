@@ -6,8 +6,9 @@ documents are written to both the vector database and the document index,
 as well as the various endpoint behaviors that depend on the document index.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -136,6 +137,15 @@ def test_client_with_index(mock_pipeline_with_index):
                    "notify_document_deleted"):
         setattr(mock_pipeline_with_index, method,
                 AsyncMock(return_value=getattr(mock_pipeline_with_index, method).return_value))
+
+    # Routes call context-aware pipeline operations; bind the real
+    # implementations so the mocked providers still receive the calls.
+    from stache_ai.rag.pipeline import RAGPipeline
+    for method in ("list_documents", "get_document_record", "get_document_chunks",
+                   "soft_delete_document", "permanently_delete_document",
+                   "_hard_delete_document", "delete_documents_by_filename"):
+        setattr(mock_pipeline_with_index, method,
+                getattr(RAGPipeline, method).__get__(mock_pipeline_with_index))
 
     with patch('stache_ai.api.routes.upload.get_pipeline', return_value=mock_pipeline_with_index):
         with patch('stache_ai.rag.pipeline.get_pipeline', return_value=mock_pipeline_with_index):
@@ -292,8 +302,7 @@ def test_delete_document_removes_from_both(test_client_with_index, mock_pipeline
     doc_index = pipeline.document_index_provider
     vectordb = pipeline.vectordb_provider
 
-    # Permanent delete (default is a soft delete to trash, which does not
-    # remove the index entry or vectors).
+    # Delete document by ID (permanent delete to test atomic deletion)
     response = client.delete("/api/documents/id/doc-001?namespace=test&permanent=true")
 
     # Verify response

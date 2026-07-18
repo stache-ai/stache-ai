@@ -41,6 +41,18 @@ from stache_ai.utils.hashing import compute_hash_async
 
 logger = logging.getLogger(__name__)
 
+
+class _IngestionSkipped(Exception):
+    """Internal marker handed to ErrorProcessors when an ingestion returns a
+    SKIP (deduplication / guard block) instead of raising.
+
+    The exception path runs the ErrorProcessor cleanup seam so guards can
+    release anything they reserved; a normal SKIP return does not. Passing this
+    marker to the same seam on the SKIP path gives guards the symmetric release
+    hook. It is never propagated to callers.
+    """
+
+
 # Auto-select chunking strategy based on file extension
 CHUNKING_BY_EXTENSION = {
     'docx': 'hierarchical',
@@ -197,11 +209,15 @@ class RAGPipeline:
         return self._namespace_provider_instance
 
     def _get_namespace_provider(self):
-        """Get namespace provider, returns None if not configured."""
-        try:
-            return self.namespace_provider
-        except Exception:
+        """Get namespace provider, or None only when none is configured.
+
+        FAIL-CLOSED: a provider that is configured but cannot be built must
+        raise, not silently disappear — namespace scoping may be a security
+        control in some deployments.
+        """
+        if not getattr(self.config, "namespace_provider", None):
             return None
+        return self.namespace_provider
 
     @property
     def concept_index(self):
@@ -376,6 +392,69 @@ class RAGPipeline:
                     logger.info(f"Loaded {len(self._error_processors)} error processors")
         return self._error_processors
 
+    async def _run_error_processors(
+        self,
+        exception: Exception,
+        context: "RequestContext",
+        partial_state: dict[str, Any],
+    ) -> None:
+        """Run the ErrorProcessor cleanup seam (best-effort, never raises).
+
+        Shared by the exception path and the SKIP-return paths so guards can
+        release reserved state symmetrically. A failing processor is logged but
+        does not block the others (mirrors the exception-path contract).
+        """
+        for error_processor in self.error_processors:
+            try:
+                error_result = await error_processor.on_error(exception, context, partial_state)
+                if error_result.handled:
+                    logger.info(
+                        f"Error handled by processor: {error_processor.__class__.__name__}",
+                        extra=error_result.metadata or {}
+                    )
+            except Exception as handler_error:
+                # Log but don't block other processors
+                logger.error(
+                    f"Error processor {error_processor.__class__.__name__} failed: {handler_error}",
+                    exc_info=True
+                )
+
+    async def _apply_ingest_guards(
+        self,
+        content: str,
+        metadata: dict[str, Any],
+        context: "RequestContext",
+    ) -> None:
+        """Run the ingest-guard seam for operations that store a vector.
+
+        Used by paths (e.g. insights) that persist a vector like ingest but do
+        not carry ingest's deduplication/SKIP machinery. Mirrors ingest_text's
+        guard invocation: allow-metadata is merged in place, a guard exception
+        honors ``on_error`` (re-raised when ``on_error='reject'`` so a
+        LimitExceededError/ForbiddenError raised by a guard reaches the route
+        unchanged), and a ``reject`` GuardResult blocks the operation.
+        """
+        for guard in self.ingest_guards:
+            try:
+                guard_result = await guard.validate(content, metadata, context)
+            except Exception as e:
+                if guard.on_error == "reject":
+                    logger.error(f"Guard {guard.__class__.__name__} failed: {e}")
+                    raise
+                logger.warning(f"Guard {guard.__class__.__name__} failed (continuing): {e}")
+                continue
+
+            if guard_result.action == "reject":
+                logger.info(
+                    f"Operation blocked by guard: {guard.__class__.__name__}",
+                    extra={"reason": guard_result.reason}
+                )
+                from stache_ai.middleware.chain import MiddlewareRejection
+                raise MiddlewareRejection(guard.__class__.__name__, guard_result.reason)
+
+            if guard_result.metadata:
+                metadata.update(guard_result.metadata)
+
     async def ingest_text(
         self,
         text: str,
@@ -448,6 +527,22 @@ class RAGPipeline:
                         extra={"reason": guard_result.reason}
                     )
 
+                    # SKIP is a normal return, not an exception, so it would
+                    # bypass the ErrorProcessor cleanup seam. Run it here so any
+                    # guard that reserved state before this reject gets the same
+                    # release hook it gets on the exception path.
+                    await self._run_error_processors(
+                        _IngestionSkipped(guard_result.reason or "blocked by guard"),
+                        context,
+                        {
+                            "metadata": metadata,
+                            "doc_id": doc_id,
+                            "namespace": ns,
+                            "vectors_inserted": False,
+                            "chunk_ids": [],
+                        },
+                    )
+
                     return IngestionResult(
                         action=IngestionAction.SKIP,
                         doc_id=guard_result.metadata.get("existing_doc_id", doc_id) if guard_result.metadata else doc_id,
@@ -483,6 +578,7 @@ class RAGPipeline:
                     source_path=metadata.get("source_path"),
                     file_size=metadata.get("file_size"),
                     file_modified_at=metadata.get("file_modified_at"),
+                    context=context,
                 )
 
                 if not reserved:
@@ -492,9 +588,27 @@ class RAGPipeline:
                         filename=metadata.get("filename", "text"),
                         namespace=ns,
                         source_path=metadata.get("source_path"),
+                        context=context,
                     )
 
                     if existing:
+                        # Dedup SKIP is a normal return, not an exception, so it
+                        # would bypass the ErrorProcessor cleanup seam. Run it
+                        # here so any guard that reserved state (before Step 2
+                        # detected the concurrent duplicate) gets the same
+                        # release hook it gets on the exception path.
+                        await self._run_error_processors(
+                            _IngestionSkipped("duplicate detected during reservation"),
+                            context,
+                            {
+                                "metadata": metadata,
+                                "doc_id": doc_id,
+                                "namespace": ns,
+                                "vectors_inserted": False,
+                                "chunk_ids": [],
+                            },
+                        )
+
                         return IngestionResult(
                             action=IngestionAction.SKIP,
                             doc_id=existing["doc_id"],
@@ -623,7 +737,7 @@ class RAGPipeline:
                 )
 
                 # Use wrapper for embedding
-                results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding)
+                results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding, context=context)
 
                 # Extract embeddings and texts
                 embeddings = [r.embedding for r in results]
@@ -651,14 +765,15 @@ class RAGPipeline:
                 chunks_for_embedding = texts_to_store
             else:
                 # Auto-split disabled, use standard embed_batch
-                embeddings = self.embedding_provider.embed_batch(chunks_for_embedding)
+                embeddings = self.embedding_provider.embed_batch(chunks_for_embedding, context=context)
 
             # Insert into vector DB (store enriched chunks if metadata was prepended)
             ids = self.documents_provider.insert(
                 vectors=embeddings,
                 texts=chunks_for_embedding,
                 metadatas=metadatas,
-                namespace=ns
+                namespace=ns,
+                context=context
             )
             vectors_inserted = True
             chunk_ids = ids
@@ -734,6 +849,7 @@ class RAGPipeline:
                         doc_id=doc_id,
                         chunk_count=len(chunk_ids),
                         source_path=metadata.get("source_path"),
+                        context=context,
                     )
 
             # Create document index entry for efficient metadata queries (dual-write pattern)
@@ -765,6 +881,7 @@ class RAGPipeline:
                         chunk_count=len(chunk_ids),
                         source_path=metadata.get("source_path"),
                         content_hash=content_hash,
+                        context=context,
                     )
                     logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
                 except Exception as e:
@@ -833,20 +950,7 @@ class RAGPipeline:
                 "chunk_ids": chunk_ids,
             }
 
-            for error_processor in self.error_processors:
-                try:
-                    error_result = await error_processor.on_error(e, context, partial_state)
-                    if error_result.handled:
-                        logger.info(
-                            f"Error handled by processor: {error_processor.__class__.__name__}",
-                            extra=error_result.metadata or {}
-                        )
-                except Exception as handler_error:
-                    # Log but don't block other processors
-                    logger.error(
-                        f"Error processor {error_processor.__class__.__name__} failed: {handler_error}",
-                        exc_info=True
-                    )
+            await self._run_error_processors(e, context, partial_state)
 
             # Release identifier reservation on failure
             if self.config.dedup_enabled and self.document_index_provider and content_hash:
@@ -857,6 +961,7 @@ class RAGPipeline:
                             filename=metadata.get("filename", "text"),
                             namespace=ns,
                             source_path=metadata.get("source_path"),
+                            context=context,
                         )
                     except Exception as cleanup_error:
                         logger.error(f"Failed to release identifier: {cleanup_error}")
@@ -866,7 +971,7 @@ class RAGPipeline:
                 try:
                     await asyncio.get_event_loop().run_in_executor(
                         None,
-                        lambda: self.documents_provider.delete(chunk_ids, ns)
+                        lambda: self.documents_provider.delete(chunk_ids, ns, context=context)
                     )
                     logger.info(f"Cleaned up {len(chunk_ids)} orphaned vectors after error")
                 except Exception as cleanup_error:
@@ -1049,7 +1154,7 @@ class RAGPipeline:
             )
 
             # Use wrapper for embedding
-            results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding)
+            results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding, context=context)
 
             # Extract embeddings and texts
             embeddings = [r.embedding for r in results]
@@ -1081,7 +1186,7 @@ class RAGPipeline:
             chunks_for_embedding = texts_to_store
         else:
             # Auto-split disabled, use standard embed_batch
-            embeddings = self.embedding_provider.embed_batch(chunks_for_embedding)
+            embeddings = self.embedding_provider.embed_batch(chunks_for_embedding, context=context)
             metadatas = base_metadatas
             split_count = 0
 
@@ -1093,7 +1198,8 @@ class RAGPipeline:
             vectors=embeddings,
             texts=chunks_for_embedding,
             metadatas=metadatas,
-            namespace=ns
+            namespace=ns,
+            context=context
         )
 
         # Create storage result and chunk tuples for middleware
@@ -1165,6 +1271,7 @@ class RAGPipeline:
                     file_size=file_size,
                     source_path=metadata.get("source_path") if metadata else None,
                     content_hash=metadata.get("content_hash") if metadata else None,
+                    context=context,
                 )
                 logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
             except Exception as e:
@@ -1201,7 +1308,8 @@ class RAGPipeline:
         self,
         doc_id: str,
         namespace: str,
-        updates: dict[str, Any]
+        updates: dict[str, Any],
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """Update document metadata in both DynamoDB and S3 Vectors
 
@@ -1230,7 +1338,7 @@ class RAGPipeline:
             raise ValueError("Document index required for metadata updates")
 
         # 1. Get chunk IDs from document index
-        chunk_ids = self.document_index_provider.get_chunk_ids(doc_id, namespace)
+        chunk_ids = self.document_index_provider.get_chunk_ids(doc_id, namespace, context=context)
         if not chunk_ids:
             raise ValueError(f"Document {doc_id} not found in namespace {namespace}")
 
@@ -1247,7 +1355,8 @@ class RAGPipeline:
             # This handles retry scenarios where vectors may already be in the new namespace
             vectors_data = self.documents_provider.get_vectors_with_embeddings(
                 chunk_ids,
-                namespace=None  # Don't filter - IDs are unique
+                namespace=None,  # Don't filter - IDs are unique
+                context=context
             )
 
             # Prepare metadata updates, filtering out summary chunks
@@ -1320,7 +1429,8 @@ class RAGPipeline:
                         vectors=batch_vectors,
                         texts=texts,
                         metadatas=cleaned_metadatas,
-                        namespace=new_namespace  # Namespace in metadata updated
+                        namespace=new_namespace,  # Namespace in metadata updated
+                        context=context
                     )
 
                 chunks_updated = len(updated_ids)
@@ -1338,7 +1448,7 @@ class RAGPipeline:
         doc_updated = False
         try:
             doc_updated = self.document_index_provider.update_document_metadata(
-                doc_id, namespace, updates
+                doc_id, namespace, updates, context=context
             )
         except Exception as e:
             logger.error(f"Failed to update document index for {doc_id}: {e}")
@@ -1363,6 +1473,265 @@ class RAGPipeline:
     def get_available_chunking_strategies(self) -> list[str]:
         """Get list of available chunking strategies"""
         return ChunkingStrategyFactory.get_available_strategies()
+
+    # ==================== Context-aware document operations ====================
+    # Thin delegations used by API routes (and other frontends) so every data
+    # access flows through the pipeline with a RequestContext. Providers may
+    # scope behavior on the context; core providers ignore it.
+
+    def list_documents(
+        self,
+        namespace: str | None = None,
+        limit: int = 100,
+        last_evaluated_key: dict[str, Any] | None = None,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """List documents via the document index provider (paginated)."""
+        return self.document_index_provider.list_documents(
+            namespace=namespace,
+            limit=limit,
+            last_evaluated_key=last_evaluated_key,
+            context=context,
+        )
+
+    def get_document_record(
+        self,
+        doc_id: str,
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any] | None:
+        """Get a document's metadata record from the document index."""
+        return self.document_index_provider.get_document(doc_id, namespace, context=context)
+
+    def get_document_chunks(
+        self,
+        ids: list[str],
+        context: "RequestContext | None" = None
+    ) -> list[dict[str, Any]]:
+        """Retrieve chunk records by vector IDs."""
+        return self.vectordb_provider.get_by_ids(ids=ids, context=context)
+
+    def discover_documents(
+        self,
+        query: str,
+        top_k: int = 10,
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> list[dict[str, Any]]:
+        """Semantic discovery over document summaries (embed query + search)."""
+        query_embedding = self.embedding_provider.embed(query, context=context)
+        return self.summaries_provider.search_summaries(
+            query_vector=query_embedding,
+            top_k=top_k,
+            namespace=namespace,
+            context=context,
+        )
+
+    def soft_delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_by: str | None = "api",
+        delete_reason: str = "user_initiated",
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Soft delete a document (move to trash) and mark its vectors."""
+        result = self.document_index_provider.soft_delete_document(
+            doc_id=doc_id,
+            namespace=namespace,
+            deleted_by=deleted_by,
+            delete_reason=delete_reason,
+            context=context,
+        )
+
+        # Update vector status to exclude from search results
+        chunk_ids = result.get("chunk_ids", [])
+        if chunk_ids and hasattr(self.vectordb_provider, "update_status"):
+            try:
+                self.vectordb_provider.update_status(chunk_ids, namespace, "deleting", context=context)
+                logger.info(f"Updated {len(chunk_ids)} vectors to deleting status")
+            except Exception as e:
+                # Log but don't fail - document is already in trash
+                logger.warning(f"Failed to update vector status: {e}")
+
+        return result
+
+    async def _hard_delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        chunk_ids: list[str],
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Shared hard-delete sequence: vectors, index entry, delete observers.
+
+        The single implementation of permanent deletion — every route/frontend
+        path funnels here so behavior (and observer notification) never diverges.
+        """
+        # Delete from vector database first (atomic operation pattern)
+        self.vectordb_provider.delete(chunk_ids, namespace=namespace, context=context)
+
+        # Delete from document index
+        self.document_index_provider.delete_document(doc_id, namespace, context=context)
+
+        # Fire delete observers now that the doc is permanently gone
+        # (e.g. concept-link cleanup). No-op without enterprise plugins.
+        await self.notify_document_deleted(doc_id, namespace, context=context)
+
+        logger.info(f"Permanently deleted document {doc_id} ({len(chunk_ids)} chunks) from {namespace}")
+
+        return {
+            "doc_id": doc_id,
+            "namespace": namespace,
+            "chunks_deleted": len(chunk_ids),
+        }
+
+    async def permanently_delete_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Permanently delete a document by ID (vectors + index + observers).
+
+        Raises:
+            ValueError: If the document has no chunks / does not exist.
+        """
+        chunk_ids = self.document_index_provider.get_chunk_ids(doc_id, namespace, context=context)
+        if not chunk_ids:
+            raise ValueError(f"Document not found: {doc_id}")
+        return await self._hard_delete_document(doc_id, namespace, chunk_ids, context=context)
+
+    async def delete_documents_by_filename(
+        self,
+        filename: str,
+        namespace: str,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Permanently delete a document looked up by filename in a namespace.
+
+        Uses the document index when available (preferred), falling back to a
+        metadata-match delete on the documents provider.
+
+        Raises:
+            ValueError: If the document is not found or has no chunks.
+            NotImplementedError: If the fallback provider lacks delete_by_metadata.
+        """
+        if self.document_index_provider:
+            # Direct GSI2 lookup by filename in the namespace
+            target_doc = self.document_index_provider.get_document_by_source_path(
+                namespace=namespace,
+                filename=filename,
+                context=context,
+            )
+
+            if not target_doc:
+                raise ValueError(f"Document not found: {filename}")
+
+            doc_id = target_doc.get('doc_id')
+            chunk_ids = target_doc.get('chunk_ids', [])
+
+            if not chunk_ids:
+                raise ValueError(f"Document has no chunks: {filename}")
+
+            result = await self._hard_delete_document(doc_id, namespace, chunk_ids, context=context)
+            logger.info(f"Deleted document {filename} ({len(chunk_ids)} chunks) from {namespace}")
+            return result
+
+        # Fallback: delete chunks by metadata match (backwards compatibility)
+        result = self.documents_provider.delete_by_metadata(
+            field="filename",
+            value=filename,
+            namespace=namespace,
+            context=context,
+        )
+        logger.info(f"Deleted {result['deleted']} chunks for filename: {filename}")
+        return {"chunks_deleted": result["deleted"]}
+
+    def list_trash(
+        self,
+        namespace: str | None = None,
+        limit: int = 50,
+        next_key: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """List documents in trash (30-day retention)."""
+        return self.document_index_provider.list_trash(
+            namespace=namespace,
+            limit=limit,
+            next_key=next_key,
+            context=context,
+        )
+
+    def restore_document(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_at_ms: int,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Restore a document from trash and reactivate its vectors."""
+        result = self.document_index_provider.restore_document(
+            doc_id=doc_id,
+            namespace=namespace,
+            deleted_at_ms=deleted_at_ms,
+            context=context,
+        )
+
+        # Restore vector status to active
+        chunk_ids = result.get("chunk_ids", [])
+        if chunk_ids and hasattr(self.vectordb_provider, "update_status"):
+            try:
+                self.vectordb_provider.update_status(chunk_ids, namespace, "active", context=context)
+            except Exception as e:
+                # Log but don't fail - document is already restored
+                logger.warning(f"Failed to restore vector status: {e}")
+
+        return result
+
+    def purge_trash_entry(
+        self,
+        doc_id: str,
+        namespace: str,
+        deleted_at_ms: int,
+        deleted_by: str | None = "api",
+        filename: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> dict[str, Any]:
+        """Permanently delete a trash entry (creates an async cleanup job).
+
+        Observer notification happens when the cleanup worker completes the
+        purge, not here.
+        """
+        return self.document_index_provider.permanently_delete_document(
+            doc_id=doc_id,
+            namespace=namespace,
+            deleted_at_ms=deleted_at_ms,
+            deleted_by=deleted_by,
+            filename=filename,  # Use trash entry filename for correct PK
+            context=context,
+        )
+
+    def regenerate_document_summary(
+        self,
+        summary_text: str,
+        metadata: dict[str, Any],
+        namespace: str,
+        summary_id: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> str:
+        """Embed and store a document summary record (summary migration)."""
+        summary_embedding = self.embedding_provider.embed(summary_text, context=context)
+        sid = summary_id or str(uuid.uuid4())
+        self.vectordb_provider.insert(
+            vectors=[summary_embedding],
+            texts=[summary_text],
+            metadatas=[metadata],
+            ids=[sid],
+            namespace=namespace,
+            context=context,
+        )
+        return sid
 
     async def query(
         self,
@@ -1434,7 +1803,7 @@ class RAGPipeline:
         filter = current_filters
 
         # Generate query embedding (uses embed_query for providers that differentiate)
-        query_embedding = self.embedding_provider.embed_query(question)
+        query_embedding = self.embedding_provider.embed_query(question, context=context)
 
         # Sanitize filter: remove reserved keys that conflict with explicit parameters
         sanitized_filter = None
@@ -1456,7 +1825,8 @@ class RAGPipeline:
             query_vector=query_embedding,
             top_k=search_top_k,
             namespace=ns,
-            filter=sanitized_filter
+            filter=sanitized_filter,
+            context=context
         )
 
         # Format sources - include namespace in metadata for downstream consumers
@@ -1505,7 +1875,7 @@ class RAGPipeline:
         # Apply reranking if requested
         if rerank and sources and self.reranker_provider:
             logger.info(f"Reranking {len(sources)} results")
-            sources = self.reranker_provider.rerank(question, sources, top_k=top_k)
+            sources = self.reranker_provider.rerank(question, sources, top_k=top_k, context=context)
         elif rerank and not self.reranker_provider:
             logger.warning("Reranking requested but no reranker configured")
             sources = sources[:top_k]
@@ -1526,13 +1896,15 @@ class RAGPipeline:
                 answer = self.llm_provider.generate_with_context_and_model(
                     query=question,
                     context=sources,
-                    model_id=model
+                    model_id=model,
+                    request_context=context
                 )
                 response["model"] = model
             else:
                 answer = self.llm_provider.generate_with_context(
                     query=question,
-                    context=sources
+                    context=sources,
+                    request_context=context
                 )
             response["answer"] = answer
 
@@ -1557,11 +1929,12 @@ class RAGPipeline:
         """
         return self.query(query, top_k=top_k, synthesize=False, namespace=namespace)
 
-    def create_insight(
+    async def create_insight(
         self,
         content: str,
         namespace: str,
-        tags: list[str] | None = None
+        tags: list[str] | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Create a new insight (user note with semantic search capability)
@@ -1579,8 +1952,17 @@ class RAGPipeline:
         # Generate insight ID
         insight_id = str(uuid.uuid4())
 
-        # Generate embedding for the insight content
-        embedding = self.embedding_provider.embed(content)
+        # Create request context if not provided (guards need a context)
+        if context is None:
+            from datetime import datetime as _dt, timezone as _tz
+            from uuid import uuid4
+            from stache_ai.middleware.context import RequestContext
+            context = RequestContext(
+                request_id=str(uuid4()),
+                timestamp=_dt.now(_tz.utc),
+                namespace=namespace,
+                source="api"
+            )
 
         # Build metadata
         from datetime import datetime, timezone
@@ -1595,13 +1977,27 @@ class RAGPipeline:
         if tags:
             metadata["tags"] = tags
 
+        # Honor the ingest-guard seam: creating an insight stores a vector, like
+        # ingest, so it must run the same guards (rate/resource limits, ACL, any
+        # deployment guard). A raised LimitExceededError/ForbiddenError
+        # propagates to the route's existing handlers.
+        context.custom["document_index"] = self.document_index_provider
+        context.custom["vectordb"] = self.insights_provider
+        context.custom["config"] = self.config
+        context.custom["namespace_provider"] = self._get_namespace_provider()
+        await self._apply_ingest_guards(content, metadata, context)
+
+        # Generate embedding for the insight content
+        embedding = self.embedding_provider.embed(content, context=context)
+
         # Insert into insights provider
         ids = self.insights_provider.insert(
             vectors=[embedding],
             texts=[content],
             metadatas=[metadata],
             ids=[insight_id],
-            namespace=namespace
+            namespace=namespace,
+            context=context
         )
 
         logger.info(f"Created insight {insight_id} in namespace {namespace}")
@@ -1614,11 +2010,12 @@ class RAGPipeline:
             "tags": tags
         }
 
-    def search_insights(
+    async def search_insights(
         self,
         query: str,
         namespace: str,
-        top_k: int = 10
+        top_k: int = 10,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Search insights using semantic search
@@ -1633,15 +2030,55 @@ class RAGPipeline:
         """
         logger.info(f"Searching insights in namespace: {namespace} with query: {query}")
 
+        # Create request context if not provided (query processors need one)
+        if context is None:
+            from datetime import datetime, timezone
+            from uuid import uuid4
+            from stache_ai.middleware.context import RequestContext
+            context = RequestContext(
+                request_id=str(uuid4()),
+                timestamp=datetime.now(timezone.utc),
+                namespace=namespace,
+                source="api"
+            )
+
+        # Honor the query-processor seam: searching insights is a query, like
+        # query(), so it must run the same processors (rate limits, ACL filter
+        # injection, any deployment processor). A raised
+        # LimitExceededError/ForbiddenError propagates to the route's handlers.
+        from stache_ai.middleware.context import QueryContext
+        query_context = QueryContext.from_request_context(
+            context=context,
+            query=query,
+            top_k=top_k,
+            filters={"_type": "insight"},
+        )
+
+        current_query = query
+        current_filters = {"_type": "insight"}
+        for processor in self.query_processors:
+            from stache_ai.middleware.chain import MiddlewareRejection
+            result = await processor.process(current_query, current_filters, query_context)
+            if result.action == "reject":
+                raise MiddlewareRejection(processor.__class__.__name__, result.reason)
+            if result.action == "transform":
+                current_query = result.query or current_query
+                if result.filters is not None:
+                    # Keep the insight scope regardless of processor filters so a
+                    # processor cannot widen the search beyond insights.
+                    current_filters = {**result.filters, "_type": "insight"}
+        query = current_query
+
         # Generate embedding for the query
-        query_embedding = self.embedding_provider.embed(query)
+        query_embedding = self.embedding_provider.embed(query, context=context)
 
         # Search insights provider
         results = self.insights_provider.search(
             query_vector=query_embedding,
             top_k=top_k,
             namespace=namespace,
-            filter={"_type": "insight"}
+            filter=current_filters,
+            context=context
         )
 
         logger.info(f"Found {len(results)} insights matching query")
@@ -1651,7 +2088,8 @@ class RAGPipeline:
     def delete_insight(
         self,
         insight_id: str,
-        namespace: str
+        namespace: str,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Delete an insight by ID
@@ -1668,7 +2106,8 @@ class RAGPipeline:
         # Delete from insights provider by ID
         result = self.insights_provider.delete(
             ids=[insight_id],
-            namespace=namespace
+            namespace=namespace,
+            context=context
         )
 
         logger.info(f"Deleted insight {insight_id}")
@@ -1749,7 +2188,7 @@ class RAGPipeline:
         # Delete from document index (if enabled)
         if self.document_index_provider:
             try:
-                self.document_index_provider.delete_document(doc_id, namespace)
+                self.document_index_provider.delete_document(doc_id, namespace, context=context)
                 logger.info(f"Deleted document index entry for {doc_id}")
             except Exception as e:
                 logger.error(f"Failed to delete document index for {doc_id}: {e}")
@@ -1764,7 +2203,8 @@ class RAGPipeline:
             # Delete chunks with this doc_id
             self.documents_provider.delete(
                 namespace=namespace,
-                filter=filter_dict
+                filter=filter_dict,
+                context=context
             )
             logger.info(f"Deleted document chunks for {doc_id}")
         except Exception as e:
@@ -1777,7 +2217,8 @@ class RAGPipeline:
             summary_filter = {"_type": "document_summary", "doc_id": doc_id}
             self.summaries_provider.delete(
                 namespace=namespace,
-                filter=summary_filter
+                filter=summary_filter,
+                context=context
             )
             logger.info(f"Deleted document summary for {doc_id}")
         except Exception as e:

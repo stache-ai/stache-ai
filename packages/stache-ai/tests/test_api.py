@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from unittest import mock
 from fastapi.testclient import TestClient
 
 
@@ -92,7 +93,8 @@ class TestQueryEndpoint:
             namespace=None,
             rerank=True,
             model=None,
-            filter=None
+            filter=None,
+            context=mock.ANY,
         )
 
     def test_query_without_synthesis(self, test_client, mock_pipeline):
@@ -116,7 +118,8 @@ class TestQueryEndpoint:
             namespace=None,
             rerank=True,
             model=None,
-            filter=None
+            filter=None,
+            context=mock.ANY,
         )
 
     def test_query_with_namespace(self, test_client, mock_pipeline):
@@ -134,7 +137,8 @@ class TestQueryEndpoint:
             namespace="test-ns",
             rerank=True,
             model=None,
-            filter=None
+            filter=None,
+            context=mock.ANY,
         )
 
     def test_query_missing_query_field(self, test_client):

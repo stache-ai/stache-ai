@@ -49,6 +49,87 @@ def test_worker_text_success_marks_done():
     assert pipeline.ingest_text.call_args.kwargs["chunking_strategy"] == "recursive"
 
 
+def test_worker_strips_all_reserved_keys_not_just_transport_keys():
+    """Any `_`-prefixed job.metadata key (server-stamped state, not just the
+    transport keys) must never reach the pipeline's metadata kwarg - the
+    worker rehydrates that state from context.custom["ingest_job"] instead."""
+    store = EphemeralJobStore()
+    job = _text_job({
+        "_text": "hello world",
+        "_chunking": "recursive",
+        "_stamped": "server-set-state",
+        "topic": "x",
+    })
+    store.create(job)
+
+    pipeline = AsyncMock()
+    pipeline.ingest_text.return_value = {
+        "doc_id": "doc-1", "action": "ingested_new", "chunks_created": 4,
+    }
+    worker = make_worker(store, _Blob(), NullNotifier(), pipeline)
+    asyncio.run(worker("j1"))
+
+    call_md = pipeline.ingest_text.call_args.kwargs["metadata"]
+    assert "_stamped" not in call_md
+    assert call_md == {"topic": "x"}
+
+
+def test_worker_strips_reserved_keys_from_file_ingestion_metadata():
+    """Same guarantee on the ingest_file path: reserved keys never ride
+    along, but `filename` (set by the worker itself) still does."""
+    store = EphemeralJobStore()
+    job = Job(
+        job_id="j2", status=JobStatus.QUEUED, namespace="default", source="api",
+        filename="report.pdf", content_type="application/pdf", requested_by="alice",
+        blob_key="j2/report.pdf",
+        metadata={"_stamped": "server-set-state", "author": "alice"},
+        created_at="t", updated_at="t",
+    )
+    store.create(job)
+    pipeline = AsyncMock()
+    pipeline.ingest_file.return_value = {"doc_id": "doc-2", "chunks_created": 7}
+    worker = make_worker(store, _Blob(b"%PDF-1.4 fake"), NullNotifier(), pipeline)
+    asyncio.run(worker("j2"))
+
+    call_md = pipeline.ingest_file.call_args.kwargs["metadata"]
+    assert "_stamped" not in call_md
+    assert call_md["author"] == "alice"
+    assert call_md["filename"] == "report.pdf"
+
+
+def test_worker_strips_content_hash_matching_sanitizer(monkeypatch):
+    """INGESTION F2: the worker's reserved-key filter is the SAME predicate the
+    API sanitizer uses (sanitize.is_reserved_metadata_key), so a non-underscore
+    reserved key like ``content_hash`` is stripped by BOTH - they cannot drift.
+    ``source_path`` (not reserved - a smart-update identifier) still rides
+    along to the pipeline."""
+    from stache_ai import sanitize
+
+    store = EphemeralJobStore()
+    job = _text_job({
+        "_text": "hello world",
+        "content_hash": "forged-by-somebody",
+        "source_path": "notes/todo.md",
+        "topic": "x",
+    })
+    store.create(job)
+
+    pipeline = AsyncMock()
+    pipeline.ingest_text.return_value = {
+        "doc_id": "doc-1", "action": "ingested_new", "chunks_created": 1,
+    }
+    worker = make_worker(store, _Blob(), NullNotifier(), pipeline)
+    asyncio.run(worker("j1"))
+
+    call_md = pipeline.ingest_text.call_args.kwargs["metadata"]
+    # content_hash is reserved (the sanitizer strips it too) -> gone here.
+    assert "content_hash" not in call_md
+    assert sanitize.is_reserved_metadata_key("content_hash")
+    # source_path is a legitimate smart-update identifier, not reserved.
+    assert not sanitize.is_reserved_metadata_key("source_path")
+    assert call_md == {"source_path": "notes/todo.md", "topic": "x"}
+
+
 def test_worker_strips_transport_keys_on_terminal():
     # The terminal job record must not retain the document body (_text) or other
     # transport-only keys, so GET /api/jobs / DynamoDB items stay small.

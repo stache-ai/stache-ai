@@ -40,6 +40,56 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# Identity middleware: extract the caller once per request (pluggable,
+# fail-closed when a non-default extractor is configured) and expose it on
+# request.state for routes and RequestContext.from_fastapi_request.
+from fastapi.responses import JSONResponse as _JSONResponse
+
+from stache_ai.identity import (
+    AuthenticationError,
+    ForbiddenError,
+    LimitExceededError,
+    build_extractor,
+    get_authorizer,
+)
+
+_principal_extractor = build_extractor(settings)   # raises at import if misconfigured
+_route_authorizer = get_authorizer()               # raises at import if misconfigured (fail-closed)
+logger_boot = logging.getLogger(__name__)
+logger_boot.info(f"Principal extractor: {type(_principal_extractor).__name__}")
+logger_boot.info(f"Authorization provider: {type(_route_authorizer).__name__}")
+
+
+@app.middleware("http")
+async def _identity_middleware(request, call_next):
+    try:
+        principal = _principal_extractor.extract(request)
+    except AuthenticationError as e:
+        return _JSONResponse(status_code=401, content={"detail": str(e) or "Unauthorized"})
+    request.state.principal = principal
+    request.state.user_id = principal.user_id
+    return await call_next(request)
+
+
+@app.exception_handler(ForbiddenError)
+async def _forbidden_handler(request, exc: ForbiddenError):
+    # Authorizer denial (identity seam, S1) -> 403, same JSON shape as the 401.
+    return _JSONResponse(status_code=403, content={"detail": str(exc) or "Forbidden"})
+
+
+@app.exception_handler(LimitExceededError)
+async def _limit_exceeded_handler(request, exc: LimitExceededError):
+    # A configured rate/resource limit rejected the operation -> 429 with a
+    # Retry-After header (the correct "try again later" semantics; SDKs and
+    # proxies honor it). Mirrors the ForbiddenError -> 403 handler; OSS attaches
+    # no meaning to which limit was hit and passes the detail through.
+    return _JSONResponse(
+        status_code=429,
+        content={"detail": str(exc) or "Limit exceeded"},
+        headers={"Retry-After": "60"},
+    )
+
+
 # CORS middleware - configure via environment for production
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
 app.add_middleware(
@@ -71,7 +121,10 @@ for ep in entry_points(group="stache.routes"):
         app.include_router(router, prefix="/api", tags=[ep.name])
         logger.info(f"Loaded route plugin: {ep.name}")
     except Exception as e:
-        logger.warning(f"Failed to load route plugin {ep.name}: {e}")
+        # FAIL-CLOSED: the plugin package is installed, so this is a broken
+        # deployment — and a silently-dropped route plugin may be the layer
+        # enforcing access control. Abort instead of serving without it.
+        raise RuntimeError(f"Installed route plugin {ep.name} failed to load: {e}") from e
 
 # Serve static frontend files
 static_dir = Path("/app/static")

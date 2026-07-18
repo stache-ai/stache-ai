@@ -359,3 +359,180 @@ async def test_end_to_end_reingest_version_flow(pipeline, mock_document_index, m
     assert result["action"] == IngestionAction.REINGEST_VERSION.value
     assert result["previous_doc_id"] == "doc-v1"
     assert result["chunks_created"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Seam-consistency: insight paths honor the guard / query-processor seams
+# (previously bypassed — a registered guard/processor never fired on
+# create_insight / search_insights).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_insight_runs_ingest_guard_and_propagates_raise(pipeline):
+    """create_insight must run the ingest-guard chain; a guard that raises
+    (e.g. a configured limit) blocks the write and propagates unchanged."""
+    from stache_ai.identity import LimitExceededError
+    from stache_ai.middleware.base import IngestGuard
+
+    class _RaisingGuard(IngestGuard):
+        async def validate(self, content, metadata, context):
+            raise LimitExceededError("insight limit reached")
+
+    pipeline.config.namespace_provider = None
+    pipeline._ingest_guards = [_RaisingGuard()]
+
+    with pytest.raises(LimitExceededError, match="insight limit reached"):
+        await pipeline.create_insight(content="a note", namespace="test-ns")
+
+    # Blocked before any vector was stored.
+    pipeline._insights_provider.insert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_insight_ingest_guard_reject_blocks(pipeline):
+    """A guard returning a reject GuardResult blocks create_insight."""
+    from stache_ai.middleware.base import IngestGuard, GuardResult
+    from stache_ai.middleware.chain import MiddlewareRejection
+
+    class _RejectGuard(IngestGuard):
+        async def validate(self, content, metadata, context):
+            return GuardResult(action="reject", reason="not allowed")
+
+    pipeline.config.namespace_provider = None
+    pipeline._ingest_guards = [_RejectGuard()]
+
+    with pytest.raises(MiddlewareRejection, match="not allowed"):
+        await pipeline.create_insight(content="a note", namespace="test-ns")
+
+    pipeline._insights_provider.insert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_insights_runs_query_processor_and_propagates_raise(pipeline):
+    """search_insights must run the query-processor chain; a processor that
+    raises (e.g. a configured limit) blocks the search and propagates."""
+    from stache_ai.identity import LimitExceededError
+    from stache_ai.middleware.base import QueryProcessor
+
+    class _RaisingProcessor(QueryProcessor):
+        async def process(self, query, filters, context):
+            raise LimitExceededError("query limit reached")
+
+    pipeline._query_processors = [_RaisingProcessor()]
+
+    with pytest.raises(LimitExceededError, match="query limit reached"):
+        await pipeline.search_insights(query="q", namespace="test-ns")
+
+    pipeline._insights_provider.search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_insights_query_processor_reject_blocks(pipeline):
+    """A processor returning a reject result blocks search_insights."""
+    from stache_ai.middleware.base import QueryProcessor
+    from stache_ai.middleware.results import QueryProcessorResult
+    from stache_ai.middleware.chain import MiddlewareRejection
+
+    class _RejectProcessor(QueryProcessor):
+        async def process(self, query, filters, context):
+            return QueryProcessorResult(action="reject", reason="rate limited")
+
+    pipeline._query_processors = [_RejectProcessor()]
+
+    with pytest.raises(MiddlewareRejection, match="rate limited"):
+        await pipeline.search_insights(query="q", namespace="test-ns")
+
+    pipeline._insights_provider.search.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Seam-consistency: the dedup / guard SKIP returns run the ErrorProcessor
+# cleanup seam so guards can release reserved state (previously only the
+# exception path did).
+# ---------------------------------------------------------------------------
+
+
+class _RecordingErrorProcessor:
+    """Minimal ErrorProcessor spy that records each on_error invocation."""
+
+    priority = 100
+
+    def __init__(self):
+        self.calls = []
+
+    async def on_error(self, exception, context, partial_state):
+        from stache_ai.middleware.base import ErrorResult
+        self.calls.append({"exception": exception, "partial_state": partial_state})
+        return ErrorResult(handled=True)
+
+
+@pytest.mark.asyncio
+async def test_error_processors_run_on_dedup_skip_return(
+    pipeline, mock_document_index, mock_chunking_strategy
+):
+    """A concurrent-duplicate SKIP return must run the ErrorProcessor cleanup
+    seam, not only the exception path — otherwise a guard's reserved state
+    leaks on the skip."""
+    from stache_ai.middleware.guards.deduplication import DeduplicationGuard
+
+    # New by source path (guard allows and attaches content_hash)...
+    mock_document_index.get_document_by_source_path.return_value = None
+    # ...but the reservation loses the race to a concurrent writer.
+    mock_document_index.reserve_identifier.return_value = False
+    mock_document_index.get_document_by_identifier.return_value = {"doc_id": "winner-123"}
+
+    recorder = _RecordingErrorProcessor()
+    pipeline._ingest_guards = [DeduplicationGuard()]
+    pipeline._error_processors = [recorder]
+
+    with patch(
+        "stache_ai.chunking.ChunkingStrategyFactory.create",
+        return_value=mock_chunking_strategy,
+    ):
+        result = await pipeline.ingest_text(
+            text="dup content",
+            metadata={"filename": "d.txt", "source_path": "/p/d.txt"},
+            namespace="test-ns",
+        )
+
+    assert result["action"] == IngestionAction.SKIP.value
+    assert result["doc_id"] == "winner-123"
+    # BUG fix: cleanup seam fired on the SKIP return with the partial state.
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0]["partial_state"]["vectors_inserted"] is False
+
+
+@pytest.mark.asyncio
+async def test_error_processors_run_on_guard_reject_skip_return(
+    pipeline, mock_document_index, mock_chunking_strategy
+):
+    """A guard-reject SKIP return must also run the ErrorProcessor cleanup seam
+    so earlier guards can release state before the reject."""
+    from stache_ai.utils.hashing import compute_hash_async
+    from stache_ai.middleware.guards.deduplication import DeduplicationGuard
+
+    content = "duplicate note"
+    content_hash = await compute_hash_async(content)
+    # An existing doc with the SAME hash -> DeduplicationGuard rejects (SKIP).
+    mock_document_index.get_document_by_source_path.return_value = {
+        "doc_id": "existing-1",
+        "content_hash": content_hash,
+    }
+
+    recorder = _RecordingErrorProcessor()
+    pipeline._ingest_guards = [DeduplicationGuard()]
+    pipeline._error_processors = [recorder]
+
+    with patch(
+        "stache_ai.chunking.ChunkingStrategyFactory.create",
+        return_value=mock_chunking_strategy,
+    ):
+        result = await pipeline.ingest_text(
+            text=content,
+            metadata={"filename": "d.txt", "source_path": "/p/d.txt"},
+            namespace="test-ns",
+        )
+
+    assert result["action"] == IngestionAction.SKIP.value
+    assert len(recorder.calls) == 1

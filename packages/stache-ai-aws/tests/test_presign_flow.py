@@ -194,7 +194,11 @@ def test_presign_key_matches_blob_key_for_pathy_filename():
 
 
 @mock_aws
-def test_worker_unknown_job_creates_producer_job():
+def test_worker_unknown_job_creates_producer_job(monkeypatch):
+    import stache_ai.config as cfg
+    from stache_ai.config import Settings
+    monkeypatch.setattr(cfg, "settings", Settings(ingest_producer_drops_enabled=True))
+
     queue_url = _provision()
     pipeline = _pipeline()
     service = IngestionServiceFactory.build(_config(queue_url), pipeline)
@@ -288,9 +292,13 @@ def test_base64_double_trigger_ingests_once():
 
 
 @mock_aws
-def test_producer_metadata_hyphen_keys_populate_job():
+def test_producer_metadata_hyphen_keys_populate_job(monkeypatch):
     """Producers may tag objects with hyphenated stache-* keys; content_type and
     requested_by must survive (regression: they silently fell back to defaults)."""
+    import stache_ai.config as cfg
+    from stache_ai.config import Settings
+    monkeypatch.setattr(cfg, "settings", Settings(ingest_producer_drops_enabled=True))
+
     queue_url = _provision()
     service = IngestionServiceFactory.build(_config(queue_url), _pipeline())
     boto3.client("s3", region_name=REGION).put_object(

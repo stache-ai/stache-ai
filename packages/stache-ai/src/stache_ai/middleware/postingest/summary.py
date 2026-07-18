@@ -166,7 +166,8 @@ class HeuristicSummaryGenerator(PostIngestProcessor):
                 texts=[summary_text],
                 metadatas=[summary_metadata],
                 ids=[summary_id],
-                namespace=namespace
+                namespace=namespace,
+                context=context
             )
 
             logger.info(f"Created document summary for {filename} (doc_id: {doc_id}, headings: {len(headings)})")

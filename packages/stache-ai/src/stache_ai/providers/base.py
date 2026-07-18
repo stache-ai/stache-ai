@@ -2,21 +2,27 @@
 
 import builtins
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, TYPE_CHECKING
 
 from stache_ai.providers.tool_types import ToolSpec, ToolCall, ToolUseResult, Message
+
+if TYPE_CHECKING:
+    from stache_ai.middleware.context import RequestContext
 
 
 class EmbeddingProvider(ABC):
     """Abstract base class for embedding providers"""
 
     @abstractmethod
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, *, context: "RequestContext | None" = None) -> list[float]:
         """
         Generate embedding for a single text
 
         Args:
             text: Input text to embed
+            context: optional request context (caller identity / correlation);
+                keyword-only. Core and first-party providers ignore it — a
+                provider may read it to route or observe per caller.
 
         Returns:
             List of floats representing the embedding vector
@@ -24,12 +30,14 @@ class EmbeddingProvider(ABC):
         pass
 
     @abstractmethod
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_batch(self, texts: list[str], *, context: "RequestContext | None" = None) -> list[list[float]]:
         """
         Generate embeddings for multiple texts
 
         Args:
             texts: List of input texts
+            context: optional request context (caller identity / correlation);
+                keyword-only. Core and first-party providers ignore it.
 
         Returns:
             List of embedding vectors
@@ -46,7 +54,7 @@ class EmbeddingProvider(ABC):
         """
         pass
 
-    def embed_query(self, text: str) -> list[float]:
+    def embed_query(self, text: str, *, context: "RequestContext | None" = None) -> list[float]:
         """
         Generate embedding for a search query.
 
@@ -56,11 +64,13 @@ class EmbeddingProvider(ABC):
 
         Args:
             text: Query text to embed
+            context: optional request context (caller identity / correlation);
+                keyword-only. Forwarded to embed(); core providers ignore it.
 
         Returns:
             List of floats representing the embedding vector
         """
-        return self.embed(text)
+        return self.embed(text, context=context)
 
     def get_name(self) -> str:
         """Get provider name"""
@@ -98,12 +108,14 @@ class LLMProvider(ABC):
     """Abstract base class for LLM providers"""
 
     @abstractmethod
-    def generate(self, prompt: str, **kwargs) -> str:
+    def generate(self, prompt: str, *, context: "RequestContext | None" = None, **kwargs) -> str:
         """
         Generate text from a prompt
 
         Args:
             prompt: Input prompt
+            context: optional request context (caller identity / correlation);
+                keyword-only. Core and first-party providers ignore it.
             **kwargs: Provider-specific parameters
 
         Returns:
@@ -116,6 +128,8 @@ class LLMProvider(ABC):
         self,
         query: str,
         context: list[dict[str, Any]],
+        *,
+        request_context: "RequestContext | None" = None,
         **kwargs
     ) -> str:
         """
@@ -123,7 +137,11 @@ class LLMProvider(ABC):
 
         Args:
             query: User query
-            context: List of context chunks with metadata
+            context: List of context chunks with metadata (the RAG chunks)
+            request_context: optional request context (caller identity /
+                correlation); keyword-only. Named ``request_context`` here
+                because ``context`` already denotes the RAG chunk list. Core
+                and first-party providers ignore it.
             **kwargs: Provider-specific parameters
 
         Returns:
@@ -154,6 +172,8 @@ class LLMProvider(ABC):
         self,
         prompt: str,
         model_id: str,
+        *,
+        context: "RequestContext | None" = None,
         **kwargs
     ) -> str:
         """
@@ -165,19 +185,23 @@ class LLMProvider(ABC):
         Args:
             prompt: Input prompt
             model_id: Model ID to use
+            context: optional request context (caller identity / correlation);
+                keyword-only, forwarded to generate(). Core providers ignore it.
             **kwargs: Provider-specific parameters
 
         Returns:
             Generated text
         """
         # Default: ignore model_id and use configured model
-        return self.generate(prompt, **kwargs)
+        return self.generate(prompt, context=context, **kwargs)
 
     def generate_with_context_and_model(
         self,
         query: str,
         context: list[dict[str, Any]],
         model_id: str,
+        *,
+        request_context: "RequestContext | None" = None,
         **kwargs
     ) -> str:
         """
@@ -188,15 +212,18 @@ class LLMProvider(ABC):
 
         Args:
             query: User query
-            context: List of context chunks with metadata
+            context: List of context chunks with metadata (the RAG chunks)
             model_id: Model ID to use
+            request_context: optional request context (caller identity /
+                correlation); keyword-only, forwarded to
+                generate_with_context(). Core providers ignore it.
             **kwargs: Provider-specific parameters
 
         Returns:
             Generated answer
         """
         # Default: ignore model_id and use configured model
-        return self.generate_with_context(query, context, **kwargs)
+        return self.generate_with_context(query, context, request_context=request_context, **kwargs)
 
     def get_name(self) -> str:
         """Get provider name"""
@@ -208,6 +235,8 @@ class LLMProvider(ABC):
         schema: dict,
         max_tokens: int = 2048,
         temperature: float = 0.0,
+        *,
+        context: "RequestContext | None" = None,
         **kwargs
     ) -> dict:
         """Generate JSON output matching schema (synchronous).
@@ -241,6 +270,8 @@ class LLMProvider(ABC):
         system_prompt: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        *,
+        context: "RequestContext | None" = None,
         **kwargs
     ) -> ToolUseResult:
         """Generate response with tool use capability (synchronous).
@@ -295,7 +326,8 @@ class NamespaceProvider(ABC):
         description: str = "",
         parent_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        filter_keys: list[str] | None = None
+        filter_keys: list[str] | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Create a new namespace
@@ -309,6 +341,8 @@ class NamespaceProvider(ABC):
             filter_keys: Optional list of metadata keys that can be used for filtering
                         searches in this namespace (e.g., ['source', 'date', 'author']).
                         These are informational only and not enforced on search queries.
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Created namespace record including filter_keys (defaults to [])
@@ -316,12 +350,14 @@ class NamespaceProvider(ABC):
         pass
 
     @abstractmethod
-    def get(self, id: str) -> dict[str, Any] | None:
+    def get(self, id: str, context: "RequestContext | None" = None) -> dict[str, Any] | None:
         """
         Get a namespace by ID
 
         Args:
             id: Namespace ID
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Namespace record or None if not found
@@ -332,7 +368,8 @@ class NamespaceProvider(ABC):
     def list(
         self,
         parent_id: str | None = None,
-        include_children: bool = False
+        include_children: bool = False,
+        context: "RequestContext | None" = None
     ) -> list[dict[str, Any]]:
         """
         List namespaces
@@ -340,6 +377,8 @@ class NamespaceProvider(ABC):
         Args:
             parent_id: Filter by parent (None for root namespaces)
             include_children: If True, recursively include children
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             List of namespace records
@@ -354,7 +393,8 @@ class NamespaceProvider(ABC):
         description: str | None = None,
         parent_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-        filter_keys: builtins.list[str] | None = None
+        filter_keys: builtins.list[str] | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any] | None:
         """
         Update a namespace
@@ -367,6 +407,8 @@ class NamespaceProvider(ABC):
             metadata: New metadata (merged with existing if provided)
             filter_keys: Complete replacement list of filter keys (if provided).
                         Unlike metadata which merges, filter_keys replaces entirely.
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Updated namespace record or None if not found
@@ -374,13 +416,15 @@ class NamespaceProvider(ABC):
         pass
 
     @abstractmethod
-    def delete(self, id: str, cascade: bool = False) -> bool:
+    def delete(self, id: str, cascade: bool = False, context: "RequestContext | None" = None) -> bool:
         """
         Delete a namespace
 
         Args:
             id: Namespace ID to delete
             cascade: If True, delete children; if False, fail if children exist
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             True if deleted, False if not found
@@ -388,12 +432,14 @@ class NamespaceProvider(ABC):
         pass
 
     @abstractmethod
-    def get_tree(self, root_id: str | None = None) -> builtins.list[dict[str, Any]]:
+    def get_tree(self, root_id: str | None = None, context: "RequestContext | None" = None) -> builtins.list[dict[str, Any]]:
         """
         Get namespace hierarchy as a tree
 
         Args:
             root_id: Start from this namespace (None for full tree)
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             List of namespaces with nested 'children' arrays
@@ -401,17 +447,44 @@ class NamespaceProvider(ABC):
         pass
 
     @abstractmethod
-    def exists(self, id: str) -> bool:
+    def exists(self, id: str, context: "RequestContext | None" = None) -> bool:
         """
         Check if a namespace exists
 
         Args:
             id: Namespace ID
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             True if exists
         """
         pass
+
+    def get_ancestors(self, id: str, context: "RequestContext | None" = None) -> builtins.list[dict[str, Any]]:
+        """Get all ancestor namespaces, root first.
+
+        Default implementation walks parent links via ``get``. Providers may
+        override with a more efficient lookup; overrides must accept and
+        forward ``context`` like every other data method.
+        """
+        ancestors: builtins.list[dict[str, Any]] = []
+        current = self.get(id, context=context)
+        while current and current.get("parent_id"):
+            parent = self.get(current["parent_id"], context=context)
+            if not parent:
+                break
+            ancestors.append(parent)
+            current = parent
+        return list(reversed(ancestors))
+
+    def get_path(self, id: str, context: "RequestContext | None" = None) -> str:
+        """Get the display path of a namespace (e.g. 'A > B > C')."""
+        current = self.get(id, context=context)
+        if not current:
+            return ""
+        ancestors = self.get_ancestors(id, context=context)
+        return " > ".join([a["name"] for a in ancestors] + [current["name"]])
 
     def get_name(self) -> str:
         """Get provider name"""
@@ -428,7 +501,8 @@ class VectorDBProvider(ABC):
         texts: list[str],
         metadatas: list[dict[str, Any]] | None = None,
         ids: list[str] | None = None,
-        namespace: str | None = None
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
     ) -> list[str]:
         """
         Insert vectors into the database
@@ -439,6 +513,8 @@ class VectorDBProvider(ABC):
             metadatas: Optional metadata for each vector
             ids: Optional IDs for each vector (generated if not provided)
             namespace: Optional namespace for isolation (multi-user/multi-project)
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             List of inserted vector IDs
@@ -461,7 +537,8 @@ class VectorDBProvider(ABC):
         query_vector: list[float],
         top_k: int = 5,
         filter: dict[str, Any] | None = None,
-        namespace: str | None = None
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
     ) -> list[dict[str, Any]]:
         """
         Search for similar vectors
@@ -471,6 +548,8 @@ class VectorDBProvider(ABC):
             top_k: Number of results to return
             filter: Optional metadata filter
             namespace: Optional namespace to search within
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             List of results with text, metadata, and scores
@@ -525,13 +604,15 @@ class VectorDBProvider(ABC):
         pass
 
     @abstractmethod
-    def delete(self, ids: list[str], namespace: str | None = None) -> bool:
+    def delete(self, ids: list[str], namespace: str | None = None, context: "RequestContext | None" = None) -> bool:
         """
         Delete vectors by IDs
 
         Args:
             ids: List of vector IDs to delete
             namespace: Optional namespace to delete from
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             True if successful
@@ -543,6 +624,7 @@ class VectorDBProvider(ABC):
         ids: list[str],
         namespace: str,
         status: str,
+        context: "RequestContext | None" = None
     ) -> int:
         """
         Update status field for multiple vectors (for soft delete).
@@ -551,6 +633,8 @@ class VectorDBProvider(ABC):
             ids: Vector IDs to update
             namespace: Target namespace
             status: New status value ("deleting", "purging", "purged", "active")
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Count of vectors updated
@@ -577,16 +661,19 @@ class VectorDBProvider(ABC):
         return 0
 
     @abstractmethod
-    def get_collection_info(self) -> dict[str, Any]:
+    def get_collection_info(self, context: "RequestContext | None" = None) -> dict[str, Any]:
         """
         Get information about the collection
 
         Returns:
             Dictionary with collection stats
+
+        context: optional request context (caller identity); implementations
+            may scope behavior on it, core providers ignore it.
         """
         pass
 
-    def delete_by_metadata(self, field: str, value: str, namespace: str | None = None) -> dict[str, Any]:
+    def delete_by_metadata(self, field: str, value: str, namespace: str | None = None, context: "RequestContext | None" = None) -> dict[str, Any]:
         """
         Delete vectors by metadata field value
 
@@ -594,6 +681,8 @@ class VectorDBProvider(ABC):
             field: Metadata field name (e.g., 'filename')
             value: Value to match
             namespace: Optional namespace filter
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Dictionary with deleted count and IDs
@@ -604,7 +693,8 @@ class VectorDBProvider(ABC):
         self,
         query_vector: list[float],
         top_k: int = 10,
-        namespace: str | None = None
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
     ) -> list[dict[str, Any]]:
         """
         Search document summaries (for document discovery)
@@ -616,18 +706,22 @@ class VectorDBProvider(ABC):
             query_vector: Query embedding vector
             top_k: Number of results to return
             namespace: Optional namespace to search within (supports wildcards)
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             List of results with document metadata and scores
         """
         raise NotImplementedError("search_summaries not implemented for this provider")
 
-    def count_by_filter(self, filter: dict[str, Any]) -> int:
+    def count_by_filter(self, filter: dict[str, Any], context: "RequestContext | None" = None) -> int:
         """
         Count vectors matching a filter
 
         Args:
             filter: Dictionary of field:value pairs to match
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Count of matching vectors
@@ -638,7 +732,8 @@ class VectorDBProvider(ABC):
         self,
         filter: dict[str, Any],
         fields: list[str] | None = None,
-        limit: int = 1000
+        limit: int = 1000,
+        context: "RequestContext | None" = None
     ) -> list[dict[str, Any]]:
         """
         List vectors matching a filter with their metadata
@@ -647,17 +742,48 @@ class VectorDBProvider(ABC):
             filter: Dictionary of field:value pairs to match
             fields: Optional list of metadata fields to return (None = all)
             limit: Maximum number of vectors to return
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             List of dictionaries with vector metadata
         """
         raise NotImplementedError("list_by_filter not implemented for this provider")
 
+    def scan_by_metadata(
+        self,
+        filter: dict[str, Any] | None = None,
+        fields: list[str] | None = None,
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
+    ) -> list[dict[str, Any]]:
+        """
+        Scan ALL vectors matching an exact-match metadata filter (full scan).
+
+        Unlike list_by_filter, this walks the entire collection without a limit
+        and includes vectors missing the filtered fields when filter is None.
+        Used by legacy maintenance operations (orphaned-chunk cleanup, summary
+        migration). Only meaningful for providers that advertise the
+        "metadata_scan" capability.
+
+        Args:
+            filter: Optional dictionary of field:value pairs to match (None = all)
+            fields: Optional list of metadata fields to return (None = all)
+            namespace: Optional namespace to restrict the scan to
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
+
+        Returns:
+            List of dictionaries with the vector "id" plus requested payload fields
+        """
+        raise NotImplementedError("scan_by_metadata not implemented for this provider")
+
     def get_by_ids(
         self,
         ids: list[str],
         fields: list[str] | None = None,
-        namespace: str | None = None
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
     ) -> list[dict[str, Any]]:
         """Retrieve vectors by IDs with their metadata
 
@@ -665,6 +791,8 @@ class VectorDBProvider(ABC):
             ids: List of vector IDs to retrieve
             fields: Optional list of metadata fields to return (None = all)
             namespace: Optional namespace filter (validation only)
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             List of dictionaries with vector metadata and text
@@ -675,7 +803,8 @@ class VectorDBProvider(ABC):
     def get_vectors_with_embeddings(
         self,
         ids: list[str],
-        namespace: str | None = None
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
     ) -> list[dict[str, Any]]:
         """Retrieve vectors by IDs with embeddings and metadata
 
@@ -685,6 +814,8 @@ class VectorDBProvider(ABC):
         Args:
             ids: List of vector IDs to retrieve
             namespace: Optional namespace filter (validation only)
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             List of dicts with standardized structure:
@@ -764,7 +895,8 @@ class DocumentIndexProvider(ABC):
         headings: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         file_type: str | None = None,
-        file_size: int | None = None
+        file_size: int | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Create a new document index entry
@@ -780,6 +912,8 @@ class DocumentIndexProvider(ABC):
             metadata: Optional custom metadata dictionary
             file_type: Optional file type (pdf, epub, txt, md, etc.)
             file_size: Optional original file size in bytes
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Dictionary containing the created document record with all fields
@@ -790,7 +924,8 @@ class DocumentIndexProvider(ABC):
     def get_document(
         self,
         doc_id: str,
-        namespace: str | None = None
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any] | None:
         """
         Retrieve a document by ID
@@ -798,6 +933,8 @@ class DocumentIndexProvider(ABC):
         Args:
             doc_id: Document identifier to retrieve
             namespace: Optional namespace for the document (may be required for some providers)
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Dictionary with document metadata if found, None otherwise
@@ -809,7 +946,8 @@ class DocumentIndexProvider(ABC):
         self,
         namespace: str | None = None,
         limit: int = 100,
-        last_evaluated_key: dict[str, Any] | None = None
+        last_evaluated_key: dict[str, Any] | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         List documents with pagination support
@@ -821,6 +959,8 @@ class DocumentIndexProvider(ABC):
             namespace: Optional namespace to filter by (None = all namespaces)
             limit: Maximum number of documents to return (default 100)
             last_evaluated_key: Pagination token from previous response
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Dictionary with structure:
@@ -835,7 +975,8 @@ class DocumentIndexProvider(ABC):
     def delete_document(
         self,
         doc_id: str,
-        namespace: str | None = None
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
     ) -> bool:
         """
         Delete a document index entry
@@ -843,6 +984,8 @@ class DocumentIndexProvider(ABC):
         Args:
             doc_id: Document identifier to delete
             namespace: Optional namespace for the document
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             True if document was deleted, False if not found
@@ -855,7 +998,8 @@ class DocumentIndexProvider(ABC):
         doc_id: str,
         summary: str,
         summary_embedding_id: str,
-        namespace: str | None = None
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
     ) -> bool:
         """
         Update the summary and summary embedding ID for a document
@@ -868,6 +1012,8 @@ class DocumentIndexProvider(ABC):
             summary: New summary text
             summary_embedding_id: ID of the summary embedding in vector database
             namespace: Optional namespace for the document
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             True if update was successful, False if document not found
@@ -879,7 +1025,8 @@ class DocumentIndexProvider(ABC):
         self,
         doc_id: str,
         namespace: str,
-        updates: dict[str, Any]
+        updates: dict[str, Any],
+        context: "RequestContext | None" = None
     ) -> bool:
         """
         Update document metadata fields atomically
@@ -905,6 +1052,8 @@ class DocumentIndexProvider(ABC):
                 - "filename": str (new filename)
                 - "metadata": dict (replaces existing metadata)
                 - "headings": list[str] (replaces existing headings)
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             True if update was successful, False if document not found
@@ -918,7 +1067,8 @@ class DocumentIndexProvider(ABC):
     def get_chunk_ids(
         self,
         doc_id: str,
-        namespace: str | None = None
+        namespace: str | None = None,
+        context: "RequestContext | None" = None
     ) -> list[str]:
         """
         Retrieve all chunk IDs for a document
@@ -929,6 +1079,8 @@ class DocumentIndexProvider(ABC):
         Args:
             doc_id: Document identifier
             namespace: Optional namespace for the document
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             List of chunk IDs from the vector database
@@ -939,7 +1091,8 @@ class DocumentIndexProvider(ABC):
     def document_exists(
         self,
         filename: str,
-        namespace: str
+        namespace: str,
+        context: "RequestContext | None" = None
     ) -> bool:
         """
         Check if a document with the given filename already exists in namespace
@@ -949,13 +1102,15 @@ class DocumentIndexProvider(ABC):
         Args:
             filename: Filename to check
             namespace: Namespace to search in
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             True if a document with this filename exists in the namespace
         """
         pass
 
-    def count_by_namespace(self, namespace: str) -> dict[str, int]:
+    def count_by_namespace(self, namespace: str, context: "RequestContext | None" = None) -> dict[str, int]:
         """
         Get document and chunk counts for a namespace
 
@@ -965,6 +1120,8 @@ class DocumentIndexProvider(ABC):
 
         Args:
             namespace: Namespace to count documents for
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Dictionary with:
@@ -991,7 +1148,8 @@ class DocumentIndexProvider(ABC):
         source_path: str | None = None,
         file_size: int | None = None,
         file_modified_at: str | None = None,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
+        context: "RequestContext | None" = None
     ) -> bool:
         """
         Atomically reserve a document identifier.
@@ -1007,6 +1165,9 @@ class DocumentIndexProvider(ABC):
         - Compute identifier using _compute_identifier() logic
         - Store pending reservation with status="pending"
         - On conflict, return False (identifier already reserved)
+
+        context: optional request context (caller identity); implementations
+            may scope behavior on it, core providers ignore it.
         """
         pass
 
@@ -1016,7 +1177,8 @@ class DocumentIndexProvider(ABC):
         content_hash: str,
         filename: str,
         namespace: str,
-        source_path: str | None = None
+        source_path: str | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any] | None:
         """
         Retrieve document by identifier (strongly consistent).
@@ -1041,6 +1203,9 @@ class DocumentIndexProvider(ABC):
             "ingested_at": str,
             "version": int,
         }
+
+        context: optional request context (caller identity); implementations
+            may scope behavior on it, core providers ignore it.
         """
         pass
 
@@ -1049,6 +1214,7 @@ class DocumentIndexProvider(ABC):
         namespace: str,
         source_path: str | None = None,
         filename: str | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any] | None:
         """
         Find active document by source_path or filename.
@@ -1063,6 +1229,8 @@ class DocumentIndexProvider(ABC):
             namespace: Namespace to search in
             source_path: Source path from CLI ingestion (preferred identifier)
             filename: Fallback filename for web uploads
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         Returns:
             Document metadata if found and active, None otherwise:
@@ -1083,6 +1251,7 @@ class DocumentIndexProvider(ABC):
             filename=filename or "",
             namespace=namespace,
             source_path=source_path,
+            context=context,
         )
 
     @abstractmethod
@@ -1093,12 +1262,16 @@ class DocumentIndexProvider(ABC):
         namespace: str,
         doc_id: str,
         chunk_count: int,
-        source_path: str | None = None
+        source_path: str | None = None,
+        context: "RequestContext | None" = None
     ) -> None:
         """
         Mark identifier reservation as complete after successful ingestion.
 
         Updates reservation status from "pending" to "complete".
+
+        context: optional request context (caller identity); implementations
+            may scope behavior on it, core providers ignore it.
         """
         pass
 
@@ -1108,12 +1281,16 @@ class DocumentIndexProvider(ABC):
         content_hash: str,
         filename: str,
         namespace: str,
-        source_path: str | None = None
+        source_path: str | None = None,
+        context: "RequestContext | None" = None
     ) -> None:
         """
         Release identifier reservation on ingestion failure (cleanup).
 
         Deletes the pending reservation to allow retries.
+
+        context: optional request context (caller identity); implementations
+            may scope behavior on it, core providers ignore it.
         """
         pass
 
@@ -1125,7 +1302,8 @@ class DocumentIndexProvider(ABC):
         doc_id: str,
         namespace: str,
         deleted_by: str | None = None,
-        delete_reason: str = "user_initiated"
+        delete_reason: str = "user_initiated",
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Soft delete document (move to trash).
@@ -1149,6 +1327,9 @@ class DocumentIndexProvider(ABC):
             "deleted_at": str (ISO8601),
             "purge_after": str (ISO8601, deleted_at + 30 days),
         }
+
+        context: optional request context (caller identity); implementations
+            may scope behavior on it, core providers ignore it.
         """
         pass
 
@@ -1158,7 +1339,8 @@ class DocumentIndexProvider(ABC):
         doc_id: str,
         namespace: str,
         deleted_at_ms: int,  # NEW: identifies specific trash entry
-        restored_by: str | None = None
+        restored_by: str | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Restore document from trash.
@@ -1168,6 +1350,8 @@ class DocumentIndexProvider(ABC):
             namespace: Document namespace
             deleted_at_ms: Timestamp (milliseconds) from trash entry PK
             restored_by: User ID who restored
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         **Atomicity Recommendation**: Use transactions to:
         1. Update document status from "deleting" to "active"
@@ -1190,7 +1374,8 @@ class DocumentIndexProvider(ABC):
         self,
         namespace: str | None = None,
         limit: int = 50,
-        next_key: str | None = None
+        next_key: str | None = None,
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         List documents in trash.
@@ -1218,6 +1403,9 @@ class DocumentIndexProvider(ABC):
             ],
             "next_key": str | None,
         }
+
+        context: optional request context (caller identity); implementations
+            may scope behavior on it, core providers ignore it.
         """
         pass
 
@@ -1228,7 +1416,8 @@ class DocumentIndexProvider(ABC):
         namespace: str,
         deleted_at_ms: int,  # NEW: identifies specific trash entry
         deleted_by: str | None = None,
-        filename: str | None = None,  # Filename from trash entry (ensures correct trash PK)
+        filename: str | None = None,  # Filename from trash entry (ensures correct trash PK),
+        context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
         Permanently delete document from trash (triggers vector cleanup).
@@ -1241,6 +1430,8 @@ class DocumentIndexProvider(ABC):
             deleted_at_ms: Timestamp (milliseconds) from trash entry
             deleted_by: User ID who initiated permanent delete
             filename: Filename from trash entry (uses doc metadata if not provided)
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
 
         **Returns**:
         {
@@ -1259,7 +1450,8 @@ class DocumentIndexProvider(ABC):
         doc_id: str,
         namespace: str,
         deleted_at_ms: int,  # NEW: identifies specific trash entry
-        filename: str,  # NEW: required for providers that use filename in trash PK
+        filename: str,  # NEW: required for providers that use filename in trash PK,
+        context: "RequestContext | None" = None
     ) -> None:
         """
         Complete permanent delete after vector cleanup succeeds.
@@ -1271,11 +1463,13 @@ class DocumentIndexProvider(ABC):
             namespace: Document namespace
             deleted_at_ms: Deletion timestamp (for trash entry identification)
             filename: Document filename (required for providers using filename in trash PK)
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
         """
         pass
 
     @abstractmethod
-    def list_cleanup_jobs(self, limit: int = 10) -> list[dict[str, Any]]:
+    def list_cleanup_jobs(self, limit: int = 10, context: "RequestContext | None" = None) -> list[dict[str, Any]]:
         """
         List pending cleanup jobs for background worker.
 
@@ -1292,16 +1486,21 @@ class DocumentIndexProvider(ABC):
                 "max_retries": int,
             }
         ]
+
+        context: optional request context (caller identity); implementations
+            may scope behavior on it, core providers ignore it.
         """
         pass
 
     @abstractmethod
-    def delete_cleanup_job(self, cleanup_job_id: str) -> None:
+    def delete_cleanup_job(self, cleanup_job_id: str, context: "RequestContext | None" = None) -> None:
         """
         Delete completed cleanup job.
 
         Args:
             cleanup_job_id: Cleanup job ID to delete
+            context: optional request context (caller identity); implementations
+                may scope behavior on it, core providers ignore it.
         """
         pass
 
@@ -1309,17 +1508,21 @@ class DocumentIndexProvider(ABC):
     def mark_cleanup_job_failed(
         self,
         cleanup_job_id: str,
-        error: str
+        error: str,
+        context: "RequestContext | None" = None
     ) -> None:
         """
         Mark cleanup job as failed (increments retry count or moves to DLQ).
 
         If retry_count >= max_retries, move to DLQ for manual intervention.
+
+        context: optional request context (caller identity); implementations
+            may scope behavior on it, core providers ignore it.
         """
         pass
 
     @abstractmethod
-    def list_expired_trash(self, limit: int = 100) -> list[dict[str, Any]]:
+    def list_expired_trash(self, limit: int = 100, context: "RequestContext | None" = None) -> list[dict[str, Any]]:
         """
         List trash entries past their purge_after date (for scheduled cleanup).
 
@@ -1332,6 +1535,9 @@ class DocumentIndexProvider(ABC):
                 "purge_after": str (ISO8601),
             }
         ]
+
+        context: optional request context (caller identity); implementations
+            may scope behavior on it, core providers ignore it.
         """
         pass
 

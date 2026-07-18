@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Optional
 
+from stache_ai.identity import Principal
+
 
 class IngestTextTooLargeError(ValueError):
     """Raised when submitted text exceeds ``max_ingest_text_bytes``.
@@ -91,6 +93,11 @@ class IntakeTicket:
     upload_url: Optional[str] = None       # None => inline (bytes already delivered)
     required_headers: dict = field(default_factory=dict)
     expires_at: Optional[str] = None
+    # The storage key the bytes will land at, computed ONCE by the intake via
+    # BlobStore.make_key. The caller records it as job.blob_key so the two never
+    # disagree (a mismatch would guarantee a FAILED job); the worker inverts it
+    # with BlobStore.parse_job_id. None for inline tickets that carry no upload.
+    blob_key: Optional[str] = None
 
 
 @dataclass
@@ -103,6 +110,30 @@ class JobEvent:
 
 
 class BlobStore(ABC):
+    def make_key(self, job_id: str, filename: str, *,
+                 principal: Optional[Principal] = None) -> str:
+        """Compose the storage key for a job's original blob.
+
+        Overridable seam: deployment-specific stores may prefix keys (e.g. for
+        per-prefix IAM policies or retention rules) using the opaque principal.
+
+        MUST be pure and deterministic in (job_id, filename, principal): the
+        async worker recovers job_id by inverting this via ``parse_job_id``, and
+        an override that prefixes keys MUST override ``parse_job_id`` to match.
+        """
+        return f"{job_id}/{filename}"
+
+    def parse_job_id(self, key: str) -> str:
+        """Recover the job_id from a storage key -- the inverse of ``make_key``.
+
+        The async ingestion path (an object-created event) knows only the key
+        the bytes landed at; this returns the job it belongs to. The default
+        pairs with the default ``make_key`` (``"{job_id}/{filename}"``). A store
+        that overrides ``make_key`` to prefix keys MUST override this too so the
+        round-trip ``parse_job_id(make_key(job_id, f)) == job_id`` holds.
+        """
+        return key.split("/")[0]
+
     @abstractmethod
     def put(self, key: str, data: bytes, metadata: dict) -> str: ...
 
@@ -125,7 +156,10 @@ class JobStore(ABC):
     max_inline_payload_bytes: "Optional[int]" = None
 
     @abstractmethod
-    def create(self, job: Job) -> None: ...
+    def create(self, job: Job, *, principal: Optional[Principal] = None) -> None:
+        """Persist a new job. ``principal`` is the opaque caller identity; the
+        OSS stores ignore it, deployment-specific stores may scope storage
+        keys/attributes from it."""
 
     @abstractmethod
     def update(self, job_id: str, **fields) -> Job: ...
@@ -136,7 +170,36 @@ class JobStore(ABC):
     @abstractmethod
     def list(self, *, requested_by: Optional[str] = None,
              status: Optional[JobStatus] = None, limit: int = 50,
-             cursor: Optional[str] = None) -> tuple[list[Job], Optional[str]]: ...
+             cursor: Optional[str] = None,
+             principal: Optional[Principal] = None) -> tuple[list[Job], Optional[str]]: ...
+
+    def visible_to(self, job: Job, principal: Optional[Principal]) -> bool:
+        """Whether ``principal`` may read this job (single-job fetch scoping).
+
+        Default: the requester themselves. Deployment-specific stores may
+        tighten this from attributes they stamped at ``create`` time (the
+        caller treats an invisible job exactly like a missing one, so a
+        mismatch never leaks existence).
+        """
+        return principal is not None and job.requested_by == principal.user_id
+
+    def principal_for(self, job: Job) -> Principal:
+        """Reconstruct the acting principal for queued work on this job.
+
+        The worker re-checks authorization before processing (defense in
+        depth), which needs the caller's identity - not just the bare user id.
+        Default rebuilds an id-only principal; deployment-specific stores may
+        rehydrate claims from attributes they stamped at ``create`` time.
+
+        OVERRIDE OBLIGATION (frozen ABI): a deployment whose authorizer keys on
+        CLAIMS (roles/orgs/plans) MUST override this to restore those claims
+        from the persisted job. The default returns an id-only principal with
+        an EMPTY claims dict, so an intake decision that passed on the caller's
+        claims would be re-evaluated here against no claims and diverge from
+        intake (typically fail-closed, stalling the job). Overriding it is the
+        only way to keep the worker's re-check consistent with intake.
+        """
+        return Principal(user_id=job.requested_by)
 
     def claim(self, job_id: str, *, from_statuses: "set[JobStatus]",
               to_status: "JobStatus" = None) -> bool:
@@ -181,4 +244,5 @@ class IntakeProvider(ABC):
     @abstractmethod
     def begin(self, *, job_id: str, filename: str, namespace: str,
               content_type: str, size: int, requested_by: str,
-              metadata: dict) -> IntakeTicket: ...
+              metadata: dict,
+              principal: Optional[Principal] = None) -> IntakeTicket: ...

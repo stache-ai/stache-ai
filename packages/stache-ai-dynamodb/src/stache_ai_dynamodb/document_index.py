@@ -14,6 +14,17 @@ from . import sanitize_for_dynamodb
 
 logger = logging.getLogger(__name__)
 
+
+def _esc(component) -> str:
+    """Escape the '#' key delimiter in user-controlled key components (S5).
+
+    Namespace, filename, and source_path come from callers; an embedded '#'
+    would otherwise let one (namespace, filename) pair forge the composite
+    key of another document or trash entry. '%' is escaped first so the
+    encoding is unambiguous and reversible.
+    """
+    return str(component).replace("%", "%25").replace("#", "%23")
+
 """Document status values."""
 DOC_STATUS_ACTIVE = "active"
 DOC_STATUS_DELETING = "deleting"
@@ -95,7 +106,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         Returns:
             Primary key in format: DOC#{namespace}#{doc_id}
         """
-        return f"DOC#{namespace}#{doc_id}"
+        return f"DOC#{_esc(namespace)}#{doc_id}"
 
     def _make_gsi1pk(self, namespace: str) -> str:
         """Create GSI1 partition key for namespace queries
@@ -106,7 +117,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         Returns:
             GSI1 partition key in format: NAMESPACE#{namespace}
         """
-        return f"NAMESPACE#{namespace}"
+        return f"NAMESPACE#{_esc(namespace)}"
 
     def _make_gsi1sk(self, timestamp: str) -> str:
         """Create GSI1 sort key using timestamp
@@ -134,7 +145,11 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             GSI2 partition key in format: FILENAME#{namespace}#{source_path_or_filename}
         """
         identifier = source_path if source_path else filename
-        return f"FILENAME#{namespace}#{identifier}"
+        return f"FILENAME#{_esc(namespace)}#{_esc(identifier)}"
+
+    def _make_trash_pk(self, namespace: str, filename: str, deleted_at_ms) -> str:
+        """Create the unique trash-entry primary key (escaped, S5)."""
+        return f"TRASH#{_esc(namespace)}#{_esc(filename)}#{deleted_at_ms}"
 
     def create_document(
         self,
@@ -151,6 +166,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         source_path: Optional[str] = None,
         content_hash: Optional[str] = None,
         chunk_count: Optional[int] = None,
+        context=None
     ) -> Dict[str, Any]:
         """Create document index entry with active status by default
 
@@ -227,7 +243,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
     def get_document(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> Optional[Dict[str, Any]]:
         """Retrieve a document by ID
 
@@ -261,7 +278,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         self,
         namespace: Optional[str] = None,
         limit: int = 100,
-        last_evaluated_key: Optional[Dict[str, Any]] = None
+        last_evaluated_key: Optional[Dict[str, Any]] = None,
+        context=None
     ) -> Dict[str, Any]:
         """List documents with pagination support
 
@@ -334,7 +352,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
     def delete_document(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> bool:
         """Delete a document index entry
 
@@ -370,7 +389,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         summary: str,
         summary_embedding_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> bool:
         """Update the summary and summary embedding ID for a document
 
@@ -412,7 +432,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         self,
         doc_id: str,
         namespace: str,
-        updates: dict[str, Any]
+        updates: dict[str, Any],
+        context=None
     ) -> bool:
         """Update document metadata atomically in DynamoDB
 
@@ -430,16 +451,18 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
 
         # Special case: namespace migration requires PK change (delete + recreate)
         if "namespace" in updates:
-            return self._migrate_namespace(doc_id, namespace, updates)
+            return self._migrate_namespace(doc_id, namespace, updates, context=context)
 
         # Standard update: use UpdateExpression for atomic updates
-        return self._update_in_place(doc_id, namespace, updates)
+        return self._update_in_place(doc_id, namespace, updates, context=context)
 
     def _migrate_namespace(
         self,
         doc_id: str,
         old_namespace: str,
-        updates: dict[str, Any]
+        updates: dict[str, Any],
+        *,
+        context=None
     ) -> bool:
         """Migrate document to new namespace using atomic DynamoDB transaction.
 
@@ -492,8 +515,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 **item,
                 "PK": {"S": new_pk},
                 "namespace": {"S": new_namespace},
-                "GSI1PK": {"S": f"NAMESPACE#{new_namespace}"},
-                "GSI2PK": {"S": f"FILENAME#{new_namespace}#{filename}"},
+                "GSI1PK": {"S": self._make_gsi1pk(new_namespace)},
+                "GSI2PK": {"S": self._make_gsi2pk(new_namespace, filename)},
                 "filename": {"S": filename},
             }
 
@@ -540,7 +563,9 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         self,
         doc_id: str,
         namespace: str,
-        updates: dict[str, Any]
+        updates: dict[str, Any],
+        *,
+        context=None
     ) -> bool:
         """Update document fields in-place using UpdateExpression"""
         update_parts = []
@@ -550,7 +575,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             update_parts.append("filename = :filename")
             update_parts.append("GSI2PK = :gsi2pk")  # Must update GSI2PK too
             attr_values[":filename"] = updates["filename"]
-            attr_values[":gsi2pk"] = f"FILENAME#{namespace}#{updates['filename']}"
+            attr_values[":gsi2pk"] = self._make_gsi2pk(namespace, updates['filename'])
 
         if "metadata" in updates:
             update_parts.append("metadata = :metadata")
@@ -579,7 +604,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
     def get_chunk_ids(
         self,
         doc_id: str,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        context=None
     ) -> List[str]:
         """Retrieve all chunk IDs for a document
 
@@ -591,7 +617,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             List of chunk IDs from the vector database
         """
         try:
-            doc = self.get_document(doc_id, namespace)
+            doc = self.get_document(doc_id, namespace, context=context)
             if doc:
                 return doc.get('chunk_ids', [])
             return []
@@ -602,7 +628,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
     def document_exists(
         self,
         filename: str,
-        namespace: str
+        namespace: str,
+        context=None
     ) -> bool:
         """Check if a document with the given filename already exists in namespace
 
@@ -632,6 +659,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         namespace: str,
         source_path: str | None = None,
         filename: str | None = None,
+        context=None
     ) -> Optional[Dict[str, Any]]:
         """Find active document by source_path or filename using GSI2.
 
@@ -682,7 +710,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             logger.error(f"Failed to lookup document by source_path {identifier}: {e}")
             return None
 
-    def count_by_namespace(self, namespace: str) -> dict[str, int]:
+    def count_by_namespace(self, namespace: str, context=None) -> dict[str, int]:
         """Get document and chunk counts for a namespace
 
         Uses GSI1 to efficiently query all documents in a namespace
@@ -754,9 +782,9 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         Returns: (identifier_pk, identifier_type)
         """
         if source_path and not source_path.startswith("/tmp"):
-            return f"SOURCE#{namespace}#{source_path}", "source_path"
+            return f"SOURCE#{_esc(namespace)}#{_esc(source_path)}", "source_path"
         else:
-            return f"HASH#{namespace}#{content_hash}#{filename}", "fingerprint"
+            return f"HASH#{_esc(namespace)}#{content_hash}#{_esc(filename)}", "fingerprint"
 
     def reserve_identifier(
         self,
@@ -767,7 +795,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         source_path: Optional[str] = None,
         file_size: Optional[int] = None,
         file_modified_at: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        context=None
     ) -> bool:
         """Atomically reserve identifier using DynamoDB conditional put.
 
@@ -823,7 +852,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         content_hash: str,
         filename: str,
         namespace: str,
-        source_path: Optional[str] = None
+        source_path: Optional[str] = None,
+        context=None
     ) -> Optional[Dict[str, Any]]:
         """Retrieve document by identifier (strongly consistent read).
 
@@ -873,7 +903,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         namespace: str,
         doc_id: str,
         chunk_count: int,
-        source_path: Optional[str] = None
+        source_path: Optional[str] = None,
+        context=None
     ) -> None:
         """Mark identifier reservation as complete.
 
@@ -908,7 +939,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         content_hash: str,
         filename: str,
         namespace: str,
-        source_path: Optional[str] = None
+        source_path: Optional[str] = None,
+        context=None
     ) -> None:
         """Release identifier reservation on failure.
 
@@ -934,7 +966,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         namespace: str,
         deleted_by: Optional[str] = None,
-        delete_reason: str = "user_initiated"
+        delete_reason: str = "user_initiated",
+        context=None
     ) -> Dict[str, Any]:
         """
         Soft delete using DynamoDB transaction (atomic).
@@ -959,7 +992,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         # Get document metadata first
         response = self.table.get_item(
             Key={
-                "PK": f"DOC#{namespace}#{doc_id}",
+                "PK": self._make_pk(namespace, doc_id),
                 "SK": "METADATA"
             }
         )
@@ -1009,7 +1042,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Update": {
                             "TableName": self.table.name,
                             "Key": {
-                                "PK": {"S": f"DOC#{namespace}#{doc_id}"},
+                                "PK": {"S": self._make_pk(namespace, doc_id)},
                                 "SK": {"S": "METADATA"}
                             },
                             "UpdateExpression": "SET " + ", ".join(update_expr_parts),
@@ -1026,7 +1059,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Put": {
                             "TableName": self.table.name,
                             "Item": {
-                                "PK": {"S": f"TRASH#{namespace}#{filename}#{deleted_at_ms}"},
+                                "PK": {"S": self._make_trash_pk(namespace, filename, deleted_at_ms)},
                                 "SK": {"S": "ENTRY"},
                                 "doc_id": {"S": doc_id},
                                 "namespace": {"S": namespace},
@@ -1076,7 +1109,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         doc_id: str,
         namespace: str,
         deleted_at_ms: int,
-        restored_by: Optional[str] = None
+        restored_by: Optional[str] = None,
+        context=None
     ) -> Dict[str, Any]:
         """
         Restore document from trash using DynamoDB transaction.
@@ -1095,7 +1129,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         # Get document metadata
         response = self.table.get_item(
             Key={
-                "PK": f"DOC#{namespace}#{doc_id}",
+                "PK": self._make_pk(namespace, doc_id),
                 "SK": "METADATA"
             }
         )
@@ -1160,7 +1194,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Update": {
                             "TableName": self.table.name,
                             "Key": {
-                                "PK": {"S": f"DOC#{namespace}#{doc_id}"},
+                                "PK": {"S": self._make_pk(namespace, doc_id)},
                                 "SK": {"S": "METADATA"}
                             },
                             "UpdateExpression": (
@@ -1179,7 +1213,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Delete": {
                             "TableName": self.table.name,
                             "Key": {
-                                "PK": {"S": f"TRASH#{namespace}#{filename}#{deleted_at_ms}"},
+                                "PK": {"S": self._make_trash_pk(namespace, filename, deleted_at_ms)},
                                 "SK": {"S": "ENTRY"}
                             }
                         }
@@ -1227,7 +1261,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         self,
         namespace: Optional[str] = None,
         limit: int = 50,
-        next_key: Optional[str] = None
+        next_key: Optional[str] = None,
+        context=None
     ) -> Dict[str, Any]:
         """List trash entries using GSI1.
 
@@ -1319,6 +1354,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         deleted_at_ms: int,
         deleted_by: Optional[str] = None,
         filename: Optional[str] = None,
+        context=None
     ) -> Dict[str, Any]:
         """Create cleanup job for permanent deletion.
 
@@ -1338,7 +1374,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         # Get document metadata
         response = self.table.get_item(
             Key={
-                "PK": f"DOC#{namespace}#{doc_id}",
+                "PK": self._make_pk(namespace, doc_id),
                 "SK": "METADATA"
             }
         )
@@ -1391,7 +1427,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                     "Update": {
                         "TableName": self.table.name,
                         "Key": {
-                            "PK": {"S": f"DOC#{namespace}#{doc_id}"},
+                            "PK": {"S": self._make_pk(namespace, doc_id)},
                             "SK": {"S": "METADATA"}
                         },
                         "UpdateExpression": "SET #status = :purging, purge_started_at = :now, cleanup_job_id = :job_id",
@@ -1431,7 +1467,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                     "Delete": {
                         "TableName": self.table.name,
                         "Key": {
-                            "PK": {"S": f"TRASH#{namespace}#{trash_filename}#{deleted_at_ms}"},
+                            "PK": {"S": self._make_trash_pk(namespace, trash_filename, deleted_at_ms)},
                             "SK": {"S": "ENTRY"}
                         }
                     }
@@ -1464,6 +1500,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         namespace: str,
         deleted_at_ms: int,
         filename: str,
+        context=None
     ) -> None:
         """Complete permanent delete after vectors cleaned up.
 
@@ -1484,7 +1521,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Update": {
                             "TableName": self.table.name,
                             "Key": {
-                                "PK": {"S": f"DOC#{namespace}#{doc_id}"},
+                                "PK": {"S": self._make_pk(namespace, doc_id)},
                                 "SK": {"S": "METADATA"}
                             },
                             "UpdateExpression": (
@@ -1504,7 +1541,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                         "Delete": {
                             "TableName": self.table.name,
                             "Key": {
-                                "PK": {"S": f"TRASH#{namespace}#{filename}#{deleted_at_ms}"},
+                                "PK": {"S": self._make_trash_pk(namespace, filename, deleted_at_ms)},
                                 "SK": {"S": "ENTRY"}
                             }
                         }
@@ -1519,7 +1556,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 extra={"doc_id": doc_id, "namespace": namespace}
             )
 
-    def list_cleanup_jobs(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def list_cleanup_jobs(self, limit: int = 10, context=None) -> List[Dict[str, Any]]:
         """List pending cleanup jobs.
 
         Args:
@@ -1565,7 +1602,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             for item in items[:limit]
         ]
 
-    def delete_cleanup_job(self, cleanup_job_id: str) -> None:
+    def delete_cleanup_job(self, cleanup_job_id: str, context=None) -> None:
         """Delete completed cleanup job.
 
         Args:
@@ -1579,7 +1616,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         )
         logger.debug(f"Deleted cleanup job: {cleanup_job_id}")
 
-    def mark_cleanup_job_failed(self, cleanup_job_id: str, error: str) -> None:
+    def mark_cleanup_job_failed(self, cleanup_job_id: str, error: str, context=None) -> None:
         """Increment retry count or move to DLQ.
 
         Args:
@@ -1623,7 +1660,7 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
                 }
             )
 
-    def list_expired_trash(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def list_expired_trash(self, limit: int = 100, context=None) -> List[Dict[str, Any]]:
         """List trash entries past purge_after date.
 
         Args:

@@ -5,6 +5,21 @@ All notable changes to stache-ai-dynamodb will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-04
+
+### Added
+
+- **`context=` parameter**: All `DynamoDBDocumentIndex` and namespace/jobstore methods accept an optional keyword-only `context` parameter (request context passed through from stache-ai's pipeline). This provider ignores it.
+- **`principal=` on `DynamoJobStore`**: `create()` and `list()` accept an optional `principal` kwarg (opaque caller identity); this provider ignores it.
+
+### Changed
+
+- **Key delimiter escaping**: Namespace, filename, and source-path components in composite `PK`/`GSI1PK`/`GSI2PK` keys (and the new trash entry key, `_make_trash_pk`) now escape `#` and `%` before being joined. This closes a key-forgery hole where an embedded `#` in a caller-controlled value could make one document's key collide with another's. Plain identifiers with no `#` or `%` are unaffected and require no migration. Existing rows whose namespace or filename already contain a raw `#` or `%` will compute a different key going forward than the one under which they were originally stored — back up/re-key affected rows before upgrading if you have any.
+
+### Requires
+
+- `stache-ai>=0.3.0`
+
 ## [0.1.3] - 2026-01-26
 
 ### Added

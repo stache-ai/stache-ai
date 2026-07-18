@@ -857,3 +857,38 @@ class TestIntegrationScenarios:
         assert result1["documents"] == ns1_docs
         assert result2["documents"] == ns2_docs
         assert table.query.call_count == 2
+
+
+class TestKeyDelimiterEscaping:
+    """S5: '#' in caller-controlled components must not forge composite keys."""
+
+    def test_esc_roundtrip_distinct(self):
+        from stache_ai_dynamodb.document_index import _esc
+
+        # The classic collision: ("a#b", "c") vs ("a", "b#c") must differ.
+        assert _esc("a#b") + "#" + _esc("c") != _esc("a") + "#" + _esc("b#c")
+        # Escape char itself is escaped first (unambiguous encoding).
+        assert _esc("100%#x") == "100%25%23x"
+        # Plain names unchanged (no data migration for normal keys).
+        assert _esc("docs") == "docs"
+        assert _esc("report.pdf") == "report.pdf"
+
+    def test_forged_namespace_cannot_hit_other_doc_pk(self):
+        from unittest.mock import MagicMock
+
+        from stache_ai_dynamodb.document_index import DynamoDBDocumentIndex
+
+        idx = object.__new__(DynamoDBDocumentIndex)  # skip boto3 init
+        victim = idx._make_pk("team-a", "doc-1")
+        # Attacker controls namespace; tries to smuggle the victim's prefix.
+        forged = idx._make_pk("team-a#doc-1", "x")
+        assert not forged.startswith(victim + "#")
+        assert victim != forged
+
+    def test_trash_key_uses_escaped_components(self):
+        from stache_ai_dynamodb.document_index import DynamoDBDocumentIndex
+
+        idx = object.__new__(DynamoDBDocumentIndex)
+        a = idx._make_trash_pk("ns", "file#1699.pdf", 1700)
+        b = idx._make_trash_pk("ns", "file", "1699.pdf#1700")
+        assert a != b

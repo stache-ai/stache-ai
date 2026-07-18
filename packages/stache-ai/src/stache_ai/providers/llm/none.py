@@ -22,7 +22,9 @@ class NoneLLMProvider(LLMProvider):
             "or use the fallback provider for local development."
         )
 
-    def generate_with_context(self, query: str, context: list[dict]) -> str:
+    def generate_with_context(
+        self, query: str, context: list[dict], *, request_context=None, **kwargs
+    ) -> str:
         raise NotImplementedError(
             "LLM synthesis is not available (llm_provider='none'). "
             "To use synthesis, configure an LLM provider (bedrock, ollama, etc.) "
@@ -30,7 +32,7 @@ class NoneLLMProvider(LLMProvider):
         )
 
     def generate_with_context_and_model(
-        self, query: str, context: list[dict], model: str
+        self, query: str, context: list[dict], model: str = None, *, request_context=None, **kwargs
     ) -> str:
         raise NotImplementedError(
             "LLM synthesis is not available (llm_provider='none'). "

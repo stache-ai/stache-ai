@@ -85,6 +85,8 @@ def test_s3_event_record_creates_producer_job(monkeypatch):
     monkeypatch.setattr(sqs_worker, "get_ingestion_service", lambda: service)
     # The prefix is read from this package's env-backed settings.
     monkeypatch.setenv("INGEST_BLOB_S3_PREFIX", "originals")
+    import stache_ai.config as cfg
+    monkeypatch.setattr(cfg, "settings", Settings(ingest_producer_drops_enabled=True))
 
     s3_body = json.dumps({
         "Records": [{
@@ -111,6 +113,8 @@ def test_producer_job_unquotes_encoded_filename(monkeypatch):
     # metadata; the producer path must unquote it back to the original name.
     import urllib.parse
 
+    import stache_ai.config as cfg
+
     original = "résumé.pdf"
     jobstore = EphemeralJobStore()
     blob = FakeBlobStore({
@@ -120,6 +124,7 @@ def test_producer_job_unquotes_encoded_filename(monkeypatch):
     service = _build_service(_mock_pipeline(), blobstore=blob, jobstore=jobstore)
     monkeypatch.setattr(sqs_worker, "get_ingestion_service", lambda: service)
     monkeypatch.setenv("INGEST_BLOB_S3_PREFIX", "originals")
+    monkeypatch.setattr(cfg, "settings", Settings(ingest_producer_drops_enabled=True))
 
     s3_body = json.dumps({"Records": [
         {"eventSource": "aws:s3", "s3": {"object": {"key": "originals/producers/enc.pdf"}}},
@@ -172,6 +177,8 @@ def test_two_s3_records_both_processed(monkeypatch):
     service = _build_service(_mock_pipeline(), blobstore=blob, jobstore=jobstore)
     monkeypatch.setattr(sqs_worker, "get_ingestion_service", lambda: service)
     monkeypatch.setenv("INGEST_BLOB_S3_PREFIX", "originals")
+    import stache_ai.config as cfg
+    monkeypatch.setattr(cfg, "settings", Settings(ingest_producer_drops_enabled=True))
 
     s3_body = json.dumps({"Records": [
         {"eventSource": "aws:s3", "s3": {"object": {"key": "originals/a/f1.pdf"}}},

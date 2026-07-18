@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai-ollama"
-version = "0.1.1"
+version = "0.2.0"
 readme = "README.md"
 description = "Ollama provider for Stache AI"
 requires-python = ">=3.10"
@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "stache-ai>=0.1.0,<1.0.0",
+    "stache-ai>=0.3.0,<1.0.0",
     "httpx>=0.25.0"
 ]
 

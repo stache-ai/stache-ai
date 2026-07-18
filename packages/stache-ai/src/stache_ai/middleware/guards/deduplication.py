@@ -53,13 +53,23 @@ class DeduplicationGuard(IngestGuard):
         hash_time = time.perf_counter() - start_time
 
         # Step 2: Check for existing document using GSI2 (source_path or filename)
-        filename = metadata.get("filename", "text")
         source_path = metadata.get("source_path")
+        filename = metadata.get("filename")
+
+        # Dedup needs a real identifier. Content that carries neither a
+        # source_path nor an explicit filename (an insight, a bare text
+        # capture) would otherwise fall back to a shared default and collide
+        # with every other identifier-less item in the namespace -- and the
+        # REINGEST_VERSION branch below would then SOFT-DELETE an unrelated
+        # document. Skip dedup entirely rather than key off a default.
+        if not source_path and not filename:
+            return GuardResult(action="allow")
 
         existing = document_index.get_document_by_source_path(
             namespace=context.namespace,
             source_path=source_path,
             filename=filename,
+            context=context,
         )
 
         lookup_time = time.perf_counter() - start_time - hash_time
@@ -111,7 +121,8 @@ class DeduplicationGuard(IngestGuard):
                     old_doc = document_index.soft_delete_document(
                         doc_id=existing["doc_id"],
                         namespace=context.namespace,
-                        delete_reason="reingest_version"
+                        delete_reason="reingest_version",
+                        context=context,
                     )
                     deleted_at_ms = old_doc.get("deleted_at_ms")
 
@@ -123,6 +134,7 @@ class DeduplicationGuard(IngestGuard):
                             ids=old_doc["chunk_ids"],
                             namespace=context.namespace,
                             status="deleting",
+                            context=context,
                         )
 
                     logger.info(

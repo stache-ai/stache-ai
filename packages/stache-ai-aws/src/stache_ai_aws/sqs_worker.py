@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 
+from stache_ai.identity import Principal, assert_can_write
 from stache_ai.ingestion.base import Job, JobStatus
 from stache_ai.ingestion.factory import get_ingestion_service
 
@@ -66,7 +67,10 @@ def _ingest_dropped_object(rec, service):
     full_key = urllib.parse.unquote_plus(rec["s3"]["object"]["key"])
     prefix = (AwsIngestSettings().ingest_blob_s3_prefix or "").strip("/")
     logical = full_key[len(prefix) + 1:] if prefix and full_key.startswith(prefix + "/") else full_key
-    job_id = logical.split("/")[0]                 # presign key = "{job_id}/{filename}"
+    # Invert make_key. Default is the "{job_id}/{filename}" split, so this is
+    # byte-identical for stock deployments; a store that prefixes keys overrides
+    # both make_key and parse_job_id, so a prefixed presign key still resolves.
+    job_id = service.blobstore.parse_job_id(logical)
 
     existing = service.jobstore.get(job_id)
     if existing is not None:
@@ -110,6 +114,16 @@ def _create_producer_job(rec, service, logical):
     # silently fall back to defaults (octet-stream / "producer").
     meta = {k.replace("-", "_"): v for k, v in raw.items()}
     now = datetime.now(timezone.utc).isoformat()
+    namespace = meta.get("namespace", settings.default_namespace)
+    requested_by = meta.get("requested_by", "producer")
+    # Authorization hook (S1): object metadata is producer-asserted, not verified
+    # identity. The bucket policy is the real boundary for this path; deployments
+    # needing verified callers should disable producer drops instead.
+    assert_can_write(Principal(user_id=requested_by), namespace)
+    logger.info(
+        f"[ingest] producer drop accepted: key={logical} namespace={namespace} "
+        f"requested_by={requested_by}"
+    )
     # The presign intake percent-encodes a non-ASCII filename before pinning it
     # into object metadata; unquote it back to the original here. A plain name
     # (no "%") is unchanged, so producer drops with unquoted names still work.
@@ -121,11 +135,11 @@ def _create_producer_job(rec, service, logical):
     job = Job(
         job_id=str(uuid.uuid4()),
         status=JobStatus.QUEUED,
-        namespace=meta.get("namespace", settings.default_namespace),
+        namespace=namespace,
         source="producer",
         filename=filename,
         content_type=meta.get("content_type", "application/octet-stream"),
-        requested_by=meta.get("requested_by", "producer"),
+        requested_by=requested_by,
         blob_key=logical,
         metadata={},
         created_at=now,

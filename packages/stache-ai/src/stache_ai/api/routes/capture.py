@@ -12,8 +12,10 @@ from pydantic import BaseModel, Field
 
 from stache_ai.api import auth
 from stache_ai.config import settings
+from stache_ai.identity import ForbiddenError, LimitExceededError
 from stache_ai.ingestion import IngestTextTooLargeError, JobStatus
 from stache_ai.ingestion.factory import get_ingestion_service
+from stache_ai.sanitize import strip_reserved_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -49,19 +51,24 @@ async def capture_thought(request: CaptureRequest, http_request: Request):
     - Optional namespace for multi-user/multi-project isolation
     - Optional AI-powered organization suggestions
     """
+    principal = auth.principal(http_request)
+    namespace = request.namespace or settings.default_namespace
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    # Capture flows through the same ingestion service + worker as /ingest, and
+    # the worker re-checks "ingest" (identity.assert_can_write). Enforce the
+    # SAME canonical write op here so a policy author granting "ingest" isn't
+    # surprised by a differently-named enforced op mid-request (AUTHZ F4/F5).
+    auth.authorize(http_request, "ingest", {"namespace": namespace})
+
     try:
         # Carry organization flags + prepend list as metadata for the pipeline.
-        metadata = dict(request.metadata or {})
+        metadata = strip_reserved_metadata(request.metadata)
         if request.suggest_organization:
             metadata["_suggest_organization"] = True
         if request.apply_suggestions:
             metadata["_apply_suggestions"] = True
         if request.prepend_metadata:
             metadata["_prepend_metadata"] = request.prepend_metadata
-
-        principal = auth.principal(http_request)
-        namespace = request.namespace or settings.default_namespace
-        auth.assert_can_write(principal, namespace)
 
         service = get_ingestion_service()
         job = await service.submit(
@@ -109,6 +116,10 @@ async def capture_thought(request: CaptureRequest, http_request: Request):
     except IngestTextTooLargeError as e:
         raise HTTPException(status_code=413, detail=str(e))
     except HTTPException:
+        raise
+    except ForbiddenError:
+        raise
+    except LimitExceededError:
         raise
     except Exception as e:
         logger.error(f"Capture failed: {e}")

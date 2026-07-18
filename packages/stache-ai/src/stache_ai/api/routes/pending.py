@@ -6,13 +6,17 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from stache_ai.api import auth
 from stache_ai.config import settings
+from stache_ai.identity import ForbiddenError, LimitExceededError
 from stache_ai.loaders import load_document
+from stache_ai.middleware.context import RequestContext
 from stache_ai.rag.pipeline import get_pipeline
+from stache_ai.sanitize import strip_reserved_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +49,14 @@ def get_queue_dir() -> Path:
 
 
 @router.get("/pending")
-async def list_pending() -> list[PendingItem]:
+async def list_pending(http_request: Request) -> list[PendingItem]:
     """List all pending items in the queue"""
+    # S1 enforcement (no namespace: items span namespaces until approved).
+    # Scope to the caller so a plugged authorizer CAN enforce per-item reads;
+    # true per-object isolation ALSO requires a partitioning queue/jobstore
+    # (the OSS queue is a shared directory, so the seam alone can't isolate).
+    auth.authorize(http_request, "read_pending", {"owner": auth.principal(http_request).user_id})
+
     queue_dir = get_queue_dir()
 
     if not queue_dir.exists():
@@ -68,8 +78,13 @@ async def list_pending() -> list[PendingItem]:
 
 
 @router.get("/pending/{item_id}")
-async def get_pending(item_id: str) -> PendingItem:
+async def get_pending(item_id: str, http_request: Request) -> PendingItem:
     """Get a specific pending item"""
+    # S1 enforcement (before the read: namespace isn't known until the file is
+    # loaded). Scope to the caller; per-object isolation also needs a
+    # partitioning queue/jobstore (see list_pending).
+    auth.authorize(http_request, "read_pending", {"owner": auth.principal(http_request).user_id})
+
     queue_dir = get_queue_dir()
     json_path = queue_dir / f"{item_id}.json"
 
@@ -83,8 +98,12 @@ async def get_pending(item_id: str) -> PendingItem:
 
 
 @router.get("/pending/{item_id}/thumbnail")
-async def get_thumbnail(item_id: str):
+async def get_thumbnail(item_id: str, http_request: Request):
     """Get the thumbnail image for a pending item"""
+    # S1 enforcement (no namespace: pending items aren't namespaced yet). Scope
+    # to the caller; per-object isolation also needs a partitioning queue.
+    auth.authorize(http_request, "read_pending", {"owner": auth.principal(http_request).user_id})
+
     queue_dir = get_queue_dir()
     thumb_path = queue_dir / f"{item_id}.jpg"
 
@@ -95,8 +114,12 @@ async def get_thumbnail(item_id: str):
 
 
 @router.get("/pending/{item_id}/pdf")
-async def get_pdf(item_id: str):
+async def get_pdf(item_id: str, http_request: Request):
     """Get the PDF file for a pending item"""
+    # S1 enforcement (no namespace: pending items aren't namespaced yet). Scope
+    # to the caller; per-object isolation also needs a partitioning queue.
+    auth.authorize(http_request, "read_pending", {"owner": auth.principal(http_request).user_id})
+
     queue_dir = get_queue_dir()
     pdf_path = queue_dir / f"{item_id}.pdf"
 
@@ -107,12 +130,15 @@ async def get_pdf(item_id: str):
 
 
 @router.post("/pending/{item_id}/approve")
-async def approve_pending(item_id: str, request: ApproveRequest):
+async def approve_pending(item_id: str, request: ApproveRequest, http_request: Request):
     """
     Approve a pending item and upload to stache
 
     This ingests the document with the provided metadata and removes it from the queue.
     """
+    # S1 enforcement: approval writes into the target namespace.
+    auth.authorize(http_request, "approve_pending", {"namespace": request.namespace})
+
     queue_dir = get_queue_dir()
     json_path = queue_dir / f"{item_id}.json"
     pdf_path = queue_dir / f"{item_id}.pdf"
@@ -131,8 +157,12 @@ async def approve_pending(item_id: str, request: ApproveRequest):
         # Load the PDF document
         text = load_document(str(pdf_path), f"{filename}.pdf")
 
-        # Prepare metadata
-        metadata = request.metadata or {}
+        # Prepare metadata. Approve is a web-originated ingress: strip caller
+        # -supplied reserved/control keys (and forgeable source-identity keys)
+        # so this path can't smuggle dedup/error-recovery state into the
+        # pipeline the way the other ingress points already prevent
+        # (SANITIZER F1).
+        metadata = strip_reserved_metadata(request.metadata)
         metadata["filename"] = f"{filename}.pdf"
 
         # Ingest into pipeline
@@ -142,6 +172,7 @@ async def approve_pending(item_id: str, request: ApproveRequest):
             metadata=metadata,
             chunking_strategy=request.chunking_strategy,
             namespace=request.namespace,
+            context=RequestContext.from_fastapi_request(http_request, request.namespace or ""),
             prepend_metadata=request.prepend_metadata
         )
 
@@ -169,18 +200,25 @@ async def approve_pending(item_id: str, request: ApproveRequest):
 
     except HTTPException:
         raise
+    except ForbiddenError:
+        raise
+    except LimitExceededError:
+        raise
     except Exception as e:
         logger.error(f"Failed to approve {item_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to approve pending item")
 
 
 @router.delete("/pending/{item_id}")
-async def delete_pending(item_id: str):
+async def delete_pending(item_id: str, http_request: Request):
     """
     Delete a pending item without uploading
 
     This removes the item from the queue entirely.
     """
+    # S1 enforcement (no namespace: the item was never assigned one).
+    auth.authorize(http_request, "reject_pending")
+
     queue_dir = get_queue_dir()
     json_path = queue_dir / f"{item_id}.json"
     pdf_path = queue_dir / f"{item_id}.pdf"

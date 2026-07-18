@@ -22,12 +22,15 @@ class S3PresignIntake(IntakeProvider):
 
     def begin(self, *, job_id: str, filename: str, namespace: str,
               content_type: str, size: int, requested_by: str,
-              metadata: dict) -> IntakeTicket:
+              metadata: dict, principal=None) -> IntakeTicket:
         # Sanitize to a basename (identical to factory.begin_upload) so a filename
         # containing "/" presigns the same key the worker later reads; a mismatch
         # between the ticket key and job.blob_key would guarantee a FAILED job.
+        # Compute the key ONCE here via the seam and hand it back in the ticket so
+        # the factory records the identical key -- the worker inverts it with
+        # BlobStore.parse_job_id, so a make_key override survives the round trip.
         safe_name = os.path.basename(filename) or "upload.bin"
-        key = f"{job_id}/{safe_name}"
+        key = self._blob.make_key(job_id, safe_name, principal=principal)
         # The pinned filename is folded into the SigV4 signature AND echoed back
         # by the browser on the PUT; browsers reject header values that aren't
         # ISO-8859-1 (fetch/XHR forbid them) and SigV4 metadata should be ASCII,
@@ -57,4 +60,5 @@ class S3PresignIntake(IntakeProvider):
             upload_url=url,
             required_headers=required_headers,
             expires_at=None,
+            blob_key=key,
         )

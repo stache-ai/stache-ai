@@ -72,11 +72,13 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         result = self._call_api([text])
         return result[0]
 
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str, *, context=None) -> List[float]:
         """Generate embedding for single text
 
         Args:
             text: Text to embed
+            context: optional request context (caller identity); keyword-only,
+                accepted and ignored.
 
         Returns:
             Embedding vector
@@ -157,11 +159,13 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
 
         return embeddings
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    def embed_batch(self, texts: List[str], *, context=None) -> List[List[float]]:
         """Generate embeddings for multiple texts with optional parallelization
 
         Args:
             texts: List of texts to embed
+            context: optional request context (caller identity); keyword-only,
+                accepted and ignored.
 
         Returns:
             List of embeddings (one per input text)

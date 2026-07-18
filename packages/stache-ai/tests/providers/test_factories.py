@@ -81,8 +81,8 @@ class TestRerankerProviderFactory:
 
         mock_class.assert_called_once_with(dedupe_threshold=0.95)
 
-    def test_cohere_fallback_to_simple(self):
-        """Should fallback to simple when Cohere API key not set"""
+    def test_cohere_without_key_is_fail_closed(self):
+        """Configured cohere with no API key must raise, not silently degrade."""
         mock_simple = MagicMock()
         RerankerProviderFactory.register('simple', mock_simple)
         RerankerProviderFactory.register('cohere', MagicMock())
@@ -92,9 +92,10 @@ class TestRerankerProviderFactory:
         settings.cohere_api_key = None
         settings.reranker_dedupe_threshold = 0.95
 
-        RerankerProviderFactory.create(settings)
+        with pytest.raises(ValueError, match="COHERE_API_KEY"):
+            RerankerProviderFactory.create(settings)
 
-        mock_simple.assert_called_once()
+        mock_simple.assert_not_called()
 
 
 class TestDocumentIndexProviderFactory:

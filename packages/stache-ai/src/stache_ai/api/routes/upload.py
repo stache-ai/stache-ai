@@ -4,9 +4,14 @@ import logging
 import os
 import tempfile
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from stache_ai.api import auth
+from stache_ai.config import settings
+from stache_ai.identity import ForbiddenError, LimitExceededError
+from stache_ai.middleware.context import RequestContext
+from stache_ai.sanitize import strip_reserved_metadata
 from stache_ai.rag.pipeline import get_pipeline
 from stache_ai.types import EmptyExtractionError
 
@@ -26,6 +31,7 @@ class BatchUploadResult(BaseModel):
 
 @router.post("/upload")
 async def upload_document(
+    http_request: Request,
     file: UploadFile = File(...),
     chunking_strategy: str = Form("auto"),
     metadata: dict | None = Form(None),
@@ -57,6 +63,9 @@ async def upload_document(
                       Example: "speaker,topic" with metadata {"speaker": "Dr. Anderson", "topic": "Faith"}
                       will prepend "Speaker: Dr. Anderson\nTopic: Faith\n\n" to each chunk.
     """
+    # S1 enforcement (before the broad try so a denial is a 403, not a 500).
+    auth.authorize(http_request, "upload", {"namespace": namespace or settings.default_namespace})
+
     try:
         # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
@@ -74,9 +83,10 @@ async def upload_document(
             pipeline = get_pipeline()
             result = await pipeline.ingest_file(
                 file_path=temp_path,
-                metadata={**(metadata or {}), "filename": file.filename},
+                metadata={**strip_reserved_metadata(metadata), "filename": file.filename},
                 chunking_strategy=chunking_strategy,
                 namespace=namespace,
+                context=RequestContext.from_fastapi_request(http_request, namespace or ""),
                 prepend_metadata=prepend_keys
             )
 
@@ -94,6 +104,10 @@ async def upload_document(
         # reason instead of a generic 500.
         logger.warning(f"Upload rejected (no extractable text): {file.filename}: {e}")
         raise HTTPException(status_code=422, detail=str(e))
+    except ForbiddenError:
+        raise
+    except LimitExceededError:
+        raise
     except Exception as e:
         logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -101,6 +115,7 @@ async def upload_document(
 
 @router.post("/upload/batch")
 async def batch_upload_documents(
+    http_request: Request,
     files: list[UploadFile] = File(...),
     chunking_strategy: str = Form("auto"),
     namespace: str | None = Form(None),
@@ -125,6 +140,9 @@ async def batch_upload_documents(
     Returns:
         Results for each file with success/failure status
     """
+    # S1 enforcement: authorize once for the whole batch.
+    auth.authorize(http_request, "upload", {"namespace": namespace or settings.default_namespace})
+
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
@@ -157,12 +175,13 @@ async def batch_upload_documents(
                 temp_path = temp_file.name
 
             # Use file-based ingestion with auto strategy selection
-            file_metadata = {**meta_dict, "filename": file.filename}
+            file_metadata = {**strip_reserved_metadata(meta_dict), "filename": file.filename}
             result = await pipeline.ingest_file(
                 file_path=temp_path,
                 metadata=file_metadata,
                 chunking_strategy=chunking_strategy,
                 namespace=namespace,
+                context=RequestContext.from_fastapi_request(http_request, namespace or ""),
                 prepend_metadata=prepend_keys
             )
 
@@ -176,6 +195,14 @@ async def batch_upload_documents(
 
             logger.info(f"Batch upload: {file.filename} - {result['chunks_created']} chunks (strategy: {result.get('chunking_strategy', 'unknown')})")
 
+        except ForbiddenError:
+            # An authorization denial applies to the whole request, not just
+            # this file - do not record it as a per-file failure and continue.
+            raise
+        except LimitExceededError:
+            # A limit rejection also applies to the whole request; surface it
+            # as 429 rather than recording a per-file failure.
+            raise
         except Exception as e:
             logger.error(f"Batch upload failed for {file.filename}: {e}")
             results.append(BatchUploadResult(

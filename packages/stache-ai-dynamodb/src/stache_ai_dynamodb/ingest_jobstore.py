@@ -78,7 +78,7 @@ class DynamoJobStore(JobStore):
         self._ddb = boto3.resource("dynamodb", region_name=config.aws_region)
         self._table = self._ddb.Table(self._table_name)
 
-    def create(self, job: Job) -> None:
+    def create(self, job: Job, *, principal=None) -> None:
         # Strip None / empty-string values: DynamoDB rejects empty strings and
         # there is no reason to persist absent optional fields.
         item = _todecimal(
@@ -158,7 +158,8 @@ class DynamoJobStore(JobStore):
         except Exception as e:
             raise ValueError("invalid cursor") from e
 
-    def list(self, *, requested_by=None, status=None, limit=50, cursor=None):
+    def list(self, *, requested_by=None, status=None, limit=50, cursor=None,
+             principal=None):
         kwargs = {"Limit": limit, "ScanIndexForward": False}
         if cursor:
             kwargs["ExclusiveStartKey"] = self._decode_cursor(cursor)

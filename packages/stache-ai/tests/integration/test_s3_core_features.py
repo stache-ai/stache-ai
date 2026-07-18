@@ -185,6 +185,16 @@ def s3_test_client(mock_s3_pipeline):
         setattr(mock_s3_pipeline, method,
                 AsyncMock(return_value=getattr(mock_s3_pipeline, method).return_value))
 
+    # Routes call context-aware pipeline operations; bind the real
+    # implementations so the mocked providers still receive the calls.
+    from stache_ai.rag.pipeline import RAGPipeline
+    for method in ("list_documents", "get_document_record", "get_document_chunks",
+                   "discover_documents", "soft_delete_document",
+                   "permanently_delete_document", "_hard_delete_document",
+                   "delete_documents_by_filename"):
+        setattr(mock_s3_pipeline, method,
+                getattr(RAGPipeline, method).__get__(mock_s3_pipeline))
+
     with patch('stache_ai.api.routes.query.get_pipeline', return_value=mock_s3_pipeline):
         with patch('stache_ai.rag.pipeline.get_pipeline', return_value=mock_s3_pipeline):
             with patch('stache_ai.api.routes.upload.get_pipeline', return_value=mock_s3_pipeline):

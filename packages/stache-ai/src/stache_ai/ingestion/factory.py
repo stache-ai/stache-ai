@@ -21,6 +21,8 @@ from typing import Optional
 
 from ..config import settings as global_settings
 from ..providers import plugin_loader
+from stache_ai.identity import Principal
+
 from .base import TERMINAL, IngestTextTooLargeError, IntakeTicket, Job, JobStatus
 from .providers.inline import (
     EphemeralJobStore,
@@ -39,6 +41,15 @@ logger = logging.getLogger(__name__)
 def _discover(group: str, name: str, config):
     cls = plugin_loader.get_provider_class(group, name)
     if not cls:
+        # A provider whose import failed is absent from the registry but is NOT
+        # unknown. Reporting it as unknown hides a broken install behind what
+        # looks like a config typo -- name the real cause instead.
+        exc = plugin_loader.get_load_failures(group).get(name)
+        if exc is not None:
+            raise ValueError(
+                f"Provider {name!r} (group {group!r}) failed to load: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
         avail = ", ".join(plugin_loader.get_available_providers(group)) or "none (check installed packages)"
         raise ValueError(f"Unknown ingestion {group} provider: {name!r}. Available: {avail}")
     return cls(config)
@@ -122,7 +133,7 @@ class IngestionService:
         *,
         namespace: str,
         content_type: str,
-        requested_by: str,
+        requested_by: "Principal | str",
         filename: Optional[str] = None,
         source: str = "api",
         metadata: Optional[dict] = None,
@@ -145,6 +156,7 @@ class IngestionService:
                         f"inline limit"
                     )
 
+        principal = Principal.of(requested_by)
         job_id = str(uuid.uuid4())
         md = dict(metadata or {})
         size = 0
@@ -156,8 +168,9 @@ class IngestionService:
             namespace=namespace,
             content_type=content_type,
             size=len(data) if data is not None else len(text or ""),
-            requested_by=requested_by,
+            requested_by=principal.user_id,
             metadata=md,
+            principal=principal,
         )
 
         if text is not None:
@@ -165,7 +178,8 @@ class IngestionService:
             md["_chunking"] = chunking_strategy
             size = len(text.encode("utf-8"))
         else:
-            blob_key = f"{job_id}/{filename or 'upload.bin'}"
+            blob_key = self.blobstore.make_key(
+                job_id, filename or "upload.bin", principal=principal)
             size = len(data)
 
         now = self._now()
@@ -176,7 +190,7 @@ class IngestionService:
             source=source,
             filename=filename or "text",
             content_type=content_type,
-            requested_by=requested_by,
+            requested_by=principal.user_id,
             size_bytes=size,
             blob_key=blob_key,
             metadata=md,
@@ -189,7 +203,7 @@ class IngestionService:
         # skips it, instead of racing the write and spawning a duplicate
         # "producer" job for the same object. The direct enqueue below is the
         # authoritative trigger for this path.
-        self.jobstore.create(job)
+        self.jobstore.create(job, principal=principal)
         if data is not None:
             self.blobstore.put(blob_key, data, {"filename": filename, "namespace": namespace})
         await self.queue.enqueue(job_id)   # inline tier: awaits the worker now
@@ -218,7 +232,7 @@ class IngestionService:
         *,
         namespace: str,
         content_type: str,
-        requested_by: str,
+        requested_by: "Principal | str",
         filename: str,
         source: str = "api",
         metadata: Optional[dict] = None,
@@ -226,9 +240,11 @@ class IngestionService:
         """Presigned-upload flow: create a job in UPLOADING, hand back an upload URL.
 
         Do NOT enqueue - the blob store's object-created event will, once bytes
-        land. The worker recovers ``job_id`` from the blob key, so ``blob_key``
-        MUST match the intake key convention ``f"{job_id}/{basename}"``.
+        land. The intake computes the storage key via ``make_key`` and returns it
+        in the ticket; we record that same key as ``blob_key`` and the worker
+        recovers ``job_id`` by inverting it with ``BlobStore.parse_job_id``.
         """
+        principal = Principal.of(requested_by)
         job_id = str(uuid.uuid4())
         md = dict(metadata or {})
         ticket = self.intake.begin(
@@ -237,8 +253,9 @@ class IngestionService:
             namespace=namespace,
             content_type=content_type,
             size=0,
-            requested_by=requested_by,
+            requested_by=principal.user_id,
             metadata=md,
+            principal=principal,
         )
         if not ticket.upload_url:
             raise ValueError("intake provider does not support presigned upload")
@@ -253,17 +270,34 @@ class IngestionService:
             source=source,
             filename=filename,
             content_type=content_type,
-            requested_by=requested_by,
-            blob_key=f"{job_id}/{safe_name}",
+            requested_by=principal.user_id,
+            # Single source of truth: the intake already computed the key via
+            # make_key and returned it. Record the identical key (fall back to
+            # the seam only if an intake omits it) so the two can never diverge.
+            blob_key=ticket.blob_key or self.blobstore.make_key(
+                job_id, safe_name, principal=principal),
             metadata=md,
             created_at=now,
             updated_at=now,
         )
-        self.jobstore.create(job)
+        self.jobstore.create(job, principal=principal)
         return job, ticket
 
-    def get_job(self, job_id: str) -> Optional[Job]:
-        return self.jobstore.get(job_id)
+    def get_job(self, job_id: str, *,
+                principal: Optional[Principal] = None) -> Optional[Job]:
+        """Fetch a job. When ``principal`` is given, an invisible job is
+        indistinguishable from a missing one (no existence leak).
+
+        Scoping is OPT-IN on ``principal``: with ``principal=None`` (internal
+        callers - the worker, reapers) the raw job is returned with NO
+        visibility check. Per-object read isolation therefore holds only when
+        the caller passes the request principal AND the jobstore overrides
+        ``visible_to`` (the OSS default scopes to ``requested_by`` only)."""
+        job = self.jobstore.get(job_id)
+        if principal is not None and job is not None \
+                and not self.jobstore.visible_to(job, principal):
+            return None
+        return job
 
     def list_jobs(
         self,
@@ -272,9 +306,11 @@ class IngestionService:
         status: Optional[JobStatus] = None,
         limit: int = 50,
         cursor: Optional[str] = None,
+        principal: Optional[Principal] = None,
     ) -> tuple[list[Job], Optional[str]]:
         return self.jobstore.list(
-            requested_by=requested_by, status=status, limit=limit, cursor=cursor
+            requested_by=requested_by, status=status, limit=limit, cursor=cursor,
+            principal=principal,
         )
 
 

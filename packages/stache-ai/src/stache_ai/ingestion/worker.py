@@ -13,6 +13,10 @@ import tempfile
 import traceback
 from datetime import datetime, timezone
 
+from stache_ai.identity import assert_can_write
+from stache_ai.middleware.context import RequestContext
+from stache_ai.sanitize import is_reserved_metadata_key
+
 from .base import JobEvent, JobStatus, strip_transport
 
 logger = logging.getLogger(__name__)
@@ -39,8 +43,36 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
             return
         notifier.publish(JobEvent(job_id, JobStatus.PROCESSING, job.requested_by, job.namespace))
         try:
-            # Strip transport-only keys before they reach enrichers / vector store.
-            md = strip_transport(job.metadata)
+            # Defense-in-depth re-check (S1): the worker consumes from a queue
+            # anything can write to; do not trust that intake already checked.
+            # The jobstore reconstructs the acting principal (deployment stores
+            # may rehydrate claims they stamped at create time) so a plugged
+            # authorizer sees the same identity the original caller carried.
+            principal = jobstore.principal_for(job)
+            assert_can_write(principal, job.namespace)
+            # Identity + job travel with the pipeline call so middleware and
+            # providers see who this work belongs to (context.custom is the
+            # opaque extension surface; the core attaches no meaning to it).
+            context = RequestContext(
+                request_id=job.job_id,
+                timestamp=datetime.now(timezone.utc),
+                namespace=job.namespace,
+                user_id=job.requested_by,
+                source="worker",
+                custom={"ingest_job": job, "principal": principal},
+            )
+            # Strip every reserved key before it reaches enrichers / the vector
+            # store - not just the transport keys. Uses the SAME reserved-key
+            # predicate as the API sanitizer (sanitize.is_reserved_metadata_key)
+            # so "reserved" has one definition: underscore-prefixed keys plus
+            # ``content_hash``. Deployment stores stamp server-set state (dedup
+            # markers, error-recovery bookkeeping, etc.) under other `_` keys on
+            # the JOB record; that state is rehydrated from
+            # ``context.custom["ingest_job"]`` above, never from chunk metadata,
+            # so none of it belongs here. The worker still reads its own
+            # transport keys (_text/_chunking/_prepend_metadata) directly off
+            # ``job.metadata`` below; only ``md`` (what flows onward) is filtered.
+            md = {k: v for k, v in job.metadata.items() if not is_reserved_metadata_key(k)}
             prepend = job.metadata.get("_prepend_metadata")
             if job.content_type in SUPPORTED_TEXT and "_text" in job.metadata:
                 result = await pipeline.ingest_text(
@@ -49,6 +81,7 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                     metadata=md,
                     chunking_strategy=job.metadata.get("_chunking", "recursive"),
                     prepend_metadata=prepend,
+                    context=context,
                 )
             else:
                 data, _ = blobstore.get(job.blob_key)            # bytes from BlobStore
@@ -67,6 +100,7 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                         # only fall back to file-type auto-selection when unset.
                         chunking_strategy=job.metadata.get("_chunking", "auto"),
                         prepend_metadata=prepend,
+                        context=context,
                     )
 
             # Result keys: `doc_id` and (for text) `action` ("skipped" == dedup hit).
