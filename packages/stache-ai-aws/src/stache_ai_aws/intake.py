@@ -7,7 +7,6 @@ import urllib.parse
 
 from stache_ai.ingestion.base import IntakeProvider, IntakeTicket
 
-from .blob import S3BlobStore
 from .settings import resolve
 
 
@@ -17,7 +16,15 @@ def _ascii_safe(value: str) -> bool:
 
 class S3PresignIntake(IntakeProvider):
     def __init__(self, config):
-        self._blob = S3BlobStore(config)
+        # Resolve the CONFIGURED blob provider (the same store the pipeline and
+        # async worker use) rather than hardcoding the base S3BlobStore. A
+        # deployment may swap in a blob provider whose make_key composes keys
+        # differently; if the intake presigns with the base layout instead, the
+        # object lands at a key the worker's provider-specific parse_job_id
+        # cannot invert and the upload job stalls forever. Lazy import to avoid
+        # any import cycle.
+        from stache_ai.ingestion.factory import _build_blobstore
+        self._blob = _build_blobstore(config)
         self._expiry = resolve(config, "ingest_intake_s3_presign_expiry")
 
     def begin(self, *, job_id: str, filename: str, namespace: str,
