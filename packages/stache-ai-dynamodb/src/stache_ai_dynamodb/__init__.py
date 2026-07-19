@@ -48,5 +48,9 @@ def sanitize_for_dynamodb(obj: Any) -> Any:
 from .namespace import DynamoDBNamespaceProvider
 from .document_index import DynamoDBDocumentIndex
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version
+    __version__ = version("stache-ai-dynamodb")
+except Exception:
+    __version__ = "0.2.1"  # Fallback for development
 __all__ = ["DynamoDBNamespaceProvider", "DynamoDBDocumentIndex", "sanitize_for_dynamodb"]

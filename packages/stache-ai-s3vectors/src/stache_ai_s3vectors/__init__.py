@@ -13,5 +13,9 @@ Usage:
 
 from .provider import S3VectorsProvider
 
-__version__ = "0.2.1"
+try:
+    from importlib.metadata import version
+    __version__ = version("stache-ai-s3vectors")
+except Exception:
+    __version__ = "0.2.1"  # Fallback for development
 __all__ = ["S3VectorsProvider"]
