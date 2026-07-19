@@ -94,6 +94,12 @@
               <span v-if="source.score" class="source-score">
                 {{ Math.round(source.score * 100) }}% match
               </span>
+              <button
+                v-if="source.has_original && source.metadata && source.metadata.doc_id"
+                @click="downloadOriginal(source)"
+                class="source-download"
+                title="Download original file"
+              >⬇️ Original</button>
             </div>
             <div class="source-content">{{ source.text }}</div>
             <div v-if="source.metadata && Object.keys(source.metadata).length > 0" class="source-metadata">
@@ -118,7 +124,18 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { queryKnowledge, listModels } from '../api/client.js'
+import { queryKnowledge, listModels, getDocumentOriginalUrl } from '../api/client.js'
+
+// Download a result's original file via a short-lived presigned URL.
+const downloadOriginal = async (source) => {
+  const meta = source.metadata || {}
+  try {
+    const url = await getDocumentOriginalUrl(meta.doc_id, meta.namespace)
+    if (url) window.location.href = url
+  } catch (err) {
+    console.error('Failed to get download URL:', err)
+  }
+}
 import NamespaceSelector from '../components/NamespaceSelector.vue'
 
 const query = ref('')

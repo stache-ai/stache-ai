@@ -5,6 +5,22 @@ All notable changes to stache-ai will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-18
+
+### Added
+
+- **Original-file download endpoint**: `GET /api/documents/{doc_id}/original` returns a short-lived presigned download URL (`{"url": ...}`) for a document's retained original, authorizing the same `read_document` op as the other document routes. Returns 404 when the record has no `blob_key` (old document, pasted text) or the active blob store cannot presign; the bytes never stream through the app. URL lifetime is set by the new `INGEST_BLOB_DOWNLOAD_EXPIRY` config (default 300s).
+- **`BlobStore.presign_get` seam**: additive `presign_get(key, *, expiry, download_filename=None)` on the `BlobStore` ABC (default returns None), advertised via a new `presign_download` entry in the `BlobStore.capabilities` set (mirrors the `VectorDBProvider` capability mechanism). Implemented on the AWS `S3BlobStore` (`generate_presigned_url("get_object", ...)` with `ResponseContentDisposition` for the save-as name).
+- **Doc→original linkage**: the document index record now persists `blob_key` and `content_type`; `DocumentIndexProvider.create_document` accepts both (threaded from the ingestion job via `context.custom["ingest_job"]`). Forward-only — pre-existing documents simply lack `blob_key`.
+- **`has_original` flag**: documents-list items and query-result sources now carry `has_original` (true iff the record has a `blob_key` and the blob store advertises `presign_download`), so clients can show a download affordance without a probe request.
+- **Clean extracted-text storage + retrieval**: the full extracted/plain text is now persisted to the blob store at ingest (a sibling `{blob_key}.text` blob for extracted files, a job-scoped `extracted.txt` blob for pasted text) and its key recorded as `text_blob_key` on the document record. `GET /api/documents/chunks` now serves `reconstructed_text` from that stored text instead of joining the chunks with `\n\n` — the old join duplicated every `chunk_overlap` region and injected spurious breaks — falling back to the join only when no text blob exists. `GET /api/documents/{doc_id}/original?format=text` presigns the clean text blob (404 when absent). The text bytes live in S3, never as a DynamoDB attribute, so metadata reads stay cheap and never hit the 400KB item cap.
+
+### Fixed
+
+- **No-namespace upload no longer 500s**: an ingest/capture/upload request with no namespace (the frontend sends `namespace: null`, and `default_namespace` is unset on staging) previously resolved the namespace to `None`, which was pinned into S3 object metadata and blew up botocore's ascii validation (`None.encode(...)` → HTTP 500). The route entry points now fall back to the literal `"default"` namespace, and authorization and the downstream ingest agree on that one value. As defense in depth, `S3BlobStore.presign_put` now drops any `None`-valued metadata entry before signing, so no `None` can ever reach botocore.
+- **`pollJob` tolerates transient poll failures**: the presigned-upload poller threw on the first failed `getJob`, so a single dropped connection / API-Gateway 5xx during the ~10s ingest would fail an upload that actually succeeded server-side. It now tolerates up to `maxConsecutiveErrors` (default 4) consecutive poll failures before giving up, resetting the counter on any successful poll; the overall timeout and exponential backoff are unchanged.
+- **`reconstructed_text` now serves the stored clean text for S3 Vectors deployments**: `_reconstructed_text` resolves a document's namespace from its chunks, but the s3vectors `get_by_ids` was stripping `namespace` from every returned chunk, so the resolved namespace was `None` and `get_document_record` rejected it — silently falling back to the overlap-duplicating chunk join even for a faithful full-document fetch. Namespace resolution is now robust: it takes the first truthy namespace among the matching chunks (top-level or nested under `metadata`), and returns the join without a record lookup when none can be resolved (never a lookup with a falsy namespace). Paired with the s3vectors provider now including `namespace` in `get_by_ids` output.
+
 ## [0.3.0] - 2026-07-04
 
 ### Added

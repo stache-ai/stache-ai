@@ -102,6 +102,44 @@ def _drive(service, body):
 
 
 @mock_aws
+def test_intake_resolves_configured_blob_provider_not_hardcoded_base(monkeypatch):
+    # The presign intake must use the SAME blob store the pipeline/worker use
+    # (resolved via the factory from ingest_blob_provider), NOT a hardcoded base
+    # S3BlobStore. A configured provider may compose keys differently; a
+    # hardcoded base store would presign a key whose layout the worker's
+    # parse_job_id can't invert, silently dropping every upload.
+    from stache_ai_aws.intake import S3PresignIntake
+    import stache_ai.ingestion.factory as factory
+
+    sentinel = object()
+    captured = {}
+
+    def fake_build_blobstore(config):
+        captured["config"] = config
+        return sentinel
+
+    monkeypatch.setattr(factory, "_build_blobstore", fake_build_blobstore)
+
+    config = _config("unused")
+    intake = S3PresignIntake(config)
+    # It resolved whatever the factory returned for the configured provider --
+    # not an unconditional S3BlobStore.
+    assert intake._blob is sentinel
+    assert captured["config"] is config
+
+
+@mock_aws
+def test_intake_yields_base_s3_blobstore_for_s3_provider():
+    # OSS behavior unchanged: with ingest_blob_provider="s3" the factory resolves
+    # the base S3BlobStore, so pure-OSS deployments are unaffected by the fix.
+    from stache_ai_aws.intake import S3PresignIntake
+    from stache_ai_aws.blob import S3BlobStore
+
+    intake = S3PresignIntake(_config("unused"))  # _config sets ingest_blob_provider="s3"
+    assert isinstance(intake._blob, S3BlobStore)
+
+
+@mock_aws
 def test_worker_resumes_presign_job():
     queue_url = _provision()
     pipeline = _pipeline()

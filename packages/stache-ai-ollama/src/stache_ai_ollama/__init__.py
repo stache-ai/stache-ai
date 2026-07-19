@@ -15,5 +15,9 @@ from .llm import OllamaLLMProvider
 from .embedding import OllamaEmbeddingProvider
 from .reranker import OllamaReranker
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version
+    __version__ = version("stache-ai-ollama")
+except Exception:
+    __version__ = "0.2.0"  # Fallback for development
 __all__ = ["OllamaLLMProvider", "OllamaEmbeddingProvider", "OllamaReranker"]

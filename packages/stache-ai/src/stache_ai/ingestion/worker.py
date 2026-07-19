@@ -59,7 +59,17 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                 namespace=job.namespace,
                 user_id=job.requested_by,
                 source="worker",
-                custom={"ingest_job": job, "principal": principal},
+                # ``blobstore`` rides along so the pipeline can persist the full
+                # extracted/plain text to the blob store at ingest (the pipeline
+                # has the text but no blob-store handle of its own). The clean
+                # text is served back by GET chunks (reconstructed_text) and by
+                # GET .../original?format=text instead of re-joining chunks, which
+                # would duplicate the chunk_overlap regions.
+                custom={
+                    "ingest_job": job,
+                    "principal": principal,
+                    "blobstore": blobstore,
+                },
             )
             # Strip every reserved key before it reaches enrichers / the vector
             # store - not just the transport keys. Uses the SAME reserved-key

@@ -738,6 +738,11 @@ class S3VectorsProvider(VectorDBProvider):
 
                 # Extract values
                 text_content = self._extract_string_value(metadata.get('text'))
+                # Keep 'namespace' in the output so chunks carry their namespace
+                # (per the base get_by_ids contract: [{"id", "text", **metadata}]).
+                # Callers such as reconstructed_text resolve the document's
+                # namespace from it. Only 'text' is excluded here -- it is already
+                # surfaced as 'text'/'content' above and can be large.
                 extracted = {
                     "id": vector.get('key'),
                     "text": text_content,
@@ -745,7 +750,7 @@ class S3VectorsProvider(VectorDBProvider):
                     **{
                         k: self._extract_value(v)
                         for k, v in metadata.items()
-                        if k not in ("text", "namespace") and (not fields or k in fields)
+                        if k != "text" and (not fields or k in fields)
                     }
                 }
                 results.append(extracted)

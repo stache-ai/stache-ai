@@ -13,5 +13,9 @@ Usage:
 
 from .provider import QdrantVectorDBProvider
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version
+    __version__ = version("stache-ai-qdrant")
+except Exception:
+    __version__ = "0.2.0"  # Fallback for development
 __all__ = ["QdrantVectorDBProvider"]

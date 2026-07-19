@@ -103,6 +103,9 @@
               <td class="chunk-count">{{ doc.chunk_count || 0 }}</td>
               <td class="created-date">{{ formatDate(doc.created_at) }}</td>
               <td class="actions-cell">
+                <button v-if="doc.has_original" @click="downloadOriginal(doc)" class="btn-icon" title="Download original file">
+                  ⬇️
+                </button>
                 <button @click="editDocument(doc)" class="btn-icon" title="Edit metadata">
                   ✏️
                 </button>
@@ -241,7 +244,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { listDocuments, getDocumentById, updateDocumentMetadata, deleteDocumentById, listNamespaces, getNamespaceTree } from '../api/client.js'
+import { listDocuments, getDocumentById, updateDocumentMetadata, deleteDocumentById, listNamespaces, getNamespaceTree, getDocumentOriginalUrl } from '../api/client.js'
 import NamespaceTreeDropdown from '../components/NamespaceTreeDropdown.vue'
 
 const documents = ref([])
@@ -354,6 +357,20 @@ const filteredDocuments = computed(() => {
     return filename.includes(query)
   })
 })
+
+// Download the document's original file via a short-lived presigned URL.
+const downloadOriginal = async (doc) => {
+  try {
+    const url = await getDocumentOriginalUrl(doc.doc_id, doc.namespace)
+    if (url) {
+      // The URL is served with Content-Disposition: attachment, so navigating
+      // to it triggers a download rather than leaving the app.
+      window.location.href = url
+    }
+  } catch (err) {
+    console.error('Failed to get download URL:', err)
+  }
+}
 
 // Edit document
 const editDocument = async (doc) => {

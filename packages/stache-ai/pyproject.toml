@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stache-ai"
-version = "0.3.0"
+version = "0.3.1"
 readme = "README.md"
 description = "Personal AI-powered knowledge base with RAG"
 license = {text = "MIT"}
@@ -53,9 +53,11 @@ dev = [
 ]
 # Provider bundles for convenience
 aws = [
-    "stache-ai-s3vectors>=0.2.0",
-    "stache-ai-dynamodb>=0.2.0",
+    "stache-ai-s3vectors>=0.2.1",
+    "stache-ai-dynamodb>=0.2.1",
     "stache-ai-bedrock>=0.2.0",
+    # presign_get on the S3 blob store backs the original-download endpoint
+    "stache-ai-aws>=0.2.2",
 ]
 ollama = [
     "stache-ai-ollama>=0.2.0",

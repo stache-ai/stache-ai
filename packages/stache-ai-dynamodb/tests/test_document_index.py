@@ -203,6 +203,70 @@ class TestCreateDocument:
         assert result["file_size"] == 1024
         table.put_item.assert_called_once()
 
+    def test_create_document_persists_blob_key_and_content_type(self, document_index):
+        """blob_key/content_type are stored on the item and round-trip via get."""
+        instance, table, _ = document_index
+
+        result = instance.create_document(
+            doc_id="doc-001",
+            filename="report.pdf",
+            namespace="default",
+            chunk_ids=["chunk-1"],
+            blob_key="doc-001/report.pdf",
+            content_type="application/pdf",
+        )
+
+        assert result["blob_key"] == "doc-001/report.pdf"
+        assert result["content_type"] == "application/pdf"
+        item = table.put_item.call_args[1]["Item"]
+        assert item["blob_key"] == "doc-001/report.pdf"
+        assert item["content_type"] == "application/pdf"
+
+        # get_document returns the stored item verbatim, so both fields survive.
+        table.get_item.return_value = {"Item": item}
+        fetched = instance.get_document("doc-001", "default")
+        assert fetched["blob_key"] == "doc-001/report.pdf"
+        assert fetched["content_type"] == "application/pdf"
+
+    def test_create_document_persists_text_blob_key(self, document_index):
+        """text_blob_key is stored on the item and round-trips via get."""
+        instance, table, _ = document_index
+
+        result = instance.create_document(
+            doc_id="doc-003",
+            filename="report.pdf",
+            namespace="default",
+            chunk_ids=["chunk-1"],
+            blob_key="doc-003/report.pdf",
+            content_type="application/pdf",
+            text_blob_key="doc-003/report.pdf.text",
+        )
+
+        assert result["text_blob_key"] == "doc-003/report.pdf.text"
+        item = table.put_item.call_args[1]["Item"]
+        assert item["text_blob_key"] == "doc-003/report.pdf.text"
+
+        # get_document returns the stored item verbatim, so it survives.
+        table.get_item.return_value = {"Item": item}
+        fetched = instance.get_document("doc-003", "default")
+        assert fetched["text_blob_key"] == "doc-003/report.pdf.text"
+
+    def test_create_document_omits_blob_key_when_absent(self, document_index):
+        """No blob_key/content_type/text_blob_key keys when none provided."""
+        instance, table, _ = document_index
+
+        instance.create_document(
+            doc_id="doc-002",
+            filename="note.txt",
+            namespace="default",
+            chunk_ids=["chunk-1"],
+        )
+
+        item = table.put_item.call_args[1]["Item"]
+        assert "blob_key" not in item
+        assert "content_type" not in item
+        assert "text_blob_key" not in item
+
     def test_create_document_dynamodb_error(self, document_index):
         """Should propagate DynamoDB ClientError"""
         instance, table, _ = document_index

@@ -2,5 +2,9 @@
 
 from .enrichers import SummaryEnricher
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version
+    __version__ = version("stache-ai-enrichment")
+except Exception:
+    __version__ = "0.1.1"  # Fallback for development
 __all__ = ["SummaryEnricher"]

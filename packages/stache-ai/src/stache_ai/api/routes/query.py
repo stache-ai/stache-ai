@@ -16,6 +16,47 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _annotate_has_original(sources, pipeline, context) -> None:
+    """Set ``has_original`` on each query source in place.
+
+    True iff the source's document still has a retained original (its record
+    carries a ``blob_key``) AND the active blob store can presign downloads.
+    Sources carry only ``doc_id`` in chunk metadata, so the blob_key is resolved
+    per distinct (namespace, doc_id) via one document-index lookup, cached. When
+    the store advertises no presign support (the OSS default), no lookups run.
+    """
+    try:
+        from stache_ai.ingestion.factory import get_ingestion_service
+        capable = "presign_download" in get_ingestion_service().blobstore.capabilities
+    except ForbiddenError:
+        raise
+    except LimitExceededError:
+        raise
+    except Exception:
+        capable = False
+
+    cache: dict[tuple[str, str], bool] = {}
+    for source in sources:
+        metadata = source.get("metadata") or {}
+        doc_id = metadata.get("doc_id")
+        has_original = False
+        if capable and doc_id:
+            ns = metadata.get("namespace", "default")
+            key = (ns, doc_id)
+            if key not in cache:
+                try:
+                    record = pipeline.get_document_record(doc_id, ns, context=context)
+                    cache[key] = bool(record and record.get("blob_key"))
+                except ForbiddenError:
+                    raise
+                except LimitExceededError:
+                    raise
+                except Exception:
+                    cache[key] = False
+            has_original = cache[key]
+        source["has_original"] = has_original
+
+
 class QueryRequest(BaseModel):
     """Request model for query endpoint"""
     query: str
@@ -60,6 +101,8 @@ async def query_knowledge(request: QueryRequest, http_request: Request):
             filter=request.filter,
             context=context,
         )
+
+        _annotate_has_original(result.get("sources", []), pipeline, context)
 
         return result
     except ForbiddenError:

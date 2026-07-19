@@ -316,3 +316,79 @@ class TestRequestValidation:
         # FastAPI might accept it or the pipeline might handle it
         # Just ensure it doesn't crash
         assert response.status_code in [200, 422, 500]
+
+
+class TestIngestNamespaceDefaulting:
+    """A no-namespace /api/ingest must resolve to the literal "default".
+
+    Regression: the frontend sends ``namespace: null`` when the user picks no
+    namespace and ``settings.default_namespace`` is unset on staging, so the
+    resolved namespace was ``None``. That None was then pinned into S3 object
+    metadata and botocore's ascii validation raised on ``None.encode(...)`` ->
+    HTTP 500. Both ingest branches must instead hand the service "default".
+    """
+
+    @pytest.fixture
+    def mock_service(self):
+        """A mock IngestionService recording the namespace it is handed."""
+        service = MagicMock()
+
+        job = MagicMock()
+        job.status = "done"
+        job.to_dict.return_value = {"job_id": "j-1", "status": "done"}
+
+        ticket = MagicMock()
+        ticket.upload_url = "https://s3.example/presigned"
+        ticket.required_headers = {"Content-Type": "text/plain"}
+
+        service.submit = AsyncMock(return_value=job)
+        service.begin_upload = AsyncMock(return_value=(job, ticket))
+        return service
+
+    @pytest.fixture
+    def ingest_client(self, mock_service):
+        with patch(
+            "stache_ai.api.routes.ingest.get_ingestion_service",
+            return_value=mock_service,
+        ):
+            from stache_ai.api.main import app
+            yield TestClient(app), mock_service
+
+    def test_ingest_text_without_namespace_defaults(self, ingest_client):
+        """Normal (non-upload) branch: omitted namespace -> "default"."""
+        client, service = ingest_client
+        response = client.post("/api/ingest", json={"text": "hello"})
+
+        assert response.status_code == 200
+        assert service.submit.await_args.kwargs["namespace"] == "default"
+
+    def test_ingest_text_with_explicit_null_namespace_defaults(self, ingest_client):
+        """An explicit ``namespace: null`` (what the frontend sends) -> "default"."""
+        client, service = ingest_client
+        response = client.post(
+            "/api/ingest", json={"text": "hello", "namespace": None}
+        )
+
+        assert response.status_code == 200
+        assert service.submit.await_args.kwargs["namespace"] == "default"
+
+    def test_ingest_upload_without_namespace_defaults(self, ingest_client):
+        """Presign (upload:true) branch: omitted namespace -> "default"."""
+        client, service = ingest_client
+        response = client.post(
+            "/api/ingest",
+            json={"upload": True, "filename": "doc.txt", "namespace": None},
+        )
+
+        assert response.status_code == 200
+        assert service.begin_upload.await_args.kwargs["namespace"] == "default"
+
+    def test_ingest_with_explicit_namespace_is_preserved(self, ingest_client):
+        """A real namespace is untouched by the default fallback."""
+        client, service = ingest_client
+        response = client.post(
+            "/api/ingest", json={"text": "hello", "namespace": "docs"}
+        )
+
+        assert response.status_code == 200
+        assert service.submit.await_args.kwargs["namespace"] == "docs"

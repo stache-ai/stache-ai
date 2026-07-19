@@ -2,11 +2,35 @@
 
 from __future__ import annotations
 
+from typing import Optional
+from urllib.parse import quote
+
 import boto3
 
 from stache_ai.ingestion.base import BlobStore
 
 from .settings import resolve
+
+
+def _content_disposition(filename: str) -> str:
+    """Build a safe ``Content-Disposition: attachment`` header value.
+
+    A stored filename is attacker-influenced. Interpolated raw into
+    ``filename="..."`` a double-quote/backslash can break out of the quoted
+    string and a CR/LF can inject header lines or spoof the save-as name;
+    non-ASCII bytes make the header invalid. We strip those from the quoted
+    ASCII ``filename`` and, when the original has non-ASCII, additionally emit an
+    RFC 5987 ``filename*=UTF-8''<pct-encoded>`` so capable clients still get the
+    real (e.g. accented) name.
+    """
+    ascii_name = "".join(
+        ch for ch in filename
+        if " " <= ch and ord(ch) < 0x7F and ch not in '"\\'
+    ) or "download"
+    disposition = f'attachment; filename="{ascii_name}"'
+    if any(ord(ch) > 0x7F for ch in filename):
+        disposition += f"; filename*=UTF-8''{quote(filename, safe='')}"
+    return disposition
 
 
 class S3BlobStore(BlobStore):
@@ -47,8 +71,34 @@ class S3BlobStore(BlobStore):
         }
 
     def presign_put(self, key: str, *, headers: dict, expiry: int) -> str:
+        params = {"Bucket": self._bucket, "Key": self._full(key), **headers}
+        # Defense in depth: never hand botocore a None-valued metadata entry.
+        # SigV4 metadata validation calls value.encode("ascii"); a None value
+        # (e.g. an unresolved namespace) raises AttributeError -> HTTP 500.
+        # Drop such keys before signing rather than presigning a broken URL.
+        meta = params.get("Metadata")
+        if isinstance(meta, dict):
+            params["Metadata"] = {k: v for k, v in meta.items() if v is not None}
         return self._s3.generate_presigned_url(
             "put_object",
-            Params={"Bucket": self._bucket, "Key": self._full(key), **headers},
+            Params=params,
             ExpiresIn=expiry,
         )
+
+    def presign_get(self, key: str, *, expiry: int,
+                    download_filename: Optional[str] = None) -> str:
+        params = {"Bucket": self._bucket, "Key": self._full(key)}
+        if download_filename:
+            params["ResponseContentDisposition"] = _content_disposition(
+                download_filename)
+        return self._s3.generate_presigned_url(
+            "get_object", Params=params, ExpiresIn=expiry,
+        )
+
+    @property
+    def capabilities(self) -> set[str]:
+        # "presign_download": presign_get returns a usable download URL.
+        # "blob_read": durably stores and serves bytes (get() returns what put()
+        # wrote) -- the extracted-text persistence is gated on this so the null
+        # tier, which retains nothing, is never recorded as a text_blob_key.
+        return {"presign_download", "blob_read"}

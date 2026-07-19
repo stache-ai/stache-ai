@@ -170,13 +170,26 @@ export const getJob = async (id) => (await client.get(`/api/jobs/${id}`)).data
 export const listJobs = async (params = {}) => (await client.get('/api/jobs', { params })).data
 
 // Smart-poll a job until it reaches a terminal status (with exponential backoff).
-export async function pollJob(jobId, { interval = 1000, maxInterval = 5000, timeout = 600000, onUpdate } = {}) {
+// A single transient poll failure (dropped connection / API-Gateway 5xx during
+// the ~10s ingest) must NOT fail an upload that actually succeeded server-side,
+// so we tolerate up to `maxConsecutiveErrors` consecutive getJob failures before
+// giving up; any successful poll resets the counter.
+export async function pollJob(jobId, { interval = 1000, maxInterval = 5000, timeout = 600000, maxConsecutiveErrors = 4, onUpdate } = {}) {
   const start = Date.now()
   let wait = interval
+  let consecutiveErrors = 0
   while (Date.now() - start < timeout) {
-    const job = await getJob(jobId)
-    if (onUpdate) onUpdate(job)
-    if (TERMINAL.includes(job.status)) return job
+    try {
+      const job = await getJob(jobId)
+      consecutiveErrors = 0
+      if (onUpdate) onUpdate(job)
+      if (TERMINAL.includes(job.status)) return job
+    } catch (err) {
+      consecutiveErrors++
+      // Only give up once we EXCEED the allowance; otherwise fall through to
+      // the normal backoff sleep and retry.
+      if (consecutiveErrors > maxConsecutiveErrors) throw err
+    }
     await new Promise(r => setTimeout(r, wait))
     wait = Math.min(wait * 1.5, maxInterval)
   }
@@ -228,6 +241,22 @@ export const queryKnowledge = async (query, synthesize = true, top_k = 5, namesp
 export const listModels = async () => {
   const response = await getClient().get('/api/models')
   return response.data
+}
+
+// Fetch a short-lived presigned URL to download a document's ORIGINAL file.
+// Returns the URL string, or null when no original is available (404 -- an
+// older document, pasted text, or a store that can't presign). Only offer this
+// when the item reports has_original; the null return is a safety net.
+export const getDocumentOriginalUrl = async (docId, namespace = null) => {
+  const config = namespace ? { params: { namespace } } : {}
+  try {
+    const response = await getClient().get(
+      `/api/documents/${encodeURIComponent(docId)}/original`, config)
+    return response.data?.url || null
+  } catch (err) {
+    if (err.status === 404) return null
+    throw err
+  }
 }
 
 export const uploadDocument = async (file, chunkingStrategy = 'recursive', metadata = null, namespace = null) => {

@@ -42,6 +42,92 @@ from stache_ai.utils.hashing import compute_hash_async
 logger = logging.getLogger(__name__)
 
 
+def _original_blob_ref(context) -> tuple[str | None, str | None]:
+    """Recover (blob_key, content_type) for the retained original from the
+    ingestion job the worker placed on ``context.custom["ingest_job"]``.
+
+    Returns (None, None) for callers with no ingest job in context (e.g. direct
+    CLI/pipeline ingestion) or when no original blob was retained (pasted text
+    keeps ``blob_key`` None). The download endpoint treats a missing blob_key as
+    "no original available".
+    """
+    job = None
+    if context is not None and getattr(context, "custom", None):
+        job = context.custom.get("ingest_job")
+    if job is None:
+        return None, None
+    return getattr(job, "blob_key", None), getattr(job, "content_type", None)
+
+
+def _persist_extracted_text(context, text: "str | None") -> "str | None":
+    """Store the full extracted/plain text in the blob store and return its key.
+
+    The GET chunks endpoint used to rebuild a document's text by joining the
+    stored chunks with ``"\\n\\n"``; with ``chunk_overlap`` set, adjacent chunks
+    repeat ~100 chars, so that join DUPLICATES every overlap region and injects
+    spurious breaks. Instead we persist the exact text that was chunked, once, at
+    ingest, and serve THAT (reconstructed_text, ``?format=text``).
+
+    The bytes live in the blob store (S3), never as a DynamoDB attribute: the
+    record keeps only a short ``text_blob_key``. A big document's text as an
+    attribute would make every metadata read pay RCU on the full item and could
+    exceed DynamoDB's 400KB item cap.
+
+    Reads the ingestion job + blob store the worker placed on
+    ``context.custom``. Returns None (reader then falls back to the chunk join)
+    when either is absent -- e.g. direct CLI/pipeline ingestion with no worker --
+    or when persistence fails, so a blob-store hiccup never fails an ingest.
+    """
+    custom = getattr(context, "custom", None) or {}
+    job = custom.get("ingest_job")
+    blobstore = custom.get("blobstore")
+    if job is None or blobstore is None or not text:
+        return None
+    # Only persist when the store DURABLY retrieves what it stored. The null tier
+    # (default OSS) returns a key from put() but keeps nothing, so recording a
+    # text_blob_key would violate the "stored only when retained" contract and
+    # make every later get() raise. When it can't retain, return None so
+    # reconstructed_text falls back to the chunk join and the download 404s.
+    if "blob_read" not in getattr(blobstore, "capabilities", set()):
+        return None
+    try:
+        original_key = getattr(job, "blob_key", None)
+        if original_key and blobstore.parse_job_id(f"{original_key}.text") == job.job_id:
+            # A file was extracted: the original blob is the binary source, so
+            # the text goes in a sibling blob. A ".text" SUFFIX on the original
+            # key (not a new top-level key) keeps the SAME job_id under
+            # parse_job_id, so an async object-created event for it resolves to
+            # the already-terminal job and no-ops instead of spawning a duplicate.
+            #
+            # Guarded by the round-trip check: for a PRODUCER-DROP job the
+            # blob_key is the producer's arbitrary key and job_id is a fresh
+            # uuid, so the sibling key would parse to the WRONG job -> the S3
+            # re-trigger mints a NEW producer job (junk doc + ``{key}.text.text``)
+            # in an unbounded loop. When it doesn't round-trip we mint a
+            # job-scoped key below instead (parses back to THIS job, whose
+            # non-UPLOADING status makes the re-trigger a no-op).
+            text_key = f"{original_key}.text"
+        else:
+            # No round-trippable original: either a pasted-text ingest (no binary
+            # original) or a producer-drop whose sibling key parses to the wrong
+            # job. Mint a job-scoped key via the blob store's own make_key so any
+            # deployment key prefix is applied and parse_job_id round-trips to
+            # THIS job (a re-trigger then resolves to the terminal job and no-ops).
+            text_key = blobstore.make_key(
+                job.job_id, "extracted.txt", principal=custom.get("principal"))
+        blobstore.put(
+            text_key,
+            text.encode("utf-8"),
+            {"filename": getattr(job, "filename", "text"), "namespace": job.namespace},
+        )
+        return text_key
+    except Exception:
+        logger.warning(
+            "Failed to persist extracted text blob; reconstructed_text will fall "
+            "back to the chunk join", exc_info=True)
+        return None
+
+
 class _IngestionSkipped(Exception):
     """Internal marker handed to ErrorProcessors when an ingestion returns a
     SKIP (deduplication / guard block) instead of raising.
@@ -867,6 +953,22 @@ class RAGPipeline:
                     if content_hash:
                         clean_metadata["content_hash"] = content_hash
 
+                    blob_key, blob_content_type = _original_blob_ref(context)
+                    text_blob_key = _persist_extracted_text(context, text)
+                    # Only pass the retention kwargs that are actually set. A
+                    # 0.3.0 third-party DocumentIndexProvider that predates the
+                    # retention feature has no **kwargs to absorb them; passing
+                    # them unconditionally (all None on a plain ingest) raises
+                    # TypeError, swallowed by the except below -> silent index
+                    # loss. Omitting them when None calls such a provider with
+                    # the exact pre-0.3.1 kwarg set.
+                    retention_kwargs = {}
+                    if blob_key is not None:
+                        retention_kwargs["blob_key"] = blob_key
+                    if blob_content_type is not None:
+                        retention_kwargs["content_type"] = blob_content_type
+                    if text_blob_key is not None:
+                        retention_kwargs["text_blob_key"] = text_blob_key
                     self.document_index_provider.create_document(
                         doc_id=doc_id,
                         filename=filename,
@@ -882,6 +984,7 @@ class RAGPipeline:
                         source_path=metadata.get("source_path"),
                         content_hash=content_hash,
                         context=context,
+                        **retention_kwargs,
                     )
                     logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
                 except Exception as e:
@@ -1258,6 +1361,19 @@ class RAGPipeline:
                 file_extension = path.suffix.lower().lstrip('.')
                 file_size = path.stat().st_size if path.exists() else 0
 
+                blob_key, blob_content_type = _original_blob_ref(context)
+                text_blob_key = _persist_extracted_text(context, text)
+                # Only pass the retention kwargs that are actually set, so a
+                # 0.3.0 third-party DocumentIndexProvider without **kwargs is
+                # called with the exact pre-0.3.1 kwarg set when retention is
+                # inactive (see the ingest_text path for the full rationale).
+                retention_kwargs = {}
+                if blob_key is not None:
+                    retention_kwargs["blob_key"] = blob_key
+                if blob_content_type is not None:
+                    retention_kwargs["content_type"] = blob_content_type
+                if text_blob_key is not None:
+                    retention_kwargs["text_blob_key"] = text_blob_key
                 self.document_index_provider.create_document(
                     doc_id=doc_id,
                     filename=filename,
@@ -1272,6 +1388,7 @@ class RAGPipeline:
                     source_path=metadata.get("source_path") if metadata else None,
                     content_hash=metadata.get("content_hash") if metadata else None,
                     context=context,
+                    **retention_kwargs,
                 )
                 logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
             except Exception as e:
