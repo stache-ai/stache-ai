@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // The account/usage route is served by the EXTENSION api, on a DIFFERENT host
 // from API_URL. It was once fetched through the core client, which meant it
@@ -147,5 +147,76 @@ describe('getDocumentOriginalUrl', () => {
     })
     const url = await getDocumentOriginalUrl('missing', null)
     expect(url).toBeNull()
+  })
+})
+
+describe('pollJob transient-failure tolerance', () => {
+  // getJob reads the shared `client` (an axios instance created via
+  // axios.create). We drive pollJob by scripting that instance's .get():
+  // reject a few times (a transient blip during the ~10s ingest), then
+  // resolve to a terminal job. pollJob must ride out the blips and RETURN the
+  // successful job rather than throwing, since the upload actually succeeded.
+  beforeEach(async () => {
+    created.length = 0
+    for (const k of Object.keys(config)) delete config[k]
+    const client = await import('./client.js')
+    client._resetClientsForTest()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('tolerates a few consecutive poll failures then returns the done job', async () => {
+    config.API_URL = CORE
+    const axios = (await import('axios')).default
+    let calls = 0
+    axios.create.mockImplementationOnce((cfg) => {
+      const i = {
+        defaults: cfg,
+        get: vi.fn(() => {
+          calls += 1
+          // Two transient failures, then a terminal success.
+          if (calls <= 2) return Promise.reject(Object.assign(new Error('blip'), { status: 502 }))
+          return Promise.resolve({ data: { job_id: 'j-1', status: 'done' } })
+        }),
+        post: vi.fn(),
+        interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+      }
+      created.push(i)
+      return i
+    })
+
+    const { pollJob } = await import('./client.js')
+    // Kick off the poll, then flush the backoff sleeps (fake timers) so the
+    // scripted failures + success all play out.
+    const p = pollJob('j-1', { interval: 10, maxInterval: 20 })
+    await vi.runAllTimersAsync()
+    const job = await p
+    expect(job).toEqual({ job_id: 'j-1', status: 'done' })
+    expect(calls).toBe(3)
+  })
+
+  it('throws once failures exceed maxConsecutiveErrors', async () => {
+    config.API_URL = CORE
+    const axios = (await import('axios')).default
+    axios.create.mockImplementationOnce((cfg) => {
+      const i = {
+        defaults: cfg,
+        get: vi.fn(() => Promise.reject(Object.assign(new Error('down'), { status: 503 }))),
+        post: vi.fn(),
+        interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+      }
+      created.push(i)
+      return i
+    })
+
+    const { pollJob } = await import('./client.js')
+    // maxConsecutiveErrors: 1 -> the 2nd consecutive failure (exceeds 1) rethrows.
+    const p = pollJob('j-1', { interval: 10, maxInterval: 20, maxConsecutiveErrors: 1 })
+    const assertion = expect(p).rejects.toThrow('down')
+    await vi.runAllTimersAsync()
+    await assertion
   })
 })
