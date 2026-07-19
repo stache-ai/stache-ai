@@ -63,8 +63,12 @@ async def upload_document(
                       Example: "speaker,topic" with metadata {"speaker": "Dr. Anderson", "topic": "Faith"}
                       will prepend "Speaker: Dr. Anderson\nTopic: Faith\n\n" to each chunk.
     """
+    # Coerce a missing namespace to the literal "default" so authorization and
+    # the downstream ingest see the SAME value (a None namespace 500s once it
+    # reaches blob metadata).
+    namespace = namespace or settings.default_namespace or "default"
     # S1 enforcement (before the broad try so a denial is a 403, not a 500).
-    auth.authorize(http_request, "upload", {"namespace": namespace or settings.default_namespace})
+    auth.authorize(http_request, "upload", {"namespace": namespace})
 
     try:
         # Save uploaded file temporarily
@@ -140,8 +144,11 @@ async def batch_upload_documents(
     Returns:
         Results for each file with success/failure status
     """
+    # Coerce a missing namespace to "default" so authz and every per-file
+    # ingest below agree on one value (a None namespace 500s in blob metadata).
+    namespace = namespace or settings.default_namespace or "default"
     # S1 enforcement: authorize once for the whole batch.
-    auth.authorize(http_request, "upload", {"namespace": namespace or settings.default_namespace})
+    auth.authorize(http_request, "upload", {"namespace": namespace})
 
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")

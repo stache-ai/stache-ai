@@ -71,9 +71,17 @@ class S3BlobStore(BlobStore):
         }
 
     def presign_put(self, key: str, *, headers: dict, expiry: int) -> str:
+        params = {"Bucket": self._bucket, "Key": self._full(key), **headers}
+        # Defense in depth: never hand botocore a None-valued metadata entry.
+        # SigV4 metadata validation calls value.encode("ascii"); a None value
+        # (e.g. an unresolved namespace) raises AttributeError -> HTTP 500.
+        # Drop such keys before signing rather than presigning a broken URL.
+        meta = params.get("Metadata")
+        if isinstance(meta, dict):
+            params["Metadata"] = {k: v for k, v in meta.items() if v is not None}
         return self._s3.generate_presigned_url(
             "put_object",
-            Params={"Bucket": self._bucket, "Key": self._full(key), **headers},
+            Params=params,
             ExpiresIn=expiry,
         )
 

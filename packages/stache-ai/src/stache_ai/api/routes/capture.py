@@ -52,7 +52,9 @@ async def capture_thought(request: CaptureRequest, http_request: Request):
     - Optional AI-powered organization suggestions
     """
     principal = auth.principal(http_request)
-    namespace = request.namespace or settings.default_namespace
+    # No-namespace requests must resolve to a real string (see /ingest): a None
+    # namespace propagates into blob metadata and 500s on presign/put.
+    namespace = request.namespace or settings.default_namespace or "default"
     # S1 enforcement (before the broad try so a denial is a 403, not a 500).
     # Capture flows through the same ingestion service + worker as /ingest, and
     # the worker re-checks "ingest" (identity.assert_can_write). Enforce the

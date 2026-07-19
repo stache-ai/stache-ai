@@ -50,7 +50,11 @@ def _status_code(status: JobStatus) -> int:
 @router.post("/ingest")
 async def ingest(request: IngestRequest, http_request: Request):
     principal = auth.principal(http_request)
-    namespace = request.namespace or settings.default_namespace
+    # An upload with no namespace (frontend sends null, default_namespace unset)
+    # must resolve to a real string: a None namespace is pinned into S3 object
+    # metadata and botocore's ascii validation then blows up (500). Default to
+    # the literal "default" namespace instead.
+    namespace = request.namespace or settings.default_namespace or "default"
     # S1 enforcement: covers both direct submission and the upload-begin flow.
     # "ingest" is the canonical content-write op: the same op the worker
     # re-checks (identity.assert_can_write) so this route and its async worker

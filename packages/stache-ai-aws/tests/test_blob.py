@@ -1,4 +1,5 @@
 import types
+from unittest.mock import MagicMock
 
 import boto3
 import pytest
@@ -90,6 +91,63 @@ def test_presign_put_returns_url_with_bucket():
     )
     assert isinstance(url, str)
     assert cfg.ingest_blob_s3_bucket in url
+
+
+@mock_aws
+def test_presign_put_drops_none_metadata_value():
+    """A None-valued metadata entry must never reach botocore.
+
+    SigV4 metadata validation calls ``value.encode("ascii")``; a None value
+    (e.g. an unresolved namespace) raises AttributeError -> HTTP 500 at upload
+    time. presign_put drops any None-valued key before signing.
+    """
+    cfg = _config()
+    boto3.client("s3", region_name=cfg.aws_region).create_bucket(Bucket=cfg.ingest_blob_s3_bucket)
+
+    store = S3BlobStore(cfg)
+    # Spy on the boto client so we can inspect exactly what it was handed.
+    store._s3 = MagicMock()
+    store._s3.generate_presigned_url.return_value = "https://signed.example/put"
+
+    store.presign_put(
+        "abc/file.txt",
+        headers={
+            "ContentType": "text/plain",
+            "Metadata": {
+                "stache-namespace": None,       # the unresolved namespace
+                "stache-requested_by": "alice",
+                "stache-filename": "doc.txt",
+            },
+        },
+        expiry=3600,
+    )
+
+    params = store._s3.generate_presigned_url.call_args.kwargs["Params"]
+    meta = params["Metadata"]
+    # The None entry is gone; no None values reach botocore at all.
+    assert "stache-namespace" not in meta
+    assert None not in meta.values()
+    assert meta == {"stache-requested_by": "alice", "stache-filename": "doc.txt"}
+
+
+@mock_aws
+def test_presign_put_preserves_metadata_without_none():
+    """Metadata with no None values is passed through unchanged."""
+    cfg = _config()
+    boto3.client("s3", region_name=cfg.aws_region).create_bucket(Bucket=cfg.ingest_blob_s3_bucket)
+
+    store = S3BlobStore(cfg)
+    store._s3 = MagicMock()
+    store._s3.generate_presigned_url.return_value = "https://signed.example/put"
+
+    store.presign_put(
+        "abc/file.txt",
+        headers={"ContentType": "text/plain", "Metadata": {"stache-namespace": "docs"}},
+        expiry=3600,
+    )
+
+    params = store._s3.generate_presigned_url.call_args.kwargs["Params"]
+    assert params["Metadata"] == {"stache-namespace": "docs"}
 
 
 @mock_aws
