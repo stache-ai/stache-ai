@@ -4,7 +4,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from stache_ai_aws.blob import S3BlobStore
+from stache_ai_aws.blob import S3BlobStore, _content_disposition
 
 
 def _config():
@@ -105,6 +105,29 @@ def test_presign_get_returns_url_and_advertises_capability():
     assert cfg.ingest_blob_s3_bucket in url
     # Signs against the prefixed key.
     assert "originals/abc/file.txt" in url
+
+
+def test_content_disposition_strips_embedded_quote():
+    # A stored filename with a double-quote must not produce an unescaped quote
+    # in the header value: it could break out of filename="..." and spoof the
+    # browser's save-as name. The only quotes left are the two delimiters.
+    header = _content_disposition('pwned".exe')
+    assert header == 'attachment; filename="pwned.exe"'
+    assert header.count('"') == 2
+
+
+def test_content_disposition_strips_crlf_and_backslash():
+    header = _content_disposition("a\r\nb\\c.pdf")
+    assert "\r" not in header and "\n" not in header
+    assert "\\" not in header
+
+
+def test_content_disposition_non_ascii_emits_rfc5987():
+    header = _content_disposition("résumé.pdf")
+    # ASCII-folded quoted name for legacy clients ...
+    assert 'filename="rsum.pdf"' in header
+    # ... plus an RFC 5987 param carrying the real UTF-8 bytes for capable ones.
+    assert "filename*=UTF-8''r%C3%A9sum%C3%A9.pdf" in header
 
 
 @mock_aws
