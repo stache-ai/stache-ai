@@ -53,8 +53,26 @@ def _reconstructed_text(chunks: list[dict], pipeline, context) -> str:
     if len(doc_ids) != 1 or None in doc_ids:
         return join
     doc_id = next(iter(doc_ids))
+    # Resolve the namespace from the matching chunks. Take the first TRUTHY value,
+    # checking both the top-level key and a nested ``metadata`` dict (some
+    # providers nest it). A missing/None namespace must never be handed to
+    # get_document_record -- the DynamoDB provider raises "Namespace is required",
+    # which would crash into the fallback-with-traceback below (and previously
+    # served the sloppy join even for a full-document fetch).
     namespace = next(
-        (c.get("namespace") for c in chunks if c.get("doc_id") == doc_id), "default")
+        (
+            ns
+            for c in chunks
+            if c.get("doc_id") == doc_id
+            for ns in (
+                c.get("namespace") or (c.get("metadata") or {}).get("namespace"),
+            )
+            if ns
+        ),
+        None,
+    )
+    if not namespace:
+        return join
     try:
         doc = pipeline.get_document_record(doc_id, namespace, context=context)
         text_key = (doc or {}).get("text_blob_key")

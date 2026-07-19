@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`has_original` flag**: documents-list items and query-result sources now carry `has_original` (true iff the record has a `blob_key` and the blob store advertises `presign_download`), so clients can show a download affordance without a probe request.
 - **Clean extracted-text storage + retrieval**: the full extracted/plain text is now persisted to the blob store at ingest (a sibling `{blob_key}.text` blob for extracted files, a job-scoped `extracted.txt` blob for pasted text) and its key recorded as `text_blob_key` on the document record. `GET /api/documents/chunks` now serves `reconstructed_text` from that stored text instead of joining the chunks with `\n\n` — the old join duplicated every `chunk_overlap` region and injected spurious breaks — falling back to the join only when no text blob exists. `GET /api/documents/{doc_id}/original?format=text` presigns the clean text blob (404 when absent). The text bytes live in S3, never as a DynamoDB attribute, so metadata reads stay cheap and never hit the 400KB item cap.
 
+### Fixed
+
+- **`reconstructed_text` now serves the stored clean text for S3 Vectors deployments**: `_reconstructed_text` resolves a document's namespace from its chunks, but the s3vectors `get_by_ids` was stripping `namespace` from every returned chunk, so the resolved namespace was `None` and `get_document_record` rejected it — silently falling back to the overlap-duplicating chunk join even for a faithful full-document fetch. Namespace resolution is now robust: it takes the first truthy namespace among the matching chunks (top-level or nested under `metadata`), and returns the join without a record lookup when none can be resolved (never a lookup with a falsy namespace). Paired with the s3vectors provider now including `namespace` in `get_by_ids` output.
+
 ## [0.3.0] - 2026-07-04
 
 ### Added
