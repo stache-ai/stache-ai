@@ -176,6 +176,44 @@ class TestS3VectorsProvider:
         assert info["bucket"] == "test-bucket"
         assert info["dimension"] == 1024
 
+    def test_get_by_ids_includes_namespace_excludes_raw_text_key(
+        self, mock_settings, mock_boto_client
+    ):
+        """get_by_ids must carry each chunk's namespace (per the base contract)
+        so callers like reconstructed_text can resolve the document namespace,
+        while still surfacing the stored text only as 'text'/'content' (the raw
+        metadata 'text' key is not duplicated into the extra-metadata spread)."""
+        from stache_ai_s3vectors.provider import S3VectorsProvider
+
+        mock_boto_client.get_vector_bucket.return_value = {}
+        mock_boto_client.get_index.return_value = {}
+        mock_boto_client.get_vectors.return_value = {
+            "vectors": [
+                {
+                    "key": "id1",
+                    "metadata": {
+                        "text": "chunk text",
+                        "namespace": "ns1",
+                        "doc_id": "d1",
+                        "chunk_index": 0,
+                    },
+                }
+            ]
+        }
+
+        provider = S3VectorsProvider(mock_settings)
+        results = provider.get_by_ids(["id1"])
+
+        assert len(results) == 1
+        chunk = results[0]
+        # Namespace is now included in the returned chunk.
+        assert chunk["namespace"] == "ns1"
+        # Text is surfaced via 'text'/'content'; other metadata carried through.
+        assert chunk["text"] == "chunk text"
+        assert chunk["content"] == "chunk text"
+        assert chunk["doc_id"] == "d1"
+        assert chunk["chunk_index"] == 0
+
 
 class TestDynamoDBNamespaceProvider:
     """Tests for DynamoDBNamespaceProvider"""

@@ -5,6 +5,12 @@ All notable changes to stache-ai-s3vectors will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-19
+
+### Fixed
+
+- **`get_by_ids` now includes `namespace` in each returned chunk**: previously `namespace` was stripped from the output dict, so callers could not recover a chunk's namespace (only `text`/`content` and the remaining metadata came back). This broke stache-ai's `reconstructed_text`, which resolves a document's namespace from its chunks to fetch the clean stored text — with `namespace` absent it fell back to the overlap-duplicating chunk join. The output now matches the base `get_by_ids` contract (`[{"id", "text", **metadata}, ...]`); only the raw `text` key stays excluded (it is already surfaced as `text`/`content`).
+
 ## [0.2.0] - 2026-07-04
 
 ### Added
