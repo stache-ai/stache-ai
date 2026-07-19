@@ -77,7 +77,9 @@ def test_reconstructed_text_serves_stored_clean_text(client):
         {"id": "c1", "text": "brown fox jumps over", "doc_id": "d1",
          "namespace": "ns1", "chunk_index": 1},
     ]
-    doc = {"doc_id": "d1", "namespace": "ns1", "text_blob_key": "d1/x.text"}
+    # chunk_count matches the 2 requested chunks -> a faithful full-doc fetch.
+    doc = {"doc_id": "d1", "namespace": "ns1", "text_blob_key": "d1/x.text",
+           "chunk_count": 2}
     pipeline = _chunk_pipeline(chunks, doc)
     blob = _GetBlobStore(text="the quick brown fox jumps over")
     with patch("stache_ai.api.routes.documents.get_pipeline", return_value=pipeline), \
@@ -111,7 +113,8 @@ def test_reconstructed_text_falls_back_on_blob_fetch_error(client):
     chunks = [
         {"id": "c0", "text": "alpha", "doc_id": "d1", "namespace": "ns1", "chunk_index": 0},
     ]
-    doc = {"doc_id": "d1", "namespace": "ns1", "text_blob_key": "d1/x.text"}
+    doc = {"doc_id": "d1", "namespace": "ns1", "text_blob_key": "d1/x.text",
+           "chunk_count": 1}
     pipeline = _chunk_pipeline(chunks, doc)
     blob = _GetBlobStore(error=KeyError("gone"))
     with patch("stache_ai.api.routes.documents.get_pipeline", return_value=pipeline), \
@@ -132,6 +135,48 @@ def test_reconstructed_text_falls_back_without_doc_id(client):
     assert resp.status_code == 200
     assert resp.json()["reconstructed_text"] == "orphan"
     pipeline.get_document_record.assert_not_called()
+
+
+def test_reconstructed_text_subset_request_uses_join(client):
+    """A SUBSET request (fewer chunks than the document's chunk_count) must
+    return the join of exactly the requested chunks, not the whole stored text."""
+    chunks = [
+        {"id": "c0", "text": "alpha", "doc_id": "d1", "namespace": "ns1", "chunk_index": 0},
+        {"id": "c1", "text": "beta", "doc_id": "d1", "namespace": "ns1", "chunk_index": 1},
+    ]
+    # The document really has 5 chunks; the caller asked for only 2 of them.
+    doc = {"doc_id": "d1", "namespace": "ns1", "text_blob_key": "d1/x.text",
+           "chunk_count": 5}
+    pipeline = _chunk_pipeline(chunks, doc)
+    blob = _GetBlobStore(text="the entire five-chunk document text")
+    with patch("stache_ai.api.routes.documents.get_pipeline", return_value=pipeline), \
+         patch("stache_ai.ingestion.factory.get_ingestion_service",
+               return_value=_service_with(blob)):
+        resp = client.get("/api/documents/chunks?point_ids=c0,c1")
+
+    assert resp.status_code == 200
+    assert resp.json()["reconstructed_text"] == "alpha\n\nbeta"
+    assert blob.get_calls == []             # stored blob never fetched for a subset
+
+
+def test_reconstructed_text_multi_doc_request_uses_join(client):
+    """A multi-doc request must return the join of all requested chunks, not the
+    full text of whichever doc_id happens to appear first."""
+    chunks = [
+        {"id": "c0", "text": "from doc one", "doc_id": "d1", "namespace": "ns1", "chunk_index": 0},
+        {"id": "c1", "text": "from doc two", "doc_id": "d2", "namespace": "ns1", "chunk_index": 0},
+    ]
+    pipeline = _chunk_pipeline(chunks, None)
+    blob = _GetBlobStore(text="should never be served")
+    with patch("stache_ai.api.routes.documents.get_pipeline", return_value=pipeline), \
+         patch("stache_ai.ingestion.factory.get_ingestion_service",
+               return_value=_service_with(blob)):
+        resp = client.get("/api/documents/chunks?point_ids=c0,c1")
+
+    assert resp.status_code == 200
+    assert resp.json()["reconstructed_text"] == "from doc one\n\nfrom doc two"
+    assert blob.get_calls == []
+    pipeline.get_document_record.assert_not_called()   # short-circuits on multi-doc
 
 
 # ---------------------------------------------------------------------------

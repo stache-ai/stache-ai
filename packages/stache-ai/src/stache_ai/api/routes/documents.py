@@ -44,15 +44,26 @@ def _reconstructed_text(chunks: list[dict], pipeline, context) -> str:
     on any fetch failure -- never a 500.
     """
     join = "\n\n".join(c.get("text", "") for c in chunks)
-    doc_id = next((c.get("doc_id") for c in chunks if c.get("doc_id")), None)
-    if not doc_id:
+    # The stored text blob is the WHOLE document; serving it is only faithful for
+    # a full-document fetch. A subset request (fewer chunks) or a multi-doc
+    # request must use the join, which returns exactly the chunks asked for --
+    # otherwise a subset would balloon to the whole doc and a multi-doc request
+    # would silently collapse to one doc's full text.
+    doc_ids = {c.get("doc_id") for c in chunks}
+    if len(doc_ids) != 1 or None in doc_ids:
         return join
+    doc_id = next(iter(doc_ids))
     namespace = next(
         (c.get("namespace") for c in chunks if c.get("doc_id") == doc_id), "default")
     try:
         doc = pipeline.get_document_record(doc_id, namespace, context=context)
         text_key = (doc or {}).get("text_blob_key")
         if not text_key:
+            return join
+        # Faithful full-document fetch only: the requested chunks must be exactly
+        # the document's chunks. Otherwise fall back to the join.
+        chunk_count = (doc or {}).get("chunk_count")
+        if chunk_count is None or len(chunks) != chunk_count:
             return join
         from stache_ai.ingestion.factory import get_ingestion_service
         data, _ = get_ingestion_service().blobstore.get(text_key)
