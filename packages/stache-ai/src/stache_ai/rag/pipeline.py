@@ -59,6 +59,58 @@ def _original_blob_ref(context) -> tuple[str | None, str | None]:
     return getattr(job, "blob_key", None), getattr(job, "content_type", None)
 
 
+def _persist_extracted_text(context, text: "str | None") -> "str | None":
+    """Store the full extracted/plain text in the blob store and return its key.
+
+    The GET chunks endpoint used to rebuild a document's text by joining the
+    stored chunks with ``"\\n\\n"``; with ``chunk_overlap`` set, adjacent chunks
+    repeat ~100 chars, so that join DUPLICATES every overlap region and injects
+    spurious breaks. Instead we persist the exact text that was chunked, once, at
+    ingest, and serve THAT (reconstructed_text, ``?format=text``).
+
+    The bytes live in the blob store (S3), never as a DynamoDB attribute: the
+    record keeps only a short ``text_blob_key``. A big document's text as an
+    attribute would make every metadata read pay RCU on the full item and could
+    exceed DynamoDB's 400KB item cap.
+
+    Reads the ingestion job + blob store the worker placed on
+    ``context.custom``. Returns None (reader then falls back to the chunk join)
+    when either is absent -- e.g. direct CLI/pipeline ingestion with no worker --
+    or when persistence fails, so a blob-store hiccup never fails an ingest.
+    """
+    custom = getattr(context, "custom", None) or {}
+    job = custom.get("ingest_job")
+    blobstore = custom.get("blobstore")
+    if job is None or blobstore is None or not text:
+        return None
+    try:
+        original_key = getattr(job, "blob_key", None)
+        if original_key:
+            # A file was extracted: the original blob is the binary source, so
+            # the text goes in a sibling blob. A ".text" SUFFIX on the original
+            # key (not a new top-level key) keeps the SAME job_id under
+            # parse_job_id, so an async object-created event for it resolves to
+            # the already-terminal job and no-ops instead of spawning a duplicate.
+            text_key = f"{original_key}.text"
+        else:
+            # A pasted-text ingest retains no binary original; mint a job-scoped
+            # key via the blob store's own make_key so any deployment key prefix
+            # is applied and parse_job_id still round-trips to this job.
+            text_key = blobstore.make_key(
+                job.job_id, "extracted.txt", principal=custom.get("principal"))
+        blobstore.put(
+            text_key,
+            text.encode("utf-8"),
+            {"filename": getattr(job, "filename", "text"), "namespace": job.namespace},
+        )
+        return text_key
+    except Exception:
+        logger.warning(
+            "Failed to persist extracted text blob; reconstructed_text will fall "
+            "back to the chunk join", exc_info=True)
+        return None
+
+
 class _IngestionSkipped(Exception):
     """Internal marker handed to ErrorProcessors when an ingestion returns a
     SKIP (deduplication / guard block) instead of raising.
@@ -885,6 +937,7 @@ class RAGPipeline:
                         clean_metadata["content_hash"] = content_hash
 
                     blob_key, blob_content_type = _original_blob_ref(context)
+                    text_blob_key = _persist_extracted_text(context, text)
                     self.document_index_provider.create_document(
                         doc_id=doc_id,
                         filename=filename,
@@ -901,6 +954,7 @@ class RAGPipeline:
                         content_hash=content_hash,
                         blob_key=blob_key,
                         content_type=blob_content_type,
+                        text_blob_key=text_blob_key,
                         context=context,
                     )
                     logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
@@ -1279,6 +1333,7 @@ class RAGPipeline:
                 file_size = path.stat().st_size if path.exists() else 0
 
                 blob_key, blob_content_type = _original_blob_ref(context)
+                text_blob_key = _persist_extracted_text(context, text)
                 self.document_index_provider.create_document(
                     doc_id=doc_id,
                     filename=filename,
@@ -1294,6 +1349,7 @@ class RAGPipeline:
                     content_hash=metadata.get("content_hash") if metadata else None,
                     blob_key=blob_key,
                     content_type=blob_content_type,
+                    text_blob_key=text_blob_key,
                     context=context,
                 )
                 logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")

@@ -34,6 +34,40 @@ def _presign_download_enabled() -> bool:
         return False
 
 
+def _reconstructed_text(chunks: list[dict], pipeline, context) -> str:
+    """Best clean reconstruction of a document's text from its chunks.
+
+    Prefers the full text stored at ingest (``text_blob_key`` on the record):
+    joining the chunks would DUPLICATE every ``chunk_overlap`` region and inject
+    ``\\n\\n`` breaks. Falls back to the chunk join only when there is no stored
+    text (older documents, direct-pipeline ingests, or an inline blob tier), and
+    on any fetch failure -- never a 500.
+    """
+    join = "\n\n".join(c.get("text", "") for c in chunks)
+    doc_id = next((c.get("doc_id") for c in chunks if c.get("doc_id")), None)
+    if not doc_id:
+        return join
+    namespace = next(
+        (c.get("namespace") for c in chunks if c.get("doc_id") == doc_id), "default")
+    try:
+        doc = pipeline.get_document_record(doc_id, namespace, context=context)
+        text_key = (doc or {}).get("text_blob_key")
+        if not text_key:
+            return join
+        from stache_ai.ingestion.factory import get_ingestion_service
+        data, _ = get_ingestion_service().blobstore.get(text_key)
+        return data.decode("utf-8")
+    except ForbiddenError:
+        raise
+    except LimitExceededError:
+        raise
+    except Exception:
+        logger.warning(
+            "Clean reconstructed_text unavailable for %s; falling back to the "
+            "chunk join", doc_id, exc_info=True)
+        return join
+
+
 @router.get("/documents")
 async def list_documents(
     http_request: Request,
@@ -415,7 +449,7 @@ async def get_chunks_by_ids(
                 for c in chunks
             ],
             "count": len(chunks),
-            "reconstructed_text": "\n\n".join(c.get("text", "") for c in chunks)
+            "reconstructed_text": _reconstructed_text(chunks, pipeline, context),
         }
     except ForbiddenError:
         raise
@@ -569,7 +603,11 @@ async def get_document(
 async def download_document_original(
     http_request: Request,
     doc_id: str = Path(..., description="Document ID (UUID)"),
-    namespace: str = "default"
+    namespace: str = "default",
+    format: str = Query(
+        "original",
+        description="'original' (default) presigns the retained original file; "
+                    "'text' presigns the clean extracted/plain text blob."),
 ):
     """Return a short-lived presigned URL to download a document's original file.
 
@@ -577,6 +615,11 @@ async def download_document_original(
     ``blob_key``) and the active blob store to support presigned downloads.
     Returns 404 when either is absent (old document, pasted text, or an inline
     tier that cannot presign). The bytes are never streamed through the app.
+
+    With ``?format=text`` the clean extracted/plain text blob (``text_blob_key``)
+    is presigned instead -- the same text served as reconstructed_text, without
+    the duplicated chunk-overlap regions a chunk join would produce. Returns 404
+    when the document has no stored text blob.
     """
     # S1 enforcement: same read op the other document routes authorize on.
     auth.authorize(http_request, "read_document", {"namespace": namespace})
@@ -595,11 +638,17 @@ async def download_document_original(
         if not doc:
             raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
 
-        blob_key = doc.get("blob_key")
+        if format == "text":
+            blob_key = doc.get("text_blob_key")
+            download_filename = (doc.get("filename") or "document") + ".txt"
+            missing_detail = "No extracted text available for this document"
+        else:
+            blob_key = doc.get("blob_key")
+            download_filename = doc.get("filename")
+            missing_detail = "No original file available for this document"
+
         if not blob_key:
-            raise HTTPException(
-                status_code=404, detail="No original file available for this document"
-            )
+            raise HTTPException(status_code=404, detail=missing_detail)
 
         from stache_ai.config import settings
         from stache_ai.ingestion.factory import get_ingestion_service
@@ -608,12 +657,10 @@ async def download_document_original(
         url = blobstore.presign_get(
             blob_key,
             expiry=settings.ingest_blob_download_expiry,
-            download_filename=doc.get("filename"),
+            download_filename=download_filename,
         )
         if not url:
-            raise HTTPException(
-                status_code=404, detail="No original file available for this document"
-            )
+            raise HTTPException(status_code=404, detail=missing_detail)
 
         return {"url": url}
     except HTTPException:

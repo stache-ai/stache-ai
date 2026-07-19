@@ -898,6 +898,7 @@ class DocumentIndexProvider(ABC):
         file_size: int | None = None,
         blob_key: str | None = None,
         content_type: str | None = None,
+        text_blob_key: str | None = None,
         context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
@@ -918,6 +919,10 @@ class DocumentIndexProvider(ABC):
                 location the download endpoint presigns). None when no original
                 was retained (e.g. pasted text or the inline tier).
             content_type: Optional MIME type of the retained original.
+            text_blob_key: Optional storage key of the full extracted/plain text
+                (a separate blob from ``blob_key``). Served back as the clean
+                reconstructed text and via ``?format=text`` instead of joining
+                chunks. None when no text blob was retained.
             context: optional request context (caller identity); implementations
                 may scope behavior on it, core providers ignore it.
 
