@@ -162,6 +162,10 @@ class BlobStore(ABC):
         opaque capability strings checked with ``in``). Recognized values:
             - "presign_download": ``presign_get`` returns a usable, time-limited
               download URL (object-store tiers only; inline tiers do not).
+            - "blob_read": the store durably retains and serves bytes -- ``get``
+              returns what ``put`` wrote. The null tier lacks this, so the
+              extracted-text persistence skips it (recording a text_blob_key it
+              could never read back would break every later fetch).
         """
         return set()
 

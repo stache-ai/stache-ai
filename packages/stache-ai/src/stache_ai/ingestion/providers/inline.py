@@ -66,6 +66,12 @@ class FilesystemBlobStore(BlobStore):
                 meta = json.load(f)
         return data, meta
 
+    @property
+    def capabilities(self) -> set[str]:
+        # Durably stores and serves bytes: get() returns what put() wrote. The
+        # null tier does not, so the extracted-text persistence is gated on this.
+        return {"blob_read"}
+
 
 class EphemeralJobStore(JobStore):
     """In-process dict. Fine for sync tier (job returned inline) + tests."""

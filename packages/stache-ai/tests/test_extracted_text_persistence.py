@@ -66,6 +66,34 @@ def test_file_ingest_writes_sibling_text_blob(tmp_path):
     assert data.decode("utf-8") == "extracted pdf text"
 
 
+def test_producer_drop_text_key_round_trips_to_job(tmp_path):
+    """A producer-drop job's blob_key is the producer's arbitrary key and its
+    job_id a fresh uuid, so the ``{blob_key}.text`` sibling parses to the WRONG
+    job -> an S3 re-trigger would mint a new producer job in an unbounded loop.
+    The fix mints a job-scoped key that inverts back to THIS job instead (whose
+    terminal status makes the re-trigger a no-op)."""
+    bs = FilesystemBlobStore(str(tmp_path))
+    job = _job(blob_key="dropzone/incoming.bin")     # producer-drop shape
+    # Precondition: the sibling key would NOT resolve to this job.
+    assert bs.parse_job_id("dropzone/incoming.bin.text") != job.job_id
+    key = _persist_extracted_text(_ctx(bs, job), "extracted text")
+    # Not the sibling; a job-scoped key that DOES round-trip to the job.
+    assert key == "job-123/extracted.txt"
+    assert bs.parse_job_id(key) == job.job_id
+    data, _ = bs.get(key)
+    assert data.decode("utf-8") == "extracted text"
+
+
+def test_null_tier_records_no_text_blob_key():
+    """The null blob tier (default OSS) retains nothing, so no text_blob_key is
+    recorded -- reconstructed_text falls back to the chunk join and the download
+    404s, instead of persisting a key whose later get() would always raise."""
+    from stache_ai.ingestion.providers.inline import NullBlobStore
+    bs = NullBlobStore()
+    assert "blob_read" not in bs.capabilities
+    assert _persist_extracted_text(_ctx(bs, _job(blob_key=None)), "text") is None
+
+
 def test_returns_none_without_blobstore_in_context():
     ctx = RequestContext(request_id="r", timestamp=datetime.now(timezone.utc),
                          namespace="default", source="worker",
@@ -88,6 +116,7 @@ def test_returns_none_for_empty_text(tmp_path):
 
 def test_put_failure_returns_none_not_raises():
     bs = MagicMock()
+    bs.capabilities = {"blob_read"}
     bs.make_key.return_value = "k"
     bs.put.side_effect = RuntimeError("s3 down")
     assert _persist_extracted_text(_ctx(bs, _job()), "text") is None
@@ -138,9 +167,15 @@ async def test_ingest_text_threads_text_blob_key_to_create_document(mock_pipelin
     assert data.decode("utf-8") == "This is the exact text that was chunked."
 
 
-async def test_ingest_text_without_worker_context_sets_no_text_blob_key(mock_pipeline):
-    """Direct pipeline ingestion (no worker -> no blobstore in context) records
-    no text_blob_key, so the reader falls back to the chunk join."""
+async def test_ingest_text_without_retention_omits_retention_kwargs(mock_pipeline):
+    """Direct pipeline ingestion (no worker -> no blob retention) leaves
+    blob_key/content_type/text_blob_key all None. Rather than pass them as None,
+    create_document is called WITHOUT those keyword names at all, so a 0.3.0
+    third-party provider that predates the retention feature (and has no
+    ``**kwargs`` to absorb them) is called with the exact pre-0.3.1 kwarg set
+    instead of raising TypeError -> silent index loss."""
     await mock_pipeline.ingest_text(text="direct ingest", metadata={"filename": "d.txt"})
     call = mock_pipeline._document_index_provider.create_document.call_args
-    assert call.kwargs["text_blob_key"] is None
+    assert "text_blob_key" not in call.kwargs
+    assert "blob_key" not in call.kwargs
+    assert "content_type" not in call.kwargs
