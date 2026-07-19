@@ -1402,6 +1402,14 @@ class TestS3VectorsNamespaceFiltering:
             mock_client.return_value = client_instance
             yield client_instance
 
+    # Soft-delete status filter applied to every search (see provider.search)
+    STATUS_FILTER = {
+        "$or": [
+            {"status": {"$exists": False}},
+            {"status": "active"},
+        ]
+    }
+
     def test_exact_namespace_uses_native_filter(self, mock_settings, mock_boto_client):
         """Should use native filter for exact: prefix"""
         from stache_ai_s3vectors.provider import S3VectorsProvider
@@ -1411,8 +1419,10 @@ class TestS3VectorsNamespaceFiltering:
 
         call_args = mock_boto_client.query_vectors.call_args
         assert 'filter' in call_args.kwargs
-        # MongoDB-style simple dict filter
-        assert call_args.kwargs['filter'] == {'namespace': 'books'}
+        # Namespace filter combined with the soft-delete status filter
+        assert call_args.kwargs['filter'] == {
+            "$and": [self.STATUS_FILTER, {"$and": [{"namespace": "books"}]}]
+        }
         # Should not overfetch for exact match
         assert call_args.kwargs['topK'] == 5
 
@@ -1426,8 +1436,9 @@ class TestS3VectorsNamespaceFiltering:
         call_args = mock_boto_client.query_vectors.call_args
         # Should overfetch for post-filtering
         assert call_args.kwargs['topK'] == 15  # 5 * 3
-        # No filter for wildcard (post-filter instead)
-        assert 'filter' not in call_args.kwargs
+        # No native namespace filter for wildcard (post-filter instead);
+        # only the soft-delete status filter is applied natively
+        assert call_args.kwargs['filter'] == self.STATUS_FILTER
 
     def test_default_namespace_uses_exact_match(self, mock_settings, mock_boto_client):
         """Should use exact match filter for default namespace behavior"""
@@ -1438,19 +1449,22 @@ class TestS3VectorsNamespaceFiltering:
 
         call_args = mock_boto_client.query_vectors.call_args
         assert 'filter' in call_args.kwargs
-        # MongoDB-style simple dict filter
-        assert call_args.kwargs['filter'] == {'namespace': 'books'}
+        # Namespace filter combined with the soft-delete status filter
+        assert call_args.kwargs['filter'] == {
+            "$and": [self.STATUS_FILTER, {"$and": [{"namespace": "books"}]}]
+        }
         assert call_args.kwargs['topK'] == 5  # No overfetch for exact match
 
     def test_no_namespace_no_filter(self, mock_settings, mock_boto_client):
-        """Should not add filter when no namespace specified"""
+        """Should apply only the soft-delete status filter when no namespace specified"""
         from stache_ai_s3vectors.provider import S3VectorsProvider
 
         provider = S3VectorsProvider(mock_settings)
         provider.search([0.1, 0.2], top_k=5)
 
         call_args = mock_boto_client.query_vectors.call_args
-        assert 'filter' not in call_args.kwargs
+        # No namespace/custom filter -> native filter is just the status filter
+        assert call_args.kwargs['filter'] == self.STATUS_FILTER
         assert call_args.kwargs['topK'] == 5
 
 
