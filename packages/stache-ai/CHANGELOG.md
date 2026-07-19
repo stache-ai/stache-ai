@@ -5,6 +5,15 @@ All notable changes to stache-ai will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-18
+
+### Added
+
+- **Original-file download endpoint**: `GET /api/documents/{doc_id}/original` returns a short-lived presigned download URL (`{"url": ...}`) for a document's retained original, authorizing the same `read_document` op as the other document routes. Returns 404 when the record has no `blob_key` (old document, pasted text) or the active blob store cannot presign; the bytes never stream through the app. URL lifetime is set by the new `INGEST_BLOB_DOWNLOAD_EXPIRY` config (default 300s).
+- **`BlobStore.presign_get` seam**: additive `presign_get(key, *, expiry, download_filename=None)` on the `BlobStore` ABC (default returns None), advertised via a new `presign_download` entry in the `BlobStore.capabilities` set (mirrors the `VectorDBProvider` capability mechanism). Implemented on the AWS `S3BlobStore` (`generate_presigned_url("get_object", ...)` with `ResponseContentDisposition` for the save-as name).
+- **Doc→original linkage**: the document index record now persists `blob_key` and `content_type`; `DocumentIndexProvider.create_document` accepts both (threaded from the ingestion job via `context.custom["ingest_job"]`). Forward-only — pre-existing documents simply lack `blob_key`.
+- **`has_original` flag**: documents-list items and query-result sources now carry `has_original` (true iff the record has a `blob_key` and the blob store advertises `presign_download`), so clients can show a download affordance without a probe request.
+
 ## [0.3.0] - 2026-07-04
 
 ### Added

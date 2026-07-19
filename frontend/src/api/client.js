@@ -230,6 +230,22 @@ export const listModels = async () => {
   return response.data
 }
 
+// Fetch a short-lived presigned URL to download a document's ORIGINAL file.
+// Returns the URL string, or null when no original is available (404 -- an
+// older document, pasted text, or a store that can't presign). Only offer this
+// when the item reports has_original; the null return is a safety net.
+export const getDocumentOriginalUrl = async (docId, namespace = null) => {
+  const config = namespace ? { params: { namespace } } : {}
+  try {
+    const response = await getClient().get(
+      `/api/documents/${encodeURIComponent(docId)}/original`, config)
+    return response.data?.url || null
+  } catch (err) {
+    if (err.status === 404) return null
+    throw err
+  }
+}
+
 export const uploadDocument = async (file, chunkingStrategy = 'recursive', metadata = null, namespace = null) => {
   const formData = new FormData()
   formData.append('file', file)

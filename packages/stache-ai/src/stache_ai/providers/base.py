@@ -896,6 +896,8 @@ class DocumentIndexProvider(ABC):
         metadata: dict[str, Any] | None = None,
         file_type: str | None = None,
         file_size: int | None = None,
+        blob_key: str | None = None,
+        content_type: str | None = None,
         context: "RequestContext | None" = None
     ) -> dict[str, Any]:
         """
@@ -912,6 +914,10 @@ class DocumentIndexProvider(ABC):
             metadata: Optional custom metadata dictionary
             file_type: Optional file type (pdf, epub, txt, md, etc.)
             file_size: Optional original file size in bytes
+            blob_key: Optional storage key of the retained original blob (the
+                location the download endpoint presigns). None when no original
+                was retained (e.g. pasted text or the inline tier).
+            content_type: Optional MIME type of the retained original.
             context: optional request context (caller identity); implementations
                 may scope behavior on it, core providers ignore it.
 

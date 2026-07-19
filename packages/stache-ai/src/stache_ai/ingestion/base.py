@@ -147,6 +147,24 @@ class BlobStore(ABC):
     def presign_put(self, key: str, *, headers: dict, expiry: int) -> Optional[str]:
         return None                        # not supported in Phase 1
 
+    def presign_get(self, key: str, *, expiry: int,
+                    download_filename: Optional[str] = None) -> Optional[str]:
+        """Presign a time-limited download URL for a stored blob, or None if the
+        store cannot presign (e.g. the inline tier). download_filename sets the
+        browser's save-as name."""
+        return None
+
+    @property
+    def capabilities(self) -> set[str]:
+        """Declared blob-store capabilities. Override to advertise support.
+
+        Mirrors the ``VectorDBProvider.capabilities`` mechanism (a set of
+        opaque capability strings checked with ``in``). Recognized values:
+            - "presign_download": ``presign_get`` returns a usable, time-limited
+              download URL (object-store tiers only; inline tiers do not).
+        """
+        return set()
+
 
 class JobStore(ABC):
     # Largest inline payload (notably ``_text``) a single job record can hold,

@@ -166,6 +166,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
         source_path: Optional[str] = None,
         content_hash: Optional[str] = None,
         chunk_count: Optional[int] = None,
+        blob_key: Optional[str] = None,
+        content_type: Optional[str] = None,
         context=None
     ) -> Dict[str, Any]:
         """Create document index entry with active status by default
@@ -184,6 +186,8 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             source_path: Optional source path for deduplication (CLI ingestion)
             content_hash: Optional SHA-256 hash of content for deduplication
             chunk_count: Optional explicit chunk count (defaults to len(chunk_ids))
+            blob_key: Optional storage key of the retained original blob
+            content_type: Optional MIME type of the retained original
 
         Returns:
             Dictionary containing the created document record
@@ -229,6 +233,12 @@ class DynamoDBDocumentIndex(DocumentIndexProvider):
             item["file_type"] = file_type
         if file_size is not None:
             item["file_size"] = file_size
+        # Location of the retained original, so the download endpoint can presign
+        # it later. Only stored when an original was actually retained.
+        if blob_key:
+            item["blob_key"] = blob_key
+        if content_type:
+            item["content_type"] = content_type
 
         try:
             # Sanitize floats to Decimal for DynamoDB compatibility

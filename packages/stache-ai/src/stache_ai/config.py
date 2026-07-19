@@ -342,6 +342,10 @@ class Settings(BaseSettings):
     )
     ingest_blob_root: str = "/tmp/stache-originals"
     ingest_jobstore_sqlite_path: str = "/tmp/stache-jobs.db"
+    ingest_blob_download_expiry: int = Field(
+        default=300, ge=1,
+        description="Lifetime (seconds) of a presigned original-download URL"
+    )
     ingest_reaper_stuck_minutes: int = Field(
         default=30, ge=1, description="Mark processing jobs older than this as failed"
     )

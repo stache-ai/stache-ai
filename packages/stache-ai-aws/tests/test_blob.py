@@ -90,3 +90,30 @@ def test_presign_put_returns_url_with_bucket():
     )
     assert isinstance(url, str)
     assert cfg.ingest_blob_s3_bucket in url
+
+
+@mock_aws
+def test_presign_get_returns_url_and_advertises_capability():
+    cfg = _config()
+    boto3.client("s3", region_name=cfg.aws_region).create_bucket(Bucket=cfg.ingest_blob_s3_bucket)
+
+    store = S3BlobStore(cfg)
+    assert "presign_download" in store.capabilities
+
+    url = store.presign_get("abc/file.txt", expiry=300)
+    assert isinstance(url, str)
+    assert cfg.ingest_blob_s3_bucket in url
+    # Signs against the prefixed key.
+    assert "originals/abc/file.txt" in url
+
+
+@mock_aws
+def test_presign_get_sets_content_disposition_filename():
+    cfg = _config()
+    boto3.client("s3", region_name=cfg.aws_region).create_bucket(Bucket=cfg.ingest_blob_s3_bucket)
+
+    store = S3BlobStore(cfg)
+    url = store.presign_get("abc/file.txt", expiry=300, download_filename="Report Q3.pdf")
+    # ResponseContentDisposition is signed into the query string (URL-encoded).
+    assert "response-content-disposition" in url.lower()
+    assert "attachment" in url.lower()

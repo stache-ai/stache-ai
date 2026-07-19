@@ -16,6 +16,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _presign_download_enabled() -> bool:
+    """Whether the configured blob store can presign original downloads.
+
+    A per-request constant: the download endpoint and ``has_original`` both key
+    off the ``presign_download`` capability the active blob store advertises
+    (the inline/null tiers advertise none, so originals are never downloadable).
+    """
+    try:
+        from stache_ai.ingestion.factory import get_ingestion_service
+        return "presign_download" in get_ingestion_service().blobstore.capabilities
+    except ForbiddenError:
+        raise
+    except LimitExceededError:
+        raise
+    except Exception:
+        return False
+
+
 @router.get("/documents")
 async def list_documents(
     http_request: Request,
@@ -88,6 +106,11 @@ async def list_documents(
                         if doc.get("filename") and doc["filename"].lower().endswith(f'.{ext_filter}')
                     ]
 
+                # Flag which documents have a downloadable retained original.
+                presign_enabled = _presign_download_enabled()
+                for doc in documents:
+                    doc["has_original"] = bool(presign_enabled and doc.get("blob_key"))
+
                 # Prepare response with same format as before
                 response = {
                     "documents": documents,
@@ -156,7 +179,10 @@ async def list_documents(
                     "namespace": vector.get("namespace", "default"),
                     "chunk_count": vector.get("chunk_count"),
                     "created_at": vector.get("created_at"),
-                    "headings": headings
+                    "headings": headings,
+                    # Summary records carry no blob_key, so an original is never
+                    # downloadable from this legacy listing path.
+                    "has_original": False,
                 })
 
             # Sort by created_at (newest first)
@@ -536,6 +562,68 @@ async def get_document(
         raise
     except Exception as e:
         logger.error(f"Failed to get document: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/documents/{doc_id}/original")
+async def download_document_original(
+    http_request: Request,
+    doc_id: str = Path(..., description="Document ID (UUID)"),
+    namespace: str = "default"
+):
+    """Return a short-lived presigned URL to download a document's original file.
+
+    Requires the retained original to still exist (the record carries a
+    ``blob_key``) and the active blob store to support presigned downloads.
+    Returns 404 when either is absent (old document, pasted text, or an inline
+    tier that cannot presign). The bytes are never streamed through the app.
+    """
+    # S1 enforcement: same read op the other document routes authorize on.
+    auth.authorize(http_request, "read_document", {"namespace": namespace})
+
+    try:
+        pipeline = get_pipeline()
+
+        if not pipeline.document_index_provider:
+            raise HTTPException(
+                status_code=501,
+                detail="Document index is not enabled. Set ENABLE_DOCUMENT_INDEX=true to use this endpoint."
+            )
+
+        context = RequestContext.from_fastapi_request(http_request, namespace)
+        doc = pipeline.get_document_record(doc_id, namespace, context=context)
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
+
+        blob_key = doc.get("blob_key")
+        if not blob_key:
+            raise HTTPException(
+                status_code=404, detail="No original file available for this document"
+            )
+
+        from stache_ai.config import settings
+        from stache_ai.ingestion.factory import get_ingestion_service
+
+        blobstore = get_ingestion_service().blobstore
+        url = blobstore.presign_get(
+            blob_key,
+            expiry=settings.ingest_blob_download_expiry,
+            download_filename=doc.get("filename"),
+        )
+        if not url:
+            raise HTTPException(
+                status_code=404, detail="No original file available for this document"
+            )
+
+        return {"url": url}
+    except HTTPException:
+        raise
+    except ForbiddenError:
+        raise
+    except LimitExceededError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to presign original download for {doc_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

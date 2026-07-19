@@ -42,6 +42,23 @@ from stache_ai.utils.hashing import compute_hash_async
 logger = logging.getLogger(__name__)
 
 
+def _original_blob_ref(context) -> tuple[str | None, str | None]:
+    """Recover (blob_key, content_type) for the retained original from the
+    ingestion job the worker placed on ``context.custom["ingest_job"]``.
+
+    Returns (None, None) for callers with no ingest job in context (e.g. direct
+    CLI/pipeline ingestion) or when no original blob was retained (pasted text
+    keeps ``blob_key`` None). The download endpoint treats a missing blob_key as
+    "no original available".
+    """
+    job = None
+    if context is not None and getattr(context, "custom", None):
+        job = context.custom.get("ingest_job")
+    if job is None:
+        return None, None
+    return getattr(job, "blob_key", None), getattr(job, "content_type", None)
+
+
 class _IngestionSkipped(Exception):
     """Internal marker handed to ErrorProcessors when an ingestion returns a
     SKIP (deduplication / guard block) instead of raising.
@@ -867,6 +884,7 @@ class RAGPipeline:
                     if content_hash:
                         clean_metadata["content_hash"] = content_hash
 
+                    blob_key, blob_content_type = _original_blob_ref(context)
                     self.document_index_provider.create_document(
                         doc_id=doc_id,
                         filename=filename,
@@ -881,6 +899,8 @@ class RAGPipeline:
                         chunk_count=len(chunk_ids),
                         source_path=metadata.get("source_path"),
                         content_hash=content_hash,
+                        blob_key=blob_key,
+                        content_type=blob_content_type,
                         context=context,
                     )
                     logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")
@@ -1258,6 +1278,7 @@ class RAGPipeline:
                 file_extension = path.suffix.lower().lstrip('.')
                 file_size = path.stat().st_size if path.exists() else 0
 
+                blob_key, blob_content_type = _original_blob_ref(context)
                 self.document_index_provider.create_document(
                     doc_id=doc_id,
                     filename=filename,
@@ -1271,6 +1292,8 @@ class RAGPipeline:
                     file_size=file_size,
                     source_path=metadata.get("source_path") if metadata else None,
                     content_hash=metadata.get("content_hash") if metadata else None,
+                    blob_key=blob_key,
+                    content_type=blob_content_type,
                     context=context,
                 )
                 logger.info(f"Created document index entry for {filename} (doc_id: {doc_id})")

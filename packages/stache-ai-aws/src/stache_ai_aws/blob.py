@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 import boto3
 
 from stache_ai.ingestion.base import BlobStore
@@ -52,3 +54,18 @@ class S3BlobStore(BlobStore):
             Params={"Bucket": self._bucket, "Key": self._full(key), **headers},
             ExpiresIn=expiry,
         )
+
+    def presign_get(self, key: str, *, expiry: int,
+                    download_filename: Optional[str] = None) -> str:
+        params = {"Bucket": self._bucket, "Key": self._full(key)}
+        if download_filename:
+            params["ResponseContentDisposition"] = (
+                f'attachment; filename="{download_filename}"'
+            )
+        return self._s3.generate_presigned_url(
+            "get_object", Params=params, ExpiresIn=expiry,
+        )
+
+    @property
+    def capabilities(self) -> set[str]:
+        return {"presign_download"}

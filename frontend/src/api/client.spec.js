@@ -11,7 +11,12 @@ vi.mock('axios', () => {
   const make = (cfg) => {
     const inst = {
       defaults: cfg,
-      get: vi.fn(() => Promise.resolve({ data: { plan: 'pro', usage: [] } })),
+      get: vi.fn((url) => {
+        if (typeof url === 'string' && url.includes('/original')) {
+          return Promise.resolve({ data: { url: 'https://signed.example/download' } })
+        }
+        return Promise.resolve({ data: { plan: 'pro', usage: [] } })
+      }),
       post: vi.fn(() => Promise.resolve({ data: {} })),
       interceptors: {
         request: { use: vi.fn() },
@@ -98,5 +103,49 @@ describe('account usage client', () => {
     config.ENTERPRISE_API_URL = EXTENSION
     const { hasExtensionApi } = await import('./client.js')
     expect(hasExtensionApi()).toBe(true)
+  })
+})
+
+describe('getDocumentOriginalUrl', () => {
+  beforeEach(async () => {
+    created.length = 0
+    for (const k of Object.keys(config)) delete config[k]
+    const client = await import('./client.js')
+    client._resetClientsForTest()
+  })
+
+  it('hits the core /original path and returns the presigned url', async () => {
+    config.API_URL = CORE
+    const { getDocumentOriginalUrl } = await import('./client.js')
+    const url = await getDocumentOriginalUrl('doc-1', 'ns-a')
+
+    const caller = created.find((i) => i.get.mock.calls.length > 0)
+    expect(caller.defaults.baseURL).toBe(CORE)   // the CORE client, not the extension one
+    const [path, cfg] = caller.get.mock.calls[0]
+    expect(path).toBe('/api/documents/doc-1/original')
+    expect(cfg).toEqual({ params: { namespace: 'ns-a' } })
+    expect(url).toBe('https://signed.example/download')
+  })
+
+  it('returns null (no broken link) when the original is gone (404)', async () => {
+    config.API_URL = CORE
+    const { getDocumentOriginalUrl } = await import('./client.js')
+    // Make the next GET 404.
+    const client = await import('./client.js')
+    const inst = created.find(Boolean) || null
+    // Force a fresh client whose get rejects with a 404-shaped error.
+    client._resetClientsForTest()
+    created.length = 0
+    const axios = (await import('axios')).default
+    axios.create.mockImplementationOnce((cfg) => {
+      const i = {
+        defaults: cfg,
+        get: vi.fn(() => Promise.reject(Object.assign(new Error('nf'), { status: 404 }))),
+        post: vi.fn(), interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+      }
+      created.push(i); return i
+    })
+    const url = await getDocumentOriginalUrl('missing', null)
+    expect(url).toBeNull()
   })
 })
