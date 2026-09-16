@@ -408,7 +408,8 @@ class AutoSplitEmbeddingWrapper:
         self,
         texts: list[str],
         *,
-        context=None
+        context=None,
+        progress_callback=None
     ) -> tuple[list[EmbeddingResult], int]:
         """
         Embed batch of texts with automatic splitting.
@@ -421,6 +422,11 @@ class AutoSplitEmbeddingWrapper:
 
         Args:
             texts: List of text chunks to embed
+            progress_callback: Optional callable ``(done_batches, total_batches)``
+                invoked as each batch completes, so callers can report embedding
+                progress (the long pole of ingest). Fired once per batch; on the
+                single-batch fast path it fires once at completion. Any exception
+                it raises is swallowed so a progress hook can never fail embedding.
 
         Returns:
             Tuple of (results, split_count) where:
@@ -440,6 +446,18 @@ class AutoSplitEmbeddingWrapper:
             (i, start, texts[start:start + self.batch_size])
             for i, start in enumerate(range(0, len(texts), self.batch_size))
         ]
+        total_batches = len(batches)
+        done_batches = 0
+
+        def _report_batch_done():
+            nonlocal done_batches
+            done_batches += 1
+            if progress_callback is None:
+                return
+            try:
+                progress_callback(done_batches, total_batches)
+            except Exception:
+                logger.debug("embed progress_callback raised; ignoring", exc_info=True)
 
         batch_results: list[tuple[list[EmbeddingResult], int] | None] = [None] * len(batches)
 
@@ -482,6 +500,7 @@ class AutoSplitEmbeddingWrapper:
         if len(batches) == 1:
             idx, results, splits = _process_batch(*batches[0])
             batch_results[idx] = (results, splits)
+            _report_batch_done()
         else:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 futures = {
@@ -491,6 +510,9 @@ class AutoSplitEmbeddingWrapper:
                 for future in as_completed(futures):
                     idx, results, splits = future.result()
                     batch_results[idx] = (results, splits)
+                    # Batches complete out of order under the pool; report by
+                    # count so progress climbs monotonically regardless of order.
+                    _report_batch_done()
 
         # Flatten in order
         all_results = []

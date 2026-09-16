@@ -122,6 +122,21 @@ def test_update_changes_fields_and_refreshes_gsi2(jobstore):
     assert queued_jobs == []
 
 
+def test_progress_roundtrips_with_no_jobstore_code_change(jobstore):
+    """Job.progress persists through create/update/get and appears in to_dict()
+    with NO DynamoDB jobstore change -- it rides Job.to_dict()/from_dict()."""
+    jobstore.create(_make_job("j-prog"))
+    # Default is 0 (kept: the create filter drops None/"" but not 0).
+    assert jobstore.get("j-prog").progress == 0
+    assert jobstore.get("j-prog").to_dict()["progress"] == 0
+
+    updated = jobstore.update("j-prog", progress=42)
+    assert updated.progress == 42
+    got = jobstore.get("j-prog")
+    assert got.progress == 42
+    assert got.to_dict()["progress"] == 42
+
+
 def test_update_missing_raises_keyerror(jobstore):
     with pytest.raises(KeyError):
         jobstore.update("ghost", status=JobStatus.DONE)

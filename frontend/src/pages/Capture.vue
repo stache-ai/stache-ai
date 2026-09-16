@@ -87,7 +87,8 @@
         <button @click="clearForm" class="btn btn-secondary" :disabled="loading">Clear</button>
       </div>
 
-      <!-- Upload Progress (for batch uploads) -->
+      <!-- Upload Progress (per-file detail + overall bar) -->
+      <div v-if="loading && progressLabel" class="progress-label">{{ progressLabel }}</div>
       <div v-if="loading && uploadProgress > 0" class="progress-bar">
         <div class="progress-bar-fill" :style="{ width: uploadProgress + '%' }"></div>
       </div>
@@ -107,6 +108,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { captureThought, uploadViaPresign, uploadDocument } from '../api/client.js'
+import { fileFraction, overallPercent } from '../utils/progress.js'
 import MetadataFields from '../components/MetadataFields.vue'
 import NamespaceSelector from '../components/NamespaceSelector.vue'
 
@@ -118,6 +120,7 @@ const metadata = ref(null)
 const metadataRef = ref(null)
 const loading = ref(false)
 const uploadProgress = ref(0)
+const progressLabel = ref('')
 const result = ref(null)
 const dragOver = ref(false)
 const fileInput = ref(null)
@@ -153,6 +156,7 @@ const handleSubmit = async () => {
 
   loading.value = true
   uploadProgress.value = 0
+  progressLabel.value = ''
   result.value = null
 
   const ns = namespace.value.trim() || null
@@ -165,19 +169,27 @@ const handleSubmit = async () => {
     const summaries = []
     let anyFailed = false
 
+    const totalFiles = files.value.length
+
+    // Translate a single file's per-phase progress into the OVERALL bar plus a
+    // concise per-file status line. uploading fills the file's first half,
+    // processing the second half; the bar is the running total across all files.
+    const reportProgress = (index, name, phase, percent) => {
+      const fraction = fileFraction(phase, percent)
+      uploadProgress.value = overallPercent(index, fraction, totalFiles)
+      const verb = phase === 'uploading' ? 'Uploading' : 'Processing'
+      progressLabel.value = `${verb} file ${index + 1} of ${totalFiles}: ${name} — ${percent}%`
+    }
+
     // Upload each file via a presigned URL, then smart-poll its job to terminal.
-    for (const file of files.value) {
+    for (let index = 0; index < files.value.length; index++) {
+      const file = files.value[index]
       let job
       try {
         job = await uploadViaPresign(file, {
           namespace: ns,
           metadata: metadata.value,
-          onUpdate: (j) => {
-            result.value = {
-              type: 'info',
-              message: `Processing ${file.name}… (${j.status})`
-            }
-          }
+          onProgress: ({ phase, percent }) => reportProgress(index, file.name, phase, percent),
         })
       } catch (err) {
         // Sync tier has no presigned-upload intake: the presign REQUEST fails
@@ -186,8 +198,11 @@ const handleSubmit = async () => {
         // a terminal result. Any other error — including failures during the
         // S3 PUT or polling, when a job already exists — propagates.
         if (!err.presignUnsupported) throw err
-        result.value = { type: 'info', message: `Uploading ${file.name}…` }
-        const uploaded = await uploadDocument(file, chunkingStrategy.value, metadata.value, ns)
+        progressLabel.value = `Uploading file ${index + 1} of ${totalFiles}: ${file.name}…`
+        const uploaded = await uploadDocument(
+          file, chunkingStrategy.value, metadata.value, ns,
+          ({ phase, percent }) => reportProgress(index, file.name, phase, percent),
+        )
         job = { status: 'done', chunks_created: uploaded.chunks_created }
       }
       if (job.status === 'done' || job.status === 'skipped') {
@@ -202,7 +217,9 @@ const handleSubmit = async () => {
     }
 
     if (hasText) {
-      // Capture typed text as its own document
+      // Capture typed text as its own document. No byte-level progress on this
+      // path — show an indeterminate "Saving…" line (bar stays hidden).
+      progressLabel.value = 'Saving text note…'
       const response = await captureThought(text.value, metadata.value, ns)
       summaries.push(`Text note: ${response.chunks_created} chunk(s)`)
     }
@@ -224,6 +241,7 @@ const handleSubmit = async () => {
   } finally {
     loading.value = false
     uploadProgress.value = 0
+    progressLabel.value = ''
   }
 }
 
@@ -235,6 +253,7 @@ const clearForm = () => {
   metadata.value = null
   result.value = null
   uploadProgress.value = 0
+  progressLabel.value = ''
   if (fileInput.value) fileInput.value.value = ''
   if (metadataRef.value) metadataRef.value.reset()
 }
@@ -397,13 +416,21 @@ select {
   border-top: 1px solid #e5e7eb;
 }
 
+.progress-label {
+  margin-top: 1rem;
+  font-size: 0.875rem;
+  color: #4b5563;
+  font-weight: 500;
+  word-break: break-word;
+}
+
 .progress-bar {
   width: 100%;
   height: 8px;
   background: #e5e7eb;
   border-radius: 4px;
   overflow: hidden;
-  margin-top: 1rem;
+  margin-top: 0.5rem;
 }
 
 .progress-bar-fill {

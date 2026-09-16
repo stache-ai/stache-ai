@@ -63,6 +63,7 @@ class Job:
     requested_by: str
     size_bytes: int = 0
     chunks_created: int = 0
+    progress: int = 0              # 0-100 percent of the processing phase (100 at DONE)
     blob_key: Optional[str] = None
     job_group: Optional[str] = None
     hash: Optional[str] = None

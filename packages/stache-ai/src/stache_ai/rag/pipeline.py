@@ -10,7 +10,7 @@ import logging
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from stache_ai.middleware.context import RequestContext
@@ -40,6 +40,35 @@ from stache_ai.types import EmptyExtractionError, IngestionResult, IngestionActi
 from stache_ai.utils.hashing import compute_hash_async
 
 logger = logging.getLogger(__name__)
+
+
+def _make_progress_emitter(progress_callback):
+    """Build a monotonic 0-100 progress emitter for an ingest method.
+
+    Returns a ``_emit(percent)`` closure that:
+    - does nothing (zero overhead) when ``progress_callback`` is None -- the
+      CLI/test/default path never pays for progress;
+    - clamps to [0, 100] and only forwards a STRICTLY increasing integer, so the
+      reported percent can never go backwards even if callers emit out of order;
+    - swallows any exception the callback raises (logged at debug) so a broken
+      progress hook can never break an ingest.
+    """
+    last = -1
+
+    def _emit(percent) -> None:
+        nonlocal last
+        if progress_callback is None:
+            return
+        p = max(0, min(100, int(percent)))
+        if p <= last:
+            return
+        last = p
+        try:
+            progress_callback(p)
+        except Exception:
+            logger.debug("progress_callback raised; ignoring", exc_info=True)
+
+    return _emit
 
 
 def _original_blob_ref(context) -> tuple[str | None, str | None]:
@@ -548,7 +577,9 @@ class RAGPipeline:
         chunking_strategy: str = "recursive",
         namespace: str | None = None,
         prepend_metadata: list[str] | None = None,
-        context: "RequestContext | None" = None
+        context: "RequestContext | None" = None,
+        *,
+        progress_callback: Optional[Callable[[int], None]] = None
     ) -> dict[str, Any]:
         """
         Ingest text into the knowledge base with deduplication support.
@@ -562,12 +593,21 @@ class RAGPipeline:
                               This embeds the metadata into the vector for better semantic search.
                               Example: ["speaker", "topic"] would prepend "Speaker: X\nTopic: Y\n\n"
             context: Optional request context for middleware (created if not provided)
+            progress_callback: Optional keyword-only ``(percent: int) -> None`` hook
+                               invoked with a monotonic 0-100 percent of the
+                               processing phase at stage boundaries (extraction,
+                               chunking, embedding band, storage, indexing). When
+                               None (CLI/tests/default) nothing is emitted and
+                               there is zero overhead. Any exception it raises is
+                               swallowed so a progress hook can never fail ingest.
 
         Returns:
             Result dictionary with chunks_created count
         """
         import time
         start_time = time.perf_counter()
+
+        _emit = _make_progress_emitter(progress_callback)
 
         logger.info(f"Ingesting text (length: {len(text)}, strategy: {chunking_strategy}, namespace: {namespace})")
 
@@ -733,6 +773,7 @@ class RAGPipeline:
             # Use enriched content and metadata
             text = current_text
             metadata = current_metadata
+            _emit(10)  # text loaded + enriched
 
             # Apply suggested namespace if auto-apply was requested
             if "_suggested_namespace_to_apply" in metadata:
@@ -782,6 +823,7 @@ class RAGPipeline:
             chunks = [chunk.text for chunk in chunk_objects]
 
             logger.info(f"Created {len(chunks)} chunks (effective size: {effective_chunk_size})")
+            _emit(20)  # chunking complete; embedding (the long pole) begins next
 
             # Prepend metadata to each chunk for embedding
             chunks_for_embedding = [metadata_prefix + chunk for chunk in chunks] if metadata_prefix else chunks
@@ -822,8 +864,12 @@ class RAGPipeline:
                     enabled=True
                 )
 
-                # Use wrapper for embedding
-                results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding, context=context)
+                # Use wrapper for embedding. Interpolate the 20->80 band across
+                # embedding batches (the long pole) so the bar visibly climbs.
+                results, split_count = wrapper.embed_batch_with_splits(
+                    chunks_for_embedding, context=context,
+                    progress_callback=lambda done, total: _emit(20 + int(60 * done / total)),
+                )
 
                 # Extract embeddings and texts
                 embeddings = [r.embedding for r in results]
@@ -850,8 +896,10 @@ class RAGPipeline:
                 metadatas = expanded_metadatas
                 chunks_for_embedding = texts_to_store
             else:
-                # Auto-split disabled, use standard embed_batch
+                # Auto-split disabled, use standard embed_batch (single opaque
+                # call -- no per-batch signal, so land at the top of the band).
                 embeddings = self.embedding_provider.embed_batch(chunks_for_embedding, context=context)
+            _emit(80)  # embedding complete
 
             # Insert into vector DB (store enriched chunks if metadata was prepended)
             ids = self.documents_provider.insert(
@@ -863,6 +911,7 @@ class RAGPipeline:
             )
             vectors_inserted = True
             chunk_ids = ids
+            _emit(85)  # vectors stored
 
             # Create storage result and chunk tuples for middleware
             from stache_ai.middleware.base import StorageResult
@@ -924,6 +973,7 @@ class RAGPipeline:
             summary_text = artifacts.get("summary")
             headings = artifacts.get("headings", [])
             summary_id = artifacts.get("summary_id")
+            _emit(90)  # post-ingest (summary/enrichment) complete
 
             # Complete identifier reservation (if not REINGEST_VERSION)
             if self.config.dedup_enabled and self.document_index_provider and content_hash:
@@ -999,6 +1049,7 @@ class RAGPipeline:
                         }
                     )
 
+            _emit(95)  # document index created; worker sets 100 on DONE
             total_time = time.perf_counter() - start_time
             action = IngestionAction.REINGEST_VERSION if previous_doc_id else IngestionAction.INGEST_NEW
 
@@ -1089,7 +1140,9 @@ class RAGPipeline:
         chunking_strategy: str = "auto",
         namespace: str | None = None,
         prepend_metadata: list[str] | None = None,
-        context: "RequestContext | None" = None
+        context: "RequestContext | None" = None,
+        *,
+        progress_callback: Optional[Callable[[int], None]] = None
     ) -> dict[str, Any]:
         """
         Ingest a file into the knowledge base with structure-aware processing.
@@ -1105,10 +1158,16 @@ class RAGPipeline:
             namespace: Optional namespace for isolation
             prepend_metadata: List of metadata keys to prepend to chunks
             context: Optional request context for middleware (created if not provided)
+            progress_callback: Optional keyword-only ``(percent: int) -> None`` hook
+                               invoked with a monotonic 0-100 percent of the
+                               processing phase at stage boundaries (see
+                               ``ingest_text``). None (default) emits nothing;
+                               a raising callback never fails the ingest.
 
         Returns:
             Result dictionary with chunks_created count
         """
+        _emit = _make_progress_emitter(progress_callback)
         path = Path(file_path)
         filename = path.name
 
@@ -1163,6 +1222,7 @@ class RAGPipeline:
         # Use enriched content and metadata
         text = current_text
         metadata = current_metadata
+        _emit(10)  # text loaded/extracted + enriched
 
         # Build metadata prefix
         metadata_prefix = ""
@@ -1215,6 +1275,7 @@ class RAGPipeline:
             chunk_metadatas.append(chunk.metadata)
 
         logger.info(f"Created {len(chunks)} chunks from {filename}")
+        _emit(20)  # chunking complete; embedding (the long pole) begins next
 
         # Prepend metadata to chunks for embedding
         chunks_for_embedding = [metadata_prefix + chunk for chunk in chunks] if metadata_prefix else chunks
@@ -1256,8 +1317,12 @@ class RAGPipeline:
                 enabled=True
             )
 
-            # Use wrapper for embedding
-            results, split_count = wrapper.embed_batch_with_splits(chunks_for_embedding, context=context)
+            # Use wrapper for embedding. Interpolate the 20->80 band across
+            # embedding batches (the long pole) so the bar visibly climbs.
+            results, split_count = wrapper.embed_batch_with_splits(
+                chunks_for_embedding, context=context,
+                progress_callback=lambda done, total: _emit(20 + int(60 * done / total)),
+            )
 
             # Extract embeddings and texts
             embeddings = [r.embedding for r in results]
@@ -1288,10 +1353,12 @@ class RAGPipeline:
 
             chunks_for_embedding = texts_to_store
         else:
-            # Auto-split disabled, use standard embed_batch
+            # Auto-split disabled, use standard embed_batch (single opaque call
+            # -- no per-batch signal, so land at the top of the band).
             embeddings = self.embedding_provider.embed_batch(chunks_for_embedding, context=context)
             metadatas = base_metadatas
             split_count = 0
+        _emit(80)  # embedding complete
 
         # Use provided namespace or default from config
         ns = namespace or self.config.default_namespace
@@ -1304,6 +1371,7 @@ class RAGPipeline:
             namespace=ns,
             context=context
         )
+        _emit(85)  # vectors stored
 
         # Create storage result and chunk tuples for middleware
         from stache_ai.middleware.base import StorageResult
@@ -1352,6 +1420,7 @@ class RAGPipeline:
         summary_text = artifacts.get("summary")
         headings = artifacts.get("headings", [])
         summary_id = artifacts.get("summary_id")
+        _emit(90)  # post-ingest (summary/enrichment) complete
 
         # Create document index entry for efficient metadata queries (dual-write pattern)
         # This is wrapped in try/except to prevent ingestion failure if index write fails
@@ -1402,6 +1471,8 @@ class RAGPipeline:
                         "metadata_keys": list(metadata.keys()) if metadata else [],
                     }
                 )
+
+        _emit(95)  # document index created; worker sets 100 on DONE
 
         result = {
             "chunks_created": len(embeddings),

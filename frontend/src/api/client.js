@@ -197,7 +197,14 @@ export async function pollJob(jobId, { interval = 1000, maxInterval = 5000, time
 }
 
 // Large-file path: ask for a presigned URL, PUT the file straight to S3, then poll.
-export const uploadViaPresign = async (file, { namespace = null, metadata = null, onUpdate } = {}) => {
+//
+// `onProgress` (optional) receives a unified progress event across both phases:
+//   { phase: 'uploading',  percent }                  during the S3 transfer
+//   { phase: 'processing', percent, status }          during server-side ingest
+// so a caller can drive one bar through the whole upload → process lifecycle.
+// `onUpdate` still fires with the raw job each poll (unchanged for callers that
+// only want terminal/status info).
+export const uploadViaPresign = async (file, { namespace = null, metadata = null, onUpdate, onProgress } = {}) => {
   let ticket
   try {
     ticket = await submitIngest({
@@ -222,8 +229,20 @@ export const uploadViaPresign = async (file, { namespace = null, metadata = null
   // baseURL don't apply to the direct S3 PUT.
   await axios.put(upload_url, file, {
     headers: required_headers || { 'Content-Type': file.type },
+    // Byte-level transfer percent, straight from the browser. Guard the divide:
+    // some environments report total as 0/undefined for non-computable lengths.
+    onUploadProgress: onProgress ? (e) => {
+      if (e.total) onProgress({ phase: 'uploading', percent: Math.round((e.loaded * 100) / e.total) })
+    } : undefined,
   })
-  return pollJob(job_id, { onUpdate })
+  return pollJob(job_id, {
+    onUpdate: (job) => {
+      // Server `progress` is coarse for small docs (it steps) — that's fine; the
+      // caller just renders whatever it is and never lets the bar go backwards.
+      onProgress?.({ phase: 'processing', percent: job.progress ?? 0, status: job.status })
+      onUpdate?.(job)
+    },
+  })
 }
 
 export const queryKnowledge = async (query, synthesize = true, top_k = 5, namespace = null, rerank = false, model = null) => {
@@ -259,7 +278,7 @@ export const getDocumentOriginalUrl = async (docId, namespace = null) => {
   }
 }
 
-export const uploadDocument = async (file, chunkingStrategy = 'recursive', metadata = null, namespace = null) => {
+export const uploadDocument = async (file, chunkingStrategy = 'recursive', metadata = null, namespace = null, onProgress = null) => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('chunking_strategy', chunkingStrategy)
@@ -275,6 +294,11 @@ export const uploadDocument = async (file, chunkingStrategy = 'recursive', metad
       'Content-Type': 'multipart/form-data',
     },
     timeout: 120000, // 2 minute timeout for uploads
+    // Sync-tier fallback still ingests in-process, so the whole request is the
+    // upload phase; mirror uploadViaPresign's transfer-percent shape.
+    onUploadProgress: onProgress ? (e) => {
+      if (e.total) onProgress({ phase: 'uploading', percent: Math.round((e.loaded * 100) / e.total) })
+    } : undefined,
   })
   return response.data
 }

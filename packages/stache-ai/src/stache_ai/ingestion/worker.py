@@ -84,6 +84,20 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
             # ``job.metadata`` below; only ``md`` (what flows onward) is filtered.
             md = {k: v for k, v in job.metadata.items() if not is_reserved_metadata_key(k)}
             prepend = job.metadata.get("_prepend_metadata")
+            # Throttled progress writer: the pipeline emits a fine-grained 0-100
+            # percent, but persisting every tick would be far too many DynamoDB
+            # writes. Only write when the percent advances by >= 5 since the last
+            # WRITTEN value (bounding writes to <= ~16 per ingest), and never
+            # touch status here -- the job stays PROCESSING; only progress +
+            # updated_at move. The terminal update below sets progress=100.
+            last_written = [0]
+
+            def on_progress(pct: int) -> None:
+                if pct - last_written[0] < 5:
+                    return
+                last_written[0] = pct
+                jobstore.update(job_id, progress=pct, updated_at=_now())
+
             if job.content_type in SUPPORTED_TEXT and "_text" in job.metadata:
                 result = await pipeline.ingest_text(
                     text=job.metadata["_text"],
@@ -92,6 +106,7 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                     chunking_strategy=job.metadata.get("_chunking", "recursive"),
                     prepend_metadata=prepend,
                     context=context,
+                    progress_callback=on_progress,
                 )
             else:
                 data, _ = blobstore.get(job.blob_key)            # bytes from BlobStore
@@ -111,6 +126,7 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                         chunking_strategy=job.metadata.get("_chunking", "auto"),
                         prepend_metadata=prepend,
                         context=context,
+                        progress_callback=on_progress,
                     )
 
             # Result keys: `doc_id` and (for text) `action` ("skipped" == dedup hit).
@@ -121,6 +137,7 @@ def make_worker(jobstore, blobstore, notifier, pipeline):
                 job_id,
                 status=status,
                 doc_id=doc_id,
+                progress=100,
                 chunks_created=result.get("chunks_created", 0) or 0,
                 # Drop the inline document body from the persisted record now that
                 # processing is done: transport-only keys (notably _text) can be

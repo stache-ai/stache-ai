@@ -208,6 +208,53 @@ def test_worker_missing_job_is_noop():
     pipeline.ingest_text.assert_not_called()
 
 
+class _RecordingStore(EphemeralJobStore):
+    """EphemeralJobStore that records throttled progress writes vs the terminal
+    update, so the worker's throttle logic can be asserted."""
+
+    def __init__(self):
+        super().__init__()
+        self.progress_writes = []      # progress-only updates (status untouched)
+        self.terminal_progress = "unset"
+
+    def update(self, job_id, **fields):
+        if fields.get("status") is not None:
+            self.terminal_progress = fields.get("progress")
+        elif "progress" in fields:
+            # A progress tick must never change status, only progress+updated_at.
+            assert set(fields) <= {"progress", "updated_at"}
+            self.progress_writes.append(fields["progress"])
+        return super().update(job_id, **fields)
+
+
+class _ScriptedPipeline:
+    """Pipeline stub that fires progress_callback with a scripted sequence."""
+
+    def __init__(self, sequence):
+        self._sequence = sequence
+
+    async def ingest_text(self, *, progress_callback=None, **kwargs):
+        for pct in self._sequence:
+            progress_callback(pct)
+        return {"doc_id": "doc-1", "action": "ingested_new", "chunks_created": 3}
+
+
+def test_worker_throttles_progress_writes_and_sets_terminal_100():
+    store = _RecordingStore()
+    store.create(_text_job({"_text": "hello world"}))
+    # Emitted percents: only >= 5 advances from the last WRITTEN value persist.
+    #   0(skip) 3(skip) 6(write) 50(write) 52(skip) 100(write)
+    pipeline = _ScriptedPipeline([0, 3, 6, 50, 52, 100])
+    worker = make_worker(store, _Blob(), NullNotifier(), pipeline)
+    asyncio.run(worker("j1"))
+
+    assert store.progress_writes == [6, 50, 100]
+    # Terminal DONE update also carries progress=100.
+    assert store.terminal_progress == 100
+    assert store.get("j1").status == JobStatus.DONE
+    assert store.get("j1").progress == 100
+
+
 def test_worker_passes_prepend_metadata():
     store = EphemeralJobStore()
     store.create(_text_job({"_text": "hi", "_prepend_metadata": ["topic"], "topic": "faith"}))

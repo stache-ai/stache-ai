@@ -5,6 +5,16 @@ All notable changes to stache-ai will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-09-16
+
+### Added
+
+- **Server-side ingest progress**: async ingest now reports a 0-100 `progress` percent that climbs through the `processing` phase, so clients can render a real progress bar instead of an indeterminate "Processing…". Additive and ABI-safe:
+  - New `Job.progress` field (int, default 0; 100 at DONE). It round-trips through `Job.to_dict()`/`from_dict()` and the DynamoDB jobstore with no jobstore code change, and is exposed automatically via `GET /api/jobs` and `GET /api/jobs/{id}`.
+  - New keyword-only `progress_callback: Optional[Callable[[int], None]]` on `RAGPipeline.ingest_file`/`ingest_text`. It emits a monotonic percent at stage boundaries — text load/enrich (~10), chunking (~20), an interpolated 20→80 band across embedding batches (the long pole), vector storage (~85), post-ingest (~90), document index create (~95). When None (CLI/default) nothing is emitted (zero overhead), and any exception the callback raises is swallowed so a progress hook can never fail an ingest. `AutoSplitEmbeddingWrapper.embed_batch_with_splits` gained an optional `progress_callback(done_batches, total_batches)` for the embedding band.
+  - The ingestion worker passes a **throttled** callback that persists progress only when it advances by ≥5 since the last written value (bounding writes to ≲16 per ingest) and never changes `status` (the job stays PROCESSING; only `progress`/`updated_at` move). The terminal DONE update now also sets `progress=100`.
+- **Frontend ingest-progress UX**: the Capture page now renders real upload progress instead of an indeterminate spinner. `uploadViaPresign` gained an optional `onProgress` callback that reports byte-level transfer percent (`{phase:'uploading', percent}`) during the direct-to-S3 PUT and the server's `job.progress` (`{phase:'processing', percent, status}`) during polling; the legacy sync `uploadDocument` fallback mirrors the uploading events. Capture maps each file to a local fraction (upload → first half, processing → second half) and drives a single overall bar across all files (`round(((fileIndex + fraction) / totalFiles) * 100)`), with a per-file status line ("Uploading/Processing file 2 of 5: report.pdf — 45%"). Coarse server steps only ever move the bar forward, never backward.
+
 ## [0.3.1] - 2026-07-18
 
 ### Added

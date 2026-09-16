@@ -111,7 +111,11 @@ def test_get_job_owner(client):
     job_id = client.post("/api/ingest", json={"text": "hello"}).json()["job_id"]
     resp = client.get(f"/api/jobs/{job_id}")
     assert resp.status_code == 200
-    assert resp.json()["job_id"] == job_id
+    body = resp.json()
+    assert body["job_id"] == job_id
+    # Job.progress is exposed via to_dict() with no jobstore/route change.
+    assert "progress" in body
+    assert isinstance(body["progress"], int)
 
 
 def test_get_job_missing_404(client):

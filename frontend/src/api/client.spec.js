@@ -26,7 +26,9 @@ vi.mock('axios', () => {
     created.push(inst)
     return inst
   }
-  return { default: { create: vi.fn(make) } }
+  // `put` is the RAW axios call uploadViaPresign uses for the direct S3 PUT
+  // (bypassing the created instance so no auth/baseURL applies).
+  return { default: { create: vi.fn(make), put: vi.fn(() => Promise.resolve({ data: {} })) } }
 })
 
 vi.mock('./auth.js', () => ({
@@ -218,5 +220,100 @@ describe('pollJob transient-failure tolerance', () => {
     const assertion = expect(p).rejects.toThrow('down')
     await vi.runAllTimersAsync()
     await assertion
+  })
+})
+
+describe('uploadViaPresign progress reporting', () => {
+  // Two phases feed one onProgress callback: the browser-side S3 transfer emits
+  // {phase:'uploading', percent} from axios' onUploadProgress, then each job
+  // poll emits {phase:'processing', percent: job.progress, status}. The presign
+  // ticket (client.post) and the polls (client.get) share the created instance;
+  // the direct S3 PUT is the RAW axios.put.
+  beforeEach(async () => {
+    created.length = 0
+    for (const k of Object.keys(config)) delete config[k]
+    const client = await import('./client.js')
+    client._resetClientsForTest()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('forwards S3 transfer bytes as uploading %, and job.progress as processing %', async () => {
+    config.API_URL = CORE
+    const axios = (await import('axios')).default
+
+    let getCalls = 0
+    axios.create.mockImplementationOnce((cfg) => {
+      const i = {
+        defaults: cfg,
+        // submitIngest -> the presign ticket
+        post: vi.fn(() => Promise.resolve({ data: {
+          job_id: 'j-9',
+          upload_url: 'https://s3.example/put',
+          required_headers: { 'Content-Type': 'application/pdf' },
+        } })),
+        // getJob -> processing (progress 80), then terminal done (100)
+        get: vi.fn(() => {
+          getCalls += 1
+          if (getCalls === 1) return Promise.resolve({ data: { status: 'processing', progress: 80 } })
+          return Promise.resolve({ data: { status: 'done', progress: 100 } })
+        }),
+        interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+      }
+      created.push(i)
+      return i
+    })
+
+    // Drive axios' onUploadProgress with a byte event during the S3 PUT.
+    axios.put.mockImplementationOnce((url, file, cfg) => {
+      cfg.onUploadProgress?.({ loaded: 45, total: 100 })
+      return Promise.resolve({})
+    })
+
+    const events = []
+    const { uploadViaPresign } = await import('./client.js')
+    const p = uploadViaPresign(new Blob(['x']), { onProgress: (e) => events.push(e) })
+    await vi.runAllTimersAsync()
+    const job = await p
+
+    expect(job).toEqual({ status: 'done', progress: 100 })
+    expect(events).toContainEqual({ phase: 'uploading', percent: 45 })
+    expect(events).toContainEqual({ phase: 'processing', percent: 80, status: 'processing' })
+    expect(events).toContainEqual({ phase: 'processing', percent: 100, status: 'done' })
+  })
+
+  it('does not emit an uploading event when the transfer total is unknown (guards divide-by-zero)', async () => {
+    config.API_URL = CORE
+    const axios = (await import('axios')).default
+
+    axios.create.mockImplementationOnce((cfg) => {
+      const i = {
+        defaults: cfg,
+        post: vi.fn(() => Promise.resolve({ data: {
+          job_id: 'j-10', upload_url: 'https://s3.example/put', required_headers: {},
+        } })),
+        get: vi.fn(() => Promise.resolve({ data: { status: 'done', progress: 100 } })),
+        interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+      }
+      created.push(i)
+      return i
+    })
+
+    axios.put.mockImplementationOnce((url, file, cfg) => {
+      cfg.onUploadProgress?.({ loaded: 10, total: 0 })
+      return Promise.resolve({})
+    })
+
+    const events = []
+    const { uploadViaPresign } = await import('./client.js')
+    const p = uploadViaPresign(new Blob(['x']), { onProgress: (e) => events.push(e) })
+    await vi.runAllTimersAsync()
+    await p
+
+    expect(events.some((e) => e.phase === 'uploading')).toBe(false)
+    expect(events).toContainEqual({ phase: 'processing', percent: 100, status: 'done' })
   })
 })
