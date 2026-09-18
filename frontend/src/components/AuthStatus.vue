@@ -24,8 +24,8 @@ const handleLogout = () => {
 }
 
 onMounted(() => {
-  // Handle OAuth callback if returning from login
-  auth.handleCallback()
+  // The OAuth code exchange is completed (awaited) by the router guard before
+  // this mounts, so just read the resulting user.
   user.value = auth.getUser()
 })
 </script>

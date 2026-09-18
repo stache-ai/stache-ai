@@ -6,7 +6,7 @@ import Capture from './pages/Capture.vue'
 import Query from './pages/Query.vue'
 import Namespaces from './pages/Namespaces.vue'
 import PendingQueue from './pages/PendingQueue.vue'
-import auth, { authProvider, handleCallback } from './api/auth.js'
+import auth, { authProvider } from './api/auth.js'
 
 const routes = [
   { path: '/', component: Home },
@@ -22,10 +22,13 @@ const router = createRouter({
 })
 
 // Auth guard - only enforced when auth provider is configured (not 'none')
-router.beforeEach((to, from, next) => {
-  // Handle OAuth callback first (token in URL hash)
-  if (window.location.hash.includes('id_token=')) {
-    handleCallback()
+router.beforeEach(async (to, from, next) => {
+  // Complete the OAuth code exchange first (authorization code + PKCE returns
+  // ?code=... in the query). handleCallback is async: it hits the token
+  // endpoint, so we MUST await it before the isAuthenticated check below, or
+  // the guard would bounce to login and discard the code (the old loop).
+  if (new URLSearchParams(window.location.search).has('code')) {
+    await auth.handleCallback()
   }
 
   // Skip auth check if provider is 'none' (local dev)
@@ -34,9 +37,15 @@ router.beforeEach((to, from, next) => {
     return
   }
 
-  // If not authenticated, trigger login
+  // Session expired but a refresh token is on hand -> renew silently rather
+  // than full-redirecting to the Hosted UI.
+  if (!auth.isAuthenticated() && auth.canRefresh?.()) {
+    await auth.refresh()
+  }
+
+  // Still not authenticated -> start the login redirect.
   if (!auth.isAuthenticated()) {
-    auth.login()
+    await auth.login()
     return
   }
 

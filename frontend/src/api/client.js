@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getAuthHeader, authProvider } from './auth.js'
+import { getAuthHeader, authProvider, isAuthenticated, canRefresh, refresh } from './auth.js'
 
 // API URL can be configured via VITE_API_URL environment variable
 // Falls back to relative paths for same-origin deployment
@@ -15,8 +15,13 @@ const client = axios.create({
 
 // Request interceptor to add auth headers
 client.interceptors.request.use(async (config) => {
-  const authHeaders = getAuthHeader()
-  Object.assign(config.headers, authHeaders)
+  // Pre-emptive silent refresh: the id token is expired (or within the expiry
+  // buffer) but a refresh token is on hand — renew before the call rather than
+  // letting it 401. PKCE issues the refresh token that makes this possible.
+  if (authProvider !== 'none' && !isAuthenticated() && canRefresh()) {
+    try { await refresh() } catch { /* fall through; request will 401 */ }
+  }
+  Object.assign(config.headers, getAuthHeader())
   return config
 })
 
