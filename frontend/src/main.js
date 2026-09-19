@@ -21,35 +21,60 @@ const router = createRouter({
   routes,
 })
 
+// After this many failed sign-in attempts we stop redirecting to the Hosted UI
+// (a valid Cognito session cookie makes each /authorize return instantly, so a
+// persistent exchange failure / ?error would otherwise be a redirect storm).
+const MAX_AUTH_ATTEMPTS = 2
+
 // Auth guard - only enforced when auth provider is configured (not 'none')
 router.beforeEach(async (to, from, next) => {
-  // Complete the OAuth code exchange first (authorization code + PKCE returns
-  // ?code=... in the query). handleCallback is async: it hits the token
-  // endpoint, so we MUST await it before the isAuthenticated check below, or
-  // the guard would bounce to login and discard the code (the old loop).
-  if (new URLSearchParams(window.location.search).has('code')) {
-    await auth.handleCallback()
+  // OAuth callback: complete the code exchange (or capture an ?error), then
+  // strip the oauth params from the URL THROUGH the router. Key off to.query,
+  // not window.location: the router resolves `to` before guards run and would
+  // otherwise re-insert ?code=... after next(), leaving the code in history
+  // (a spurious state-mismatch on the next reload).
+  if (to.query.code || to.query.error) {
+    const ok = await auth.handleCallback()
+    if (ok) {
+      sessionStorage.removeItem('stache_auth_attempts')
+      const dest = sessionStorage.getItem('stache_post_login')
+      sessionStorage.removeItem('stache_post_login')
+      return next(dest && dest !== to.fullPath ? dest : { path: to.path, replace: true })
+    }
+    // eslint-disable-next-line no-unused-vars
+    const { code, state, error, error_description, ...rest } = to.query
+    return next({ path: to.path, query: rest, replace: true })
   }
 
   // Skip auth check if provider is 'none' (local dev)
-  if (authProvider === 'none') {
-    next()
-    return
+  if (authProvider === 'none') return next()
+
+  if (auth.isAuthenticated()) {
+    sessionStorage.removeItem('stache_auth_attempts')
+    return next()
   }
 
-  // Session expired but a refresh token is on hand -> renew silently rather
-  // than full-redirecting to the Hosted UI.
-  if (!auth.isAuthenticated() && auth.canRefresh?.()) {
+  // Session expired but a refresh token is on hand -> renew silently
+  // (single-flight in auth.js) rather than full-redirecting to the Hosted UI.
+  if (auth.canRefresh?.()) {
     await auth.refresh()
+    if (auth.isAuthenticated()) {
+      sessionStorage.removeItem('stache_auth_attempts')
+      return next()
+    }
   }
 
-  // Still not authenticated -> start the login redirect.
-  if (!auth.isAuthenticated()) {
-    await auth.login()
-    return
+  // Not authenticated. Circuit breaker: after repeated failures, render the app
+  // unauthenticated instead of looping back to the Hosted UI. A reload resets it.
+  const attempts = parseInt(sessionStorage.getItem('stache_auth_attempts') || '0', 10)
+  if (attempts >= MAX_AUTH_ATTEMPTS) {
+    console.error('Sign-in failed repeatedly; not retrying (reload to try again).')
+    return next()
   }
-
-  next()
+  sessionStorage.setItem('stache_auth_attempts', String(attempts + 1))
+  try { sessionStorage.setItem('stache_post_login', to.fullPath) } catch { /* ignore */ }
+  await auth.login()
+  // login() redirects the page; nothing after this runs.
 })
 
 const app = createApp(App)
@@ -67,4 +92,8 @@ window.addEventListener('unhandledrejection', (event) => {
 })
 
 app.use(router)
-app.mount('#app')
+// Mount only after the initial navigation (and any code exchange) resolves, so
+// components outside <router-view> (the header AuthStatus) don't render in a
+// stale unauthenticated state right after login. If the guard triggers a login
+// redirect, isReady never resolves and the page is unloading anyway.
+router.isReady().then(() => app.mount('#app'))

@@ -3,7 +3,7 @@
  *
  * Supports multiple auth providers:
  * - 'none': No auth (local dev, air-gapped)
- * - 'cognito': AWS Cognito OAuth2 implicit flow
+ * - 'cognito': AWS Cognito OAuth2 authorization code + PKCE
  * - 'apikey': Static API key (simple deployments)
  *
  * Configure via VITE_AUTH_PROVIDER environment variable.
@@ -119,8 +119,9 @@ function createCognitoProvider() {
   const persist = (tokens) => {
     const expiry = Date.now() + (parseInt(tokens.expires_in || '3600', 10) * 1000)
     localStorage.setItem(TOKEN_KEY, tokens.id_token)
-    if (tokens.access_token) localStorage.setItem(ACCESS_TOKEN_KEY, tokens.access_token)
     localStorage.setItem(EXPIRY_KEY, expiry.toString())
+    // The access token is never read (the API authorizer validates the id
+    // token), so we don't persist it — smaller localStorage exfil surface.
     // A refresh-token grant response does NOT return a new refresh_token; keep the old one.
     if (tokens.refresh_token) localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token)
   }
@@ -132,18 +133,42 @@ function createCognitoProvider() {
   }
 
   const tokenEndpoint = async (params) => {
-    const resp = await fetch(`https://${config.domain}/oauth2/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: config.clientId, ...params }).toString(),
-    })
-    if (!resp.ok) throw new Error(`token endpoint ${resp.status}: ${await resp.text()}`)
-    return resp.json()
+    let resp
+    try {
+      resp = await fetch(`https://${config.domain}/oauth2/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: config.clientId, ...params }).toString(),
+        signal: AbortSignal.timeout(10000),
+      })
+    } catch (e) {
+      // Network error / timeout: transient, no HTTP status.
+      const err = new Error(`token endpoint request failed: ${e}`)
+      err.transient = true
+      throw err
+    }
+    const text = await resp.text()
+    if (!resp.ok) {
+      let oauthError = null
+      try { oauthError = JSON.parse(text).error } catch { /* non-JSON body */ }
+      const err = new Error(`token endpoint ${resp.status}: ${text}`)
+      err.status = resp.status
+      err.oauthError = oauthError            // e.g. 'invalid_grant'
+      err.transient = resp.status >= 500     // 5xx is transient; a 4xx is not
+      throw err
+    }
+    return JSON.parse(text)
   }
 
   const login = async () => {
     if (!isConfigured()) {
       console.error('Cognito not configured. Set VITE_COGNITO_* environment variables.')
+      return
+    }
+    if (!window.crypto?.subtle) {
+      // PKCE needs Web Crypto, which is only present in a secure context
+      // (https or localhost). Fail loudly instead of an opaque TypeError.
+      console.error('PKCE login requires a secure (https) context; window.crypto.subtle is unavailable.')
       return
     }
     const verifier = randomString()
@@ -162,6 +187,19 @@ function createCognitoProvider() {
   }
 
   const logout = () => {
+    // Best-effort refresh-token revocation so a token stolen via XSS can't
+    // outlive an explicit logout. Fire-and-forget (keepalive) before we clear.
+    const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY)
+    if (refreshToken && config.domain) {
+      try {
+        fetch(`https://${config.domain}/oauth2/revoke`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ token: refreshToken, client_id: config.clientId }).toString(),
+          keepalive: true,
+        }).catch(() => {})
+      } catch { /* ignore */ }
+    }
     clear()
     if (!isConfigured()) {
       window.location.reload()
@@ -173,22 +211,30 @@ function createCognitoProvider() {
     window.location.href = url.toString()
   }
 
-  const stripQuery = () =>
-    window.history.replaceState(null, '', window.location.pathname)
-
-  /** Exchange the ?code returned by the Hosted UI. Returns true if it consumed a code. */
+  /**
+   * Exchange the ?code returned by the Hosted UI (or surface an ?error).
+   * Returns true only on a successful token exchange. The caller (router guard)
+   * strips the oauth params from the URL via the router — a raw replaceState
+   * here is undone by Vue Router's own navigation.
+   */
   const handleCallback = async () => {
     const params = new URLSearchParams(window.location.search)
+    const oauthError = params.get('error')
+    if (oauthError) {
+      console.error(`OAuth error from Cognito: ${oauthError} — ${params.get('error_description') || ''}`)
+      sessionStorage.removeItem(PKCE_VERIFIER_KEY)
+      sessionStorage.removeItem(OAUTH_STATE_KEY)
+      return false
+    }
     const code = params.get('code')
     if (!code) return false
     const returnedState = params.get('state')
     const expectedState = sessionStorage.getItem(OAUTH_STATE_KEY)
     const verifier = sessionStorage.getItem(PKCE_VERIFIER_KEY)
-    // Always clear the URL so a stale code can't be replayed on refresh.
-    stripQuery()
     sessionStorage.removeItem(PKCE_VERIFIER_KEY)
     sessionStorage.removeItem(OAUTH_STATE_KEY)
-    if (!verifier || (expectedState && returnedState !== expectedState)) {
+    // Strict CSRF check: both the verifier AND a matching state must be present.
+    if (!verifier || !expectedState || returnedState !== expectedState) {
       console.error('OAuth callback state/verifier mismatch; ignoring code')
       return false
     }
@@ -206,18 +252,37 @@ function createCognitoProvider() {
     }
   }
 
-  /** Silent renew via the refresh token. Returns true on success. */
-  const refresh = async () => {
+  /**
+   * Silent renew via the refresh token. Single-flight: concurrent callers share
+   * one in-flight request so N parallel API calls on load don't fire N refreshes
+   * (and a late failure can't clear tokens a peer just persisted). Returns true
+   * on success.
+   */
+  let refreshInFlight = null
+  const doRefresh = async () => {
     const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY)
     if (!refreshToken) return false
     try {
       persist(await tokenEndpoint({ grant_type: 'refresh_token', refresh_token: refreshToken }))
       return true
     } catch (e) {
-      console.error('Token refresh failed', e)
-      clear()
+      // Only a hard invalid_grant means the refresh token is truly dead
+      // (revoked/expired/rotated) — clear then. A transient network/5xx keeps
+      // the (still valid) refresh token so the next attempt can succeed.
+      if (e.oauthError === 'invalid_grant') {
+        console.error('Refresh token rejected (invalid_grant); clearing session', e)
+        clear()
+      } else {
+        console.error('Token refresh failed (transient); keeping session for retry', e)
+      }
       return false
     }
+  }
+  const refresh = () => {
+    if (!refreshInFlight) {
+      refreshInFlight = doRefresh().finally(() => { refreshInFlight = null })
+    }
+    return refreshInFlight
   }
 
   const getAuthHeader = () => {
