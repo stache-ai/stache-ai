@@ -64,7 +64,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { checkHealth } from './api/client.js'
-import { isAuthenticated, authProvider } from './api/auth.js'
+import { isAuthenticated, authProvider, canRefresh } from './api/auth.js'
 import AuthStatus from './components/AuthStatus.vue'
 
 const healthStatus = ref('unknown')
@@ -73,8 +73,9 @@ const mobileMenuOpen = ref(false)
 let healthCheckInterval = null
 
 const checkHealthStatus = async () => {
-  // Skip health check if auth is required but user isn't logged in
-  if (authProvider !== 'none' && !isAuthenticated()) {
+  // Skip health check only if auth is required and we can neither authenticate
+  // nor refresh (a refreshable session will be renewed by the request interceptor).
+  if (authProvider !== 'none' && !isAuthenticated() && !canRefresh()) {
     healthStatus.value = 'unknown'
     return
   }

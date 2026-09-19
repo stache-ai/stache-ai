@@ -17,7 +17,11 @@ import auth, { authProvider } from '../api/auth.js'
 const showAuth = authProvider !== 'none'
 const user = ref(null)
 
-const handleLogin = () => auth.login()
+const handleLogin = () => {
+  // Return the user to where they are after the Hosted UI round-trip.
+  try { sessionStorage.setItem('stache_post_login', window.location.pathname + window.location.search) } catch { /* ignore */ }
+  auth.login()
+}
 const handleLogout = () => {
   auth.logout()
   user.value = null

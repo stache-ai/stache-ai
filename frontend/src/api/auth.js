@@ -72,7 +72,7 @@ function createCognitoProvider() {
   }
 
   const TOKEN_KEY = 'stache_id_token'
-  const ACCESS_TOKEN_KEY = 'stache_access_token'
+  const ACCESS_TOKEN_KEY = 'stache_access_token' // legacy: no longer written; only purged in clear()
   const REFRESH_TOKEN_KEY = 'stache_refresh_token'
   const EXPIRY_KEY = 'stache_token_expiry'
   const PKCE_VERIFIER_KEY = 'stache_pkce_verifier'
@@ -117,8 +117,19 @@ function createCognitoProvider() {
     base64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str)))
 
   const persist = (tokens) => {
-    const expiry = Date.now() + (parseInt(tokens.expires_in || '3600', 10) * 1000)
+    // No id_token (e.g. the client's scopes dropped 'openid') -> reject rather
+    // than store the string "undefined" and report a bogus authenticated state.
+    if (!tokens?.id_token) throw new Error('token response missing id_token')
     localStorage.setItem(TOKEN_KEY, tokens.id_token)
+    // Track expiry from the id token's own exp claim (its TTL can differ from
+    // the access token's expires_in), falling back to expires_in.
+    let expiry
+    try {
+      const exp = JSON.parse(atob(tokens.id_token.split('.')[1])).exp
+      expiry = exp ? exp * 1000 : Date.now() + (parseInt(tokens.expires_in || '3600', 10) * 1000)
+    } catch {
+      expiry = Date.now() + (parseInt(tokens.expires_in || '3600', 10) * 1000)
+    }
     localStorage.setItem(EXPIRY_KEY, expiry.toString())
     // The access token is never read (the API authorizer validates the id
     // token), so we don't persist it — smaller localStorage exfil surface.
@@ -184,6 +195,7 @@ function createCognitoProvider() {
     url.searchParams.set('code_challenge_method', 'S256')
     url.searchParams.set('state', state)
     window.location.href = url.toString()
+    return true // signals the caller that a redirect was initiated
   }
 
   const logout = () => {
@@ -270,8 +282,12 @@ function createCognitoProvider() {
       // (revoked/expired/rotated) — clear then. A transient network/5xx keeps
       // the (still valid) refresh token so the next attempt can succeed.
       if (e.oauthError === 'invalid_grant') {
-        console.error('Refresh token rejected (invalid_grant); clearing session', e)
-        clear()
+        // Cross-tab guard: only clear if the RT we sent is still the stored one.
+        // A sibling tab may have rotated/persisted a fresh token meanwhile.
+        if (localStorage.getItem(REFRESH_TOKEN_KEY) === refreshToken) {
+          console.error('Refresh token rejected (invalid_grant); clearing session', e)
+          clear()
+        }
       } else {
         console.error('Token refresh failed (transient); keeping session for retry', e)
       }

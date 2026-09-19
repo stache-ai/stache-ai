@@ -33,16 +33,16 @@ router.beforeEach(async (to, from, next) => {
   // not window.location: the router resolves `to` before guards run and would
   // otherwise re-insert ?code=... after next(), leaving the code in history
   // (a spurious state-mismatch on the next reload).
-  if (to.query.code || to.query.error) {
+  if (authProvider === 'cognito' && (to.query.code || to.query.error)) {
     const ok = await auth.handleCallback()
+    // eslint-disable-next-line no-unused-vars
+    const { code, state, error, error_description, ...rest } = to.query
     if (ok) {
       sessionStorage.removeItem('stache_auth_attempts')
       const dest = sessionStorage.getItem('stache_post_login')
       sessionStorage.removeItem('stache_post_login')
-      return next(dest && dest !== to.fullPath ? dest : { path: to.path, replace: true })
+      return next(dest && dest !== to.fullPath ? dest : { path: to.path, query: rest, replace: true })
     }
-    // eslint-disable-next-line no-unused-vars
-    const { code, state, error, error_description, ...rest } = to.query
     return next({ path: to.path, query: rest, replace: true })
   }
 
@@ -65,16 +65,20 @@ router.beforeEach(async (to, from, next) => {
   }
 
   // Not authenticated. Circuit breaker: after repeated failures, render the app
-  // unauthenticated instead of looping back to the Hosted UI. A reload resets it.
+  // unauthenticated instead of looping back to the Hosted UI. Resets on a
+  // successful sign-in; the counter is in sessionStorage, so it survives a
+  // reload but not closing the tab.
   const attempts = parseInt(sessionStorage.getItem('stache_auth_attempts') || '0', 10)
   if (attempts >= MAX_AUTH_ATTEMPTS) {
-    console.error('Sign-in failed repeatedly; not retrying (reload to try again).')
+    console.error('Sign-in failed repeatedly; not retrying. Use the Login button to try again.')
     return next()
   }
   sessionStorage.setItem('stache_auth_attempts', String(attempts + 1))
   try { sessionStorage.setItem('stache_post_login', to.fullPath) } catch { /* ignore */ }
-  await auth.login()
-  // login() redirects the page; nothing after this runs.
+  // login() returns true when it initiated a redirect; if it bailed (not
+  // configured, no crypto.subtle, prompt cancelled), render the app rather than
+  // hang the never-settling navigation (a blank page under the deferred mount).
+  if (!(await auth.login())) return next()
 })
 
 const app = createApp(App)
@@ -96,4 +100,6 @@ app.use(router)
 // components outside <router-view> (the header AuthStatus) don't render in a
 // stale unauthenticated state right after login. If the guard triggers a login
 // redirect, isReady never resolves and the page is unloading anyway.
-router.isReady().then(() => app.mount('#app'))
+router.isReady()
+  .catch((e) => console.error('Router initialization failed', e))
+  .then(() => app.mount('#app'))
