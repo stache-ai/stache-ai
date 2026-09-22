@@ -17,7 +17,11 @@
   </style>
 </head>
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <!-- Placeholder shown until the app mounts (deferred to router.isReady so the
+         header doesn't flash a stale auth state); replaced on mount. -->
+    <p style="padding:2rem;color:#888;font:14px -apple-system,sans-serif">Loading…</p>
+  </div>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

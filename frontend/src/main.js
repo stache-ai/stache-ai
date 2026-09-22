@@ -11,7 +11,7 @@ import Jobs from './pages/Jobs.vue'
 import Trash from './pages/Trash.vue'
 import Account from './pages/Account.vue'
 import { loadConfig } from './config.js'
-import { initAuth, getAuthProvider, handleCallback, isAuthenticated, login } from './api/auth.js'
+import auth, { authProvider } from './api/auth.js'
 
 const routes = [
   { path: '/', component: Home },
@@ -30,55 +30,70 @@ const router = createRouter({
   routes,
 })
 
+// After this many failed sign-in attempts we stop redirecting to the Hosted UI
+// (a valid Cognito session cookie makes each /authorize return instantly, so a
+// persistent exchange failure / ?error would otherwise be a redirect storm).
+const MAX_AUTH_ATTEMPTS = 2
+
 // Auth guard - only enforced when auth provider is configured (not 'none')
-router.beforeEach((to, from, next) => {
-  // Handle OAuth callback first (token in URL hash)
-  if (window.location.hash.includes('id_token=')) {
-    handleCallback()
+router.beforeEach(async (to, from, next) => {
+  // OAuth callback: complete the code exchange (or capture an ?error), then
+  // strip the oauth params from the URL THROUGH the router. Key off to.query,
+  // not window.location: the router resolves `to` before guards run and would
+  // otherwise re-insert ?code=... after next(), leaving the code in history
+  // (a spurious state-mismatch on the next reload).
+  if (authProvider === 'cognito' && (to.query.code || to.query.error)) {
+    const ok = await auth.handleCallback()
+    // eslint-disable-next-line no-unused-vars
+    const { code, state, error, error_description, ...rest } = to.query
+    if (ok) {
+      sessionStorage.removeItem('stache_auth_attempts')
+      const dest = sessionStorage.getItem('stache_post_login')
+      sessionStorage.removeItem('stache_post_login')
+      return next(dest && dest !== to.fullPath ? dest : { path: to.path, query: rest, replace: true })
+    }
+    return next({ path: to.path, query: rest, replace: true })
   }
 
   // Skip auth check if provider is 'none' (local dev)
-  if (getAuthProvider() === 'none') {
-    next()
-    return
+  if (authProvider === 'none') return next()
+
+  if (auth.isAuthenticated()) {
+    sessionStorage.removeItem('stache_auth_attempts')
+    return next()
   }
 
-  // If not authenticated, trigger login
-  if (!isAuthenticated()) {
-    login()
-    return
+  // Session expired but a refresh token is on hand -> renew silently
+  // (single-flight in auth.js) rather than full-redirecting to the Hosted UI.
+  if (auth.canRefresh?.()) {
+    await auth.refresh()
+    if (auth.isAuthenticated()) {
+      sessionStorage.removeItem('stache_auth_attempts')
+      return next()
+    }
   }
 
-  next()
+  // Not authenticated. Circuit breaker: after repeated failures, render the app
+  // unauthenticated instead of looping back to the Hosted UI. Resets on a
+  // successful sign-in; the counter is in sessionStorage, so it survives a
+  // reload but not closing the tab.
+  const attempts = parseInt(sessionStorage.getItem('stache_auth_attempts') || '0', 10)
+  if (attempts >= MAX_AUTH_ATTEMPTS) {
+    console.error('Sign-in failed repeatedly; not retrying. Use the Login button to try again.')
+    return next()
+  }
+  sessionStorage.setItem('stache_auth_attempts', String(attempts + 1))
+  try { sessionStorage.setItem('stache_post_login', to.fullPath) } catch { /* ignore */ }
+  // login() returns true when it initiated a redirect; if it bailed (not
+  // configured, no crypto.subtle, prompt cancelled), render the app rather than
+  // hang the never-settling navigation (a blank page under the deferred mount).
+  if (!(await auth.login())) return next()
 })
 
-// Initialize app after config is loaded
+// Initialize app after runtime config is loaded (API_URL etc. come from
+// /config.json via getConfig; auth config comes from build-time VITE_* env).
 async function init() {
-  // Load runtime config first
   await loadConfig()
-
-  // Initialize auth with loaded config
-  await initAuth()
-
-  // Decide about auth BEFORE mounting.
-  //
-  // The router's beforeEach guard blocks the ROUTE, but App.vue's shell (nav,
-  // layout, chrome) mounts regardless — so an unauthenticated visitor saw the
-  // whole app flash up and then vanish as the browser navigated away to the
-  // hosted login. Redirect first and never mount, so there is nothing to flash.
-  //
-  // The OAuth callback must be consumed first: on the way back from the hosted
-  // UI the token arrives in the URL hash, and handleCallback() is what turns it
-  // into a session. Skipping that would bounce the user straight back to login
-  // in an infinite loop.
-  if (window.location.hash.includes('id_token=')) {
-    handleCallback()
-  }
-
-  if (getAuthProvider() !== 'none' && !isAuthenticated()) {
-    login()
-    return // do NOT mount; the browser is on its way to the login page
-  }
 
   const app = createApp(App)
 
@@ -95,6 +110,11 @@ async function init() {
   })
 
   app.use(router)
+  // Mount only after the initial navigation (and any code exchange) resolves, so
+  // components outside <router-view> (the header AuthStatus) don't render in a
+  // stale unauthenticated state right after login. If the guard triggers a login
+  // redirect, isReady never resolves and the page is unloading anyway.
+  await router.isReady()
   app.mount('#app')
 }
 

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getAuthHeader, getAuthProvider, login } from './auth.js'
+import { getAuthHeader, authProvider, isAuthenticated, canRefresh, refresh, login } from './auth.js'
 import { getConfig } from '../config.js'
 
 // API URL from runtime config or build-time env var
@@ -38,6 +38,12 @@ let redirectingToLogin = false
 function attachInterceptors(instance) {
   // Request interceptor to add auth headers
   instance.interceptors.request.use(async (config) => {
+    // Pre-emptive silent refresh (PKCE): the id token is expired (or within the
+    // expiry buffer) but a refresh token is on hand -- renew before the call
+    // rather than letting it 401. Single-flight in auth.js.
+    if (authProvider !== 'none' && !isAuthenticated() && canRefresh()) {
+      try { await refresh() } catch { /* fall through; request will 401 */ }
+    }
     const authHeaders = getAuthHeader()
     Object.assign(config.headers, authHeaders)
     return config
@@ -49,7 +55,7 @@ function attachInterceptors(instance) {
     (error) => {
         // Handle 401 Unauthorized - the token expired mid-session; without
         // this redirect every action fails silently until the next navigation
-        if (error.response?.status === 401 && getAuthProvider() !== 'none') {
+        if (error.response?.status === 401 && authProvider !== 'none') {
           console.warn('Unauthorized - token expired, redirecting to login')
           if (!redirectingToLogin) {
             redirectingToLogin = true
@@ -126,7 +132,7 @@ const client = new Proxy({}, {
 export const checkHealth = async () => {
   // Call /api/health if authenticated, /api/ping otherwise
   // This avoids initializing providers on serverless before login
-  const endpoint = getAuthProvider() !== 'none' && getAuthHeader().Authorization
+  const endpoint = authProvider !== 'none' && getAuthHeader().Authorization
     ? '/api/health'
     : '/api/ping'
   const response = await getClient().get(endpoint)

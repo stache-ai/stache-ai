@@ -33,7 +33,10 @@ vi.mock('axios', () => {
 
 vi.mock('./auth.js', () => ({
   getAuthHeader: () => ({ Authorization: 'Bearer test-token' }),
-  getAuthProvider: () => 'cognito',
+  authProvider: 'cognito',
+  isAuthenticated: () => true,
+  canRefresh: () => false,
+  refresh: vi.fn(),
   login: vi.fn(),
 }))
 
