@@ -32,6 +32,21 @@ let extensionInstance = null
 // Only kick off one login redirect even if several requests 401 at once
 let redirectingToLogin = false
 
+// A 401 right after a 401-triggered re-login means the API rejects even a fresh
+// token (a server-side verification problem, not an expired session). Hosted UI
+// SSO would hand back another token instantly, so redirecting again just loops;
+// stop and let the error surface instead. sessionStorage survives the redirect.
+const RELOGIN_KEY = 'stache_401_relogin_at'
+const RELOGIN_WINDOW_MS = 60 * 1000
+
+export function shouldReloginOn401(now = Date.now()) {
+  let last = 0
+  try { last = parseInt(sessionStorage.getItem(RELOGIN_KEY) || '0', 10) || 0 } catch { /* ignore */ }
+  if (now - last < RELOGIN_WINDOW_MS) return false
+  try { sessionStorage.setItem(RELOGIN_KEY, String(now)) } catch { /* ignore */ }
+  return true
+}
+
 // Both instances get the SAME auth behaviour: the request interceptor attaches
 // the Cognito JWT, and a 401 triggers the one-shot re-login redirect. Factored
 // out so the extension client can never drift from the core one.
@@ -56,10 +71,14 @@ function attachInterceptors(instance) {
         // Handle 401 Unauthorized - the token expired mid-session; without
         // this redirect every action fails silently until the next navigation
         if (error.response?.status === 401 && authProvider !== 'none') {
-          console.warn('Unauthorized - token expired, redirecting to login')
           if (!redirectingToLogin) {
-            redirectingToLogin = true
-            login()
+            if (shouldReloginOn401()) {
+              console.warn('Unauthorized - token expired, redirecting to login')
+              redirectingToLogin = true
+              login()
+            } else {
+              console.error('Unauthorized again right after signing in; not redirecting (the API is rejecting the token)')
+            }
           }
         }
 
@@ -115,6 +134,7 @@ function getExtensionClient() {
 export const _resetClientsForTest = () => {
   clientInstance = null
   extensionInstance = null
+  redirectingToLogin = false // a fresh page load
 }
 
 // Proxy object that delegates to lazily-created client
@@ -171,7 +191,7 @@ const TERMINAL = ['done', 'skipped', 'failed', 'cancelled']
 
 export const submitIngest = async (payload) => (await client.post('/api/ingest', payload)).data
 
-export const getJob = async (id) => (await client.get(`/api/jobs/${id}`)).data
+export const getJob = async (id) => (await client.get(`/api/jobs/${encodeURIComponent(id)}`)).data
 
 export const listJobs = async (params = {}) => (await client.get('/api/jobs', { params })).data
 
@@ -360,20 +380,20 @@ export const listPending = async () => {
 }
 
 export const getPending = async (id) => {
-  const response = await getClient().get(`/api/pending/${id}`)
+  const response = await getClient().get(`/api/pending/${encodeURIComponent(id)}`)
   return response.data
 }
 
 export const getPendingThumbnailUrl = (id) => {
-  return `/api/pending/${id}/thumbnail`
+  return `/api/pending/${encodeURIComponent(id)}/thumbnail`
 }
 
 export const getPendingPdfUrl = (id) => {
-  return `/api/pending/${id}/pdf`
+  return `/api/pending/${encodeURIComponent(id)}/pdf`
 }
 
 export const approvePending = async (id, { filename, namespace, metadata, chunkingStrategy, prependMetadata }) => {
-  const response = await getClient().post(`/api/pending/${id}/approve`, {
+  const response = await getClient().post(`/api/pending/${encodeURIComponent(id)}/approve`, {
     filename,
     namespace,
     metadata,
@@ -384,7 +404,7 @@ export const approvePending = async (id, { filename, namespace, metadata, chunki
 }
 
 export const deletePending = async (id) => {
-  const response = await getClient().delete(`/api/pending/${id}`)
+  const response = await getClient().delete(`/api/pending/${encodeURIComponent(id)}`)
   return response.data
 }
 
@@ -451,22 +471,24 @@ export const listDocuments = async (params = {}) => {
   return response.data
 }
 
+// docId can come straight from the ?doc= deep link, so every id placed in a
+// path is encoded -- `../x` must stay one segment, not climb the route tree.
 export const getDocumentById = async (docId, namespace = 'default') => {
-  const response = await getClient().get(`/api/documents/id/${docId}`, {
+  const response = await getClient().get(`/api/documents/id/${encodeURIComponent(docId)}`, {
     params: { namespace }
   })
   return response.data
 }
 
 export const updateDocumentMetadata = async (docId, currentNamespace, updates) => {
-  const response = await getClient().patch(`/api/documents/${docId}`, updates, {
+  const response = await getClient().patch(`/api/documents/${encodeURIComponent(docId)}`, updates, {
     params: { current_namespace: currentNamespace }
   })
   return response.data
 }
 
 export const deleteDocumentById = async (docId, namespace = 'default') => {
-  const response = await getClient().delete(`/api/documents/id/${docId}`, {
+  const response = await getClient().delete(`/api/documents/id/${encodeURIComponent(docId)}`, {
     params: { namespace }
   })
   return response.data

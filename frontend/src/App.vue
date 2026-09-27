@@ -21,6 +21,7 @@
           <router-link to="/query" class="nav-link">Query</router-link>
           <router-link to="/jobs" class="nav-link">Jobs</router-link>
           <DocManagementDropdown />
+          <NavDropdown v-if="extensionNavLinks.length" label="More" :items="extensionNavLinks" />
         </div>
 
         <div class="nav-right desktop-nav">
@@ -40,6 +41,12 @@
           <router-link to="/query" class="mobile-nav-link" @click="mobileMenuOpen = false">Query</router-link>
           <router-link to="/jobs" class="mobile-nav-link" @click="mobileMenuOpen = false">Jobs</router-link>
           <DocManagementDropdown />
+          <NavDropdown
+            v-if="extensionNavLinks.length"
+            label="More"
+            :items="extensionNavLinks"
+            @navigate="mobileMenuOpen = false"
+          />
           <div class="mobile-health-status" :class="healthStatus">
             <span class="status-dot"></span>
             {{ healthStatus === 'healthy' ? 'Connected' : 'Disconnected' }}
@@ -67,10 +74,13 @@ import { checkHealth } from './api/client.js'
 import { isAuthenticated, authProvider, canRefresh } from './api/auth.js'
 import AuthStatus from './components/AuthStatus.vue'
 import DocManagementDropdown from './components/DocManagementDropdown.vue'
+import NavDropdown from './components/NavDropdown.vue'
+import { loadExtensions } from './extensions.js'
 
 const healthStatus = ref('unknown')
 const llmProvider = ref('LLM')
 const mobileMenuOpen = ref(false)
+const extensionNavLinks = ref([])
 let healthCheckInterval = null
 
 const checkHealthStatus = async () => {
@@ -99,6 +109,7 @@ const checkHealthStatus = async () => {
 }
 
 onMounted(() => {
+  loadExtensions().then(({ navLinks }) => { extensionNavLinks.value = navLinks })
   checkHealthStatus()
   // Check health every 30 seconds
   healthCheckInterval = setInterval(checkHealthStatus, 30000)

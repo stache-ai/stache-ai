@@ -18,6 +18,8 @@ vi.mock('axios', () => {
         return Promise.resolve({ data: { plan: 'pro', usage: [] } })
       }),
       post: vi.fn(() => Promise.resolve({ data: {} })),
+      patch: vi.fn(() => Promise.resolve({ data: {} })),
+      delete: vi.fn(() => Promise.resolve({ data: {} })),
       interceptors: {
         request: { use: vi.fn() },
         response: { use: vi.fn() },
@@ -318,5 +320,80 @@ describe('uploadViaPresign progress reporting', () => {
 
     expect(events.some((e) => e.phase === 'uploading')).toBe(false)
     expect(events).toContainEqual({ phase: 'processing', percent: 100, status: 'done' })
+  })
+})
+
+describe('401 re-login circuit breaker', () => {
+  beforeEach(async () => {
+    created.length = 0
+    for (const k of Object.keys(config)) delete config[k]
+    sessionStorage.clear()
+    const client = await import('./client.js')
+    client._resetClientsForTest()
+    const auth = await import('./auth.js')
+    auth.login.mockClear()
+  })
+
+  it('allows one re-login, then refuses another within the window', async () => {
+    const { shouldReloginOn401 } = await import('./client.js')
+    const t = 1_000_000
+    expect(shouldReloginOn401(t)).toBe(true)
+    expect(shouldReloginOn401(t + 5_000)).toBe(false)
+    // Window elapsed: a genuinely expired session can re-login again
+    expect(shouldReloginOn401(t + 61_000)).toBe(true)
+  })
+
+  it('does not redirect on a 401 that follows a 401-triggered re-login', async () => {
+    config.API_URL = CORE
+    const client = await import('./client.js')
+    const auth = await import('./auth.js')
+    await client.checkHealth().catch(() => {})
+    const onError = created[0].interceptors.response.use.mock.calls[0][1]
+    const err401 = { response: { status: 401, data: { detail: 'token verification failed' } } }
+
+    await onError(err401).catch(() => {})
+    expect(auth.login).toHaveBeenCalledTimes(1)
+
+    // Simulate the page coming back from the Hosted UI: fresh module state,
+    // but sessionStorage remembers the re-login we just did.
+    client._resetClientsForTest()
+    created.length = 0
+    await client.checkHealth().catch(() => {})
+    const onError2 = created[0].interceptors.response.use.mock.calls[0][1]
+    await onError2(err401).catch(() => {})
+    expect(auth.login).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('path-segment encoding of ids', () => {
+  beforeEach(async () => {
+    created.length = 0
+    for (const k of Object.keys(config)) delete config[k]
+    const client = await import('./client.js')
+    client._resetClientsForTest()
+  })
+
+  // getDocumentById is fed straight from the ?doc= deep link: an unencoded
+  // `../x` would resolve to a different API route.
+  it('encodes a traversal-looking doc id in getDocumentById', async () => {
+    config.API_URL = CORE
+    const { getDocumentById } = await import('./client.js')
+    await getDocumentById('../x', 'ns-a')
+    const caller = created.find((i) => i.get.mock.calls.length > 0)
+    expect(caller.get.mock.calls[0][0]).toBe('/api/documents/id/..%2Fx')
+  })
+
+  it('encodes ids in the other document/pending/job paths too', async () => {
+    config.API_URL = CORE
+    const client = await import('./client.js')
+    await client.updateDocumentMetadata('a/b', 'ns', {})
+    await client.deleteDocumentById('a/b', 'ns')
+    await client.getPending('a/b')
+    await client.getJob('a/b')
+    const inst = created[0]
+    expect(inst.patch.mock.calls[0][0]).toBe('/api/documents/a%2Fb')
+    expect(inst.delete.mock.calls[0][0]).toBe('/api/documents/id/a%2Fb')
+    expect(inst.get.mock.calls.map((c) => c[0])).toEqual(['/api/pending/a%2Fb', '/api/jobs/a%2Fb'])
+    expect(client.getPendingThumbnailUrl('a/b')).toBe('/api/pending/a%2Fb/thumbnail')
   })
 })

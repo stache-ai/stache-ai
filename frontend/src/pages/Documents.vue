@@ -35,6 +35,8 @@
         </div>
       </div>
 
+      <p v-if="linkError" class="error-message link-error">{{ linkError }}</p>
+
       <!-- Document Table -->
       <div v-if="loading && documents.length === 0" class="loading-state">
         <p>Loading documents...</p>
@@ -244,14 +246,19 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { listDocuments, getDocumentById, updateDocumentMetadata, deleteDocumentById, listNamespaces, getNamespaceTree, getDocumentOriginalUrl } from '../api/client.js'
 import NamespaceTreeDropdown from '../components/NamespaceTreeDropdown.vue'
+
+const route = useRoute()
+const router = useRouter()
 
 const documents = ref([])
 const namespaces = ref([])
 const namespaceTree = ref([])
 const loading = ref(false)
 const error = ref(null)
+const linkError = ref(null)
 const searchQuery = ref('')
 const selectedNamespace = ref('')
 const limit = ref(50)
@@ -575,11 +582,41 @@ const formatDate = (dateString) => {
   }
 }
 
+// Deep link: /documents?namespace=<ns>&doc=<doc_id> filters to the namespace
+// and opens that document's details (used by add-ons such as the graph app).
+const openLinkedDocument = async () => {
+  const docId = typeof route.query.doc === 'string' ? route.query.doc : ''
+  if (!docId) return
+  const namespace = typeof route.query.namespace === 'string' && route.query.namespace
+    ? route.query.namespace
+    : 'default'
+  // Drop the params so closing the modal and refreshing doesn't reopen it
+  router.replace({ path: route.path, query: {} })
+  try {
+    const details = await getDocumentById(docId, namespace)
+    await editDocument({
+      doc_id: details.doc_id || docId,
+      filename: details.filename,
+      namespace: details.namespace || namespace,
+      metadata: details.metadata
+    })
+  } catch (err) {
+    console.error('Error opening linked document:', err)
+    linkError.value = err.status === 404
+      ? `Document not found: ${docId}`
+      : 'Failed to open linked document'
+  }
+}
+
 onMounted(async () => {
+  if (typeof route.query.namespace === 'string') {
+    selectedNamespace.value = route.query.namespace
+  }
   // Load namespaces first so dropdown is populated
   await loadNamespaces()
   // Then load documents
   await loadDocuments()
+  await openLinkedDocument()
 })
 </script>
 
@@ -658,6 +695,10 @@ onMounted(async () => {
 .error-message {
   color: #ef4444;
   margin-bottom: 1rem;
+}
+
+.link-error {
+  text-align: center;
 }
 
 .hint {
